@@ -1,0 +1,19 @@
+Comment,Designator,Footprint,JLCPCB Part
+ CC0402JRNPO9BN180 Unpolarized capacitor, C1 C2,C_0402_1005Metric, C106202
+ CC0402KRX5R9BB104 Unpolarized capacitor, C5 C8,C_0402_1005Metric, C105882
+ CL05A225MQ5NSNC Unpolarized capacitor, C3,C_0402_1005Metric, C12530
+ CL21A226MPQNNNG Unpolarized capacitor, C4 C6 C7 C14,C_0805_2012Metric, C2762601
+" Generic connector, single row, 01x04, script generated", J8,PinHeader_1x04_P2.54mm_Vertical_SMD_Pin1Left,
+" BM08B-SURS-TF(LF)(SN) Generic connector, single row, 01x08, script generated", J1 J2 J3 J4 J5 J7 J9,JST_SUR_BM08B-SURS-TF_1x08-1MP_P0.80mm_Vertical, C5143489
+ U262-161N-4BVC11 USB 2.0-only Type-C Receptacle connector, J6,USB-C, C319148
+" Jumper, 2-pole, closed/bridged", JP1 JP2 JP3 JP4 JP5 JP6 JP7 JP8 JP9 JP10 JP11 JP12 JP13 JP14,SolderJumper-2_P1.3mm_Bridged_Pad1.0x1.5mm,
+ SLO252010T4R7MTT Inductor, L1,L_1008_2520Metric, C3020032
+ RC0402JR-075K1L Resistor, R2 R3,R_0402_1005Metric, C105873
+ RC0402FR-0710KL Resistor, R1 R4 R5,R_0402_1005Metric, C60490
+ RC0402JR-0713KL Resistor, R7,R_0402_1005Metric, C276281
+ RC0402FR-0739K2L Resistor, R6,R_0402_1005Metric, C137996
+ RC0402FR-0775KL Resistor, R8,R_0402_1005Metric, C137935
+" TSA343G00-250DZY Push button switch, generic, two pins", SW1 SW2,TSA343G0, C354948
+" ESP32-S3-WROOM-1U-N4R2 2.4 GHz WiFi (802.11 b/g/n) and Bluetooth ® 5 (LE) module Built around ESP32S3 series of SoCs, Xtensa ® dualcore 32bit LX7 microprocessor Flash up to 16 MB, PSRAM up to 8 MB 36 GPIOs, rich set of peripherals Onboard PCB antenna", U2,ESP32-S3-WROOM-1, C3013942
+" TD8102 1.5A, Adjustable Step-Down Voltage Regulator, 1.4MHz Frequency, Vin=4.5..18V, Vout=0.81..15V, SOT-23-6", U1,SOT-23-6, C3038116
+ Q13FC1350000400 Two pin crystal, Y1,Crystal_SMD_3215-2Pin_3.2x1.5mm, C32346
