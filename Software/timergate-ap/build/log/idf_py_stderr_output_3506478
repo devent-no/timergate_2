@@ -1,0 +1,62 @@
+[0;33m--- esp-idf-monitor 1.3.4 on /dev/ttyACM1 115200 ---[0m
+[0;33m--- Quit: Ctrl+] | Menu: Ctrl+T | Help: Ctrl+T followed by Ctrl+H ---[0m
+[0;33m0x4037ea8e: spinlock_acquire at /home/elias/esp/esp-idf/components/esp_hw_support/include/spinlock.h:122
+ (inlined by) xPortEnterCriticalTimeout at /home/elias/esp/esp-idf/components/freertos/FreeRTOS-Kernel/portable/xtensa/port.c:501
+[0m
+[0;33m0x403754a0: call_start_cpu1 at /home/elias/esp/esp-idf/components/esp_system/port/cpu_start.c:157
+[0m
+[0;33m0x403759ea: panic_abort at /home/elias/esp/esp-idf/components/esp_system/panic.c:452
+[0m
+[0;33m0x4037bebd: esp_system_abort at /home/elias/esp/esp-idf/components/esp_system/port/esp_system_chip.c:84
+[0m
+[0;33m0x40382d65: __assert_func at /home/elias/esp/esp-idf/components/newlib/assert.c:81
+[0m
+[0;33m0x40381006: tlsf_free at /home/elias/esp/esp-idf/components/heap/tlsf/tlsf.c:1119 (discriminator 1)
+[0m
+[0;33m0x40380eb0: multi_heap_free_impl at /home/elias/esp/esp-idf/components/heap/multi_heap.c:231
+[0m
+[0;33m0x403763aa: heap_caps_free at /home/elias/esp/esp-idf/components/heap/heap_caps.c:388
+[0m
+[0;33m0x40382d95: free at /home/elias/esp/esp-idf/components/newlib/heap.c:39
+[0m
+[0;33m0x4200b625: tcp_client_handler at /home/elias/workspace/Kunder/Devent/timergate/Software/timergate-ap/main/timergate_server.c:341
+[0m
+[0;33m0x4037e8d5: vPortTaskWrapper at /home/elias/esp/esp-idf/components/freertos/FreeRTOS-Kernel/portable/xtensa/port.c:162
+[0m
+[0;33m0x4037efff: _xt_context_save at /home/elias/esp/esp-idf/components/freertos/FreeRTOS-Kernel/portable/xtensa/xtensa_context.S:198
+[0m
+[0;33m0x403754a0: call_start_cpu1 at /home/elias/esp/esp-idf/components/esp_system/port/cpu_start.c:157
+[0m
+[0;33m0x42026a2e: tcp_free_acked_segments at /home/elias/esp/esp-idf/components/lwip/lwip/src/core/tcp_in.c:1115
+[0m
+[0;33m0x42032180: ethernet_input at /home/elias/esp/esp-idf/components/lwip/lwip/src/netif/ethernet.c:82
+[0m
+[0;33m0x42032184: ethernet_input at /home/elias/esp/esp-idf/components/lwip/lwip/src/netif/ethernet.c:91
+[0m
+[0;33m0x40056f5c: memcpy in ROM
+[0m
+[0;33m0x40056f72: memcpy in ROM
+[0m
+[0;33m0x42026a2b: tcp_free_acked_segments at /home/elias/esp/esp-idf/components/lwip/lwip/src/core/tcp_in.c:1115
+[0m
+[0;33m0x42026c69: tcp_receive at /home/elias/esp/esp-idf/components/lwip/lwip/src/core/tcp_in.c:1301 (discriminator 4)
+[0m
+[0;33m0x42027ae3: tcp_process at /home/elias/esp/esp-idf/components/lwip/lwip/src/core/tcp_in.c:996
+[0m
+[0;33m0x420283e2: tcp_input at /home/elias/esp/esp-idf/components/lwip/lwip/src/core/tcp_in.c:449
+[0m
+[0;33m0x4202d692: ip4_input at /home/elias/esp/esp-idf/components/lwip/lwip/src/core/ipv4/ip4.c:749
+[0m
+[0;33m0x4203222e: ethernet_input at /home/elias/esp/esp-idf/components/lwip/lwip/src/netif/ethernet.c:186
+[0m
+[0;33m0x420229a9: tcpip_thread_handle_msg at /home/elias/esp/esp-idf/components/lwip/lwip/src/api/tcpip.c:174
+[0m
+[0;33m0x42022a2c: tcpip_thread at /home/elias/esp/esp-idf/components/lwip/lwip/src/api/tcpip.c:148
+[0m
+[0;33m0x4037e8d5: vPortTaskWrapper at /home/elias/esp/esp-idf/components/freertos/FreeRTOS-Kernel/portable/xtensa/port.c:162
+[0m
+[0;33m0x4037eff9: _xt_context_save at /home/elias/esp/esp-idf/components/freertos/FreeRTOS-Kernel/portable/xtensa/xtensa_context.S:195
+[0m
+[0;33m0x403754a0: call_start_cpu1 at /home/elias/esp/esp-idf/components/esp_system/port/cpu_start.c:157
+[0m
+[0m

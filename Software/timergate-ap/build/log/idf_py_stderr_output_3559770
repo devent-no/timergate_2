@@ -1,0 +1,8 @@
+[0;33m--- esp-idf-monitor 1.3.4 on /dev/ttyACM1 115200 ---[0m
+[0;33m--- Quit: Ctrl+] | Menu: Ctrl+T | Help: Ctrl+T followed by Ctrl+H ---[0m
+[0;33m0x40377dec: esp_task_stack_is_sane_cache_disabled at /home/elias/esp/esp-idf/components/spi_flash/cache_utils.c:89
+ (inlined by) spi_flash_disable_interrupts_caches_and_other_cpu at /home/elias/esp/esp-idf/components/spi_flash/cache_utils.c:154
+[0m
+[0;33m0x403754a0: call_start_cpu1 at /home/elias/esp/esp-idf/components/esp_system/port/cpu_start.c:157
+[0m
+[0m

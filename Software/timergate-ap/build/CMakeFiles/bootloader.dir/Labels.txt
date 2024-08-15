@@ -1,0 +1,13 @@
+# Target labels
+ bootloader
+# Source files and their labels
+/home/elias/workspace/Kunder/Devent/timergate/Software/timergate-ap/build/CMakeFiles/bootloader
+/home/elias/workspace/Kunder/Devent/timergate/Software/timergate-ap/build/CMakeFiles/bootloader.rule
+/home/elias/workspace/Kunder/Devent/timergate/Software/timergate-ap/build/CMakeFiles/bootloader-complete.rule
+/home/elias/workspace/Kunder/Devent/timergate/Software/timergate-ap/build/bootloader-prefix/src/bootloader-stamp/bootloader-build.rule
+/home/elias/workspace/Kunder/Devent/timergate/Software/timergate-ap/build/bootloader-prefix/src/bootloader-stamp/bootloader-configure.rule
+/home/elias/workspace/Kunder/Devent/timergate/Software/timergate-ap/build/bootloader-prefix/src/bootloader-stamp/bootloader-download.rule
+/home/elias/workspace/Kunder/Devent/timergate/Software/timergate-ap/build/bootloader-prefix/src/bootloader-stamp/bootloader-install.rule
+/home/elias/workspace/Kunder/Devent/timergate/Software/timergate-ap/build/bootloader-prefix/src/bootloader-stamp/bootloader-mkdir.rule
+/home/elias/workspace/Kunder/Devent/timergate/Software/timergate-ap/build/bootloader-prefix/src/bootloader-stamp/bootloader-patch.rule
+/home/elias/workspace/Kunder/Devent/timergate/Software/timergate-ap/build/bootloader-prefix/src/bootloader-stamp/bootloader-update.rule

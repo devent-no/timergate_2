@@ -242,8 +242,8 @@ static void publish_break(int broken)
     char event[60];
     struct timeval tv_now;
     gettimeofday(&tv_now, NULL);
-    sprintf(event, "{\"K\":1,\"M\":\"%s\",\"B\":%d,\"T\":%lld, \"U\":%ld}\n", mac_addr, broken, tv_now.tv_sec, tv_now.tv_usec);
     ESP_LOGI(TAG, "Break state change: %d @ %lld", curr_broken, tv_now.tv_sec);
+    sprintf(event, "{\"K\":1,\"M\":\"%s\",\"B\":%d,\"T\":%lld, \"U\":%ld}\n", mac_addr, broken, tv_now.tv_sec, tv_now.tv_usec);
     add_to_queue(event);
 }
 
@@ -381,6 +381,8 @@ void app_main(void)
 {
     pwm_init(LEDC_TIMER_0, PWM_0_FREQUENCY, LEDC_CHANNEL_0, PWM_SEND_0, 0);
     pwm_init(LEDC_TIMER_1, PWM_0_FREQUENCY, LEDC_CHANNEL_1, PWM_RCV_0, 4395);
+
+    esp_log_level_set("gpio", ESP_LOG_WARN);
 
     cmd = malloc(100);
 

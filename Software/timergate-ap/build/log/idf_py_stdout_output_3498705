@@ -1,0 +1,82 @@
+[1/6] cd /home/elias/workspace/Kunder/Devent/timergate/Software/timergate-ap/build/esp-idf/esptool_py && /home/elias/.espressif/python_env/idf5.1_py3.11_env/bin/python /home/elias/esp/esp-idf/components/partition_table/check_sizes.py --offset 0x8000 partition --type app /home/elias/workspace/Kunder/Devent/timergate/Software/timergate-ap/build/partition_table/partition-table.bin /home/elias/workspace/Kunder/Devent/timergate/Software/timergate-ap/build/timergate_server.bin
+timergate_server.bin binary size 0xd58d0 bytes. Smallest app partition is 0x100000 bytes. 0x2a730 bytes (17%) free.
+[2/6] Performing build step for 'bootloader'
+[1/1] cd /home/elias/workspace/Kunder/Devent/timergate/Software/timergate-ap/build/bootloader/esp-idf/esptool_py && /home/elias/.espressif/python_env/idf5.1_py3.11_env/bin/python /home/elias/esp/esp-idf/components/partition_table/check_sizes.py --offset 0x8000 bootloader 0x0 /home/elias/workspace/Kunder/Devent/timergate/Software/timergate-ap/build/bootloader/bootloader.bin
+Bootloader binary size 0x51c0 bytes. 0x2e40 bytes (36%) free.
+[3/6] No install step for 'bootloader'
+[4/6] cd /home/elias/workspace/Kunder/Devent/timergate/Software/timergate-ap/build/esp-idf/main && /home/elias/.espressif/python_env/idf5.1_py3.11_env/bin/python /home/elias/esp/esp-idf/components/spiffs/spiffsgen.py 0x200000 /home/elias/workspace/Kunder/Devent/timergate/Software/timergate-gui/dist /home/elias/workspace/Kunder/Devent/timergate/Software/timergate-ap/build/www.bin --page-size=256 --obj-name-len=64 --meta-len=4 --use-magic --use-magic-len
+[5/6] Completed 'bootloader'
+[5/6] cd /home/elias/esp/esp-idf/components/esptool_py && /usr/bin/cmake -D IDF_PATH=/home/elias/esp/esp-idf -D "SERIAL_TOOL=/home/elias/.espressif/python_env/idf5.1_py3.11_env/bin/python;;/home/elias/esp/esp-idf/components/esptool_py/esptool/esptool.py;--chip;esp32s3" -D "SERIAL_TOOL_ARGS=--before=default_reset;--after=hard_reset;write_flash;@flash_args" -D WORKING_DIRECTORY=/home/elias/workspace/Kunder/Devent/timergate/Software/timergate-ap/build -P /home/elias/esp/esp-idf/components/esptool_py/run_serial_tool.cmake
+esptool.py --chip esp32s3 -p /dev/ttyACM1 -b 460800 --before=default_reset --after=hard_reset write_flash --flash_mode dio --flash_freq 80m --flash_size 4MB 0x0 bootloader/bootloader.bin 0x10000 timergate_server.bin 0x8000 partition_table/partition-table.bin 0x110000 www.bin
+esptool.py v4.7.0
+Serial port /dev/ttyACM1
+Connecting...
+Chip is ESP32-S3 (QFN56) (revision v0.2)
+Features: WiFi, BLE, Embedded PSRAM 2MB (AP_3v3)
+Crystal is 40MHz
+MAC: 34:85:18:b1:03:40
+Uploading stub...
+Running stub...
+Stub running...
+Changing baud rate to 460800
+Changed.
+Configuring flash size...
+Flash will be erased from 0x00000000 to 0x00005fff...
+Flash will be erased from 0x00010000 to 0x000e5fff...
+Flash will be erased from 0x00008000 to 0x00008fff...
+Flash will be erased from 0x00110000 to 0x0030ffff...
+Compressed 20928 bytes to 13296...
+Writing at 0x00000000... (100 %)
+Wrote 20928 bytes (13296 compressed) at 0x00000000 in 0.5 seconds (effective 322.5 kbit/s)...
+Hash of data verified.
+Compressed 874704 bytes to 559263...
+Writing at 0x00010000... (2 %)
+Writing at 0x0001c7be... (5 %)
+Writing at 0x00027dcb... (8 %)
+Writing at 0x0002c883... (11 %)
+Writing at 0x00034930... (14 %)
+Writing at 0x0003cf55... (17 %)
+Writing at 0x0004339f... (20 %)
+Writing at 0x00049605... (22 %)
+Writing at 0x0004f1ee... (25 %)
+Writing at 0x000548ed... (28 %)
+Writing at 0x0005a570... (31 %)
+Writing at 0x0006041c... (34 %)
+Writing at 0x00065981... (37 %)
+Writing at 0x0006b1bb... (40 %)
+Writing at 0x000709a6... (42 %)
+Writing at 0x000762ff... (45 %)
+Writing at 0x0007bea5... (48 %)
+Writing at 0x00081bea... (51 %)
+Writing at 0x00086c1b... (54 %)
+Writing at 0x0008bc6d... (57 %)
+Writing at 0x00090d24... (60 %)
+Writing at 0x0009603e... (62 %)
+Writing at 0x0009b312... (65 %)
+Writing at 0x000a092d... (68 %)
+Writing at 0x000a635f... (71 %)
+Writing at 0x000abc07... (74 %)
+Writing at 0x000b169d... (77 %)
+Writing at 0x000b7c78... (80 %)
+Writing at 0x000bdb50... (82 %)
+Writing at 0x000c2f97... (85 %)
+Writing at 0x000ca412... (88 %)
+Writing at 0x000d36bd... (91 %)
+Writing at 0x000d96c5... (94 %)
+Writing at 0x000df3d3... (97 %)
+Writing at 0x000e4867... (100 %)
+Wrote 874704 bytes (559263 compressed) at 0x00010000 in 7.4 seconds (effective 950.7 kbit/s)...
+Hash of data verified.
+Compressed 3072 bytes to 116...
+Writing at 0x00008000... (100 %)
+Wrote 3072 bytes (116 compressed) at 0x00008000 in 0.1 seconds (effective 338.7 kbit/s)...
+Hash of data verified.
+Compressed 2097152 bytes to 43715...
+Writing at 0x00110000... (33 %)
+Writing at 0x0013fb6b... (66 %)
+Writing at 0x00148f11... (100 %)
+Wrote 2097152 bytes (43715 compressed) at 0x00110000 in 12.0 seconds (effective 1403.4 kbit/s)...
+Hash of data verified.
+
+Leaving...
+Hard resetting via RTS pin...
