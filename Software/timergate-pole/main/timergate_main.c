@@ -79,6 +79,7 @@ bool prev_broken = false;
 bool connected = false;
 
 char *cmd;
+int64_t timestamp;
 
 led_strip_config_t strip_config = {
     .max_leds = 1, // at least one LED on board
@@ -204,7 +205,7 @@ static void tcp_connect()
 }
 
 static void add_to_queue(char *msg)
-{    
+{
     strncpy(cmd, msg, strlen(msg) + 1);
     xQueueOverwrite(xQueue, &cmd);
 }
@@ -233,15 +234,17 @@ static void publish_sensor()
             sensor_break[6]);
     sprintf(event, "{\"K\":0,\"M\":\"%s\",\"V\":%s,\"B\":%s}\n", mac_addr, adc_vals_s, broken_s);
     add_to_queue(event);
-    //ESP_LOGI(TAG, "Adding to queue");
+    // ESP_LOGI(TAG, "Adding to queue");
 }
 
-static void publish_break(int broken, int64_t break_sec, int64_t break_us)
+static void publish_break(int broken)
 {
     char event[60];
-    sprintf(event, "{\"K\":1,\"M\":\"%s\",\"B\":%d,\"T\":%lld, \"U\":%lld}\n", mac_addr, broken, break_sec, break_us);
+    struct timeval tv_now;
+    gettimeofday(&tv_now, NULL);
+    sprintf(event, "{\"K\":1,\"M\":\"%s\",\"B\":%d,\"T\":%lld, \"U\":%ld}\n", mac_addr, broken, tv_now.tv_sec, tv_now.tv_usec);
+    ESP_LOGI(TAG, "Break state change: %d @ %lld", curr_broken, tv_now.tv_sec);
     add_to_queue(event);
-    ESP_LOGI(TAG, "Break state change: %d", curr_broken);
 }
 
 static void store_mac()
@@ -263,6 +266,30 @@ static void store_mac()
     ESP_LOGI(TAG, "Store MAC: %s", mac_addr);
 }
 
+static void sync_time()
+{
+    struct timeval tv;
+    tv.tv_sec = timestamp; // POSIX timestamp in seconds
+    tv.tv_usec = 0;        // microseconds
+    settimeofday(&tv, NULL);
+
+    time_t now;
+    char strftime_buf[64];
+    struct tm timeinfo;
+    struct timeval tv_now;
+
+    time(&now);
+    // Set timezone to Norway Standard Time
+    setenv("TZ", "GMT+2", 1);
+    tzset();
+
+    localtime_r(&now, &timeinfo);
+    strftime(strftime_buf, sizeof(strftime_buf), "%c", &timeinfo);
+    ESP_LOGI(TAG, "The current date/time in Norway is: %s", strftime_buf);
+    gettimeofday(&tv_now, NULL);
+    ESP_LOGI(TAG, "Unix timestamp is: %lld", tv_now.tv_sec);
+}
+
 static void check_socket()
 {
     char rx_buffer[128];
@@ -277,7 +304,7 @@ static void check_socket()
     else
     {
         rx_buffer[len] = 0; // Null-terminate whatever we received and treat like a string
-        ESP_LOGI(TAG, "Received %d bytes from %s:", len, host_ip);
+        ESP_LOGI(TAG, "Received %d bytes from %s: %s", len, host_ip, rx_buffer);
         for (int i = 0; i < len; i++)
         {
             command[cmd_index] = rx_buffer[i];
@@ -294,6 +321,13 @@ static void check_socket()
                         break_limit[adc_nr] = val;
                     }
                 }
+                if (strncmp(command, "time", 4) == 0)
+                {
+                    timestamp = strtol(command + 5, NULL, 10);
+                    ESP_LOGI(TAG, "Got timestamp: %lld", timestamp);
+                    sync_time();
+                }
+
                 cmd_index = 0;
             }
             else
@@ -322,7 +356,7 @@ static void tcp_client_task(void *pvParameters)
         {
             if (xQueueReceive(xQueue, &cmd, 0))
             {
-                //ESP_LOGI(TAG, "Sending from queue: %s", cmd);
+                // ESP_LOGI(TAG, "Sending from queue: %s", cmd);
                 int written = send(sock, cmd, strlen(cmd), 0);
                 if (written < 0)
                 {
@@ -335,7 +369,6 @@ static void tcp_client_task(void *pvParameters)
     }
 }
 
-
 static void wifi_init()
 {
     ESP_ERROR_CHECK(nvs_flash_init());
@@ -346,7 +379,6 @@ static void wifi_init()
 
 void app_main(void)
 {
-    struct timeval tv_now;
     pwm_init(LEDC_TIMER_0, PWM_0_FREQUENCY, LEDC_CHANNEL_0, PWM_SEND_0, 0);
     pwm_init(LEDC_TIMER_1, PWM_0_FREQUENCY, LEDC_CHANNEL_1, PWM_RCV_0, 4395);
 
@@ -359,7 +391,6 @@ void app_main(void)
     store_mac();
 
     xQueue = xQueueCreate(1, sizeof(char *));
-    //xTaskCreate(tcp_client_task, "tcp_client", 4096, (void *)AF_INET, 5, NULL);
     xTaskCreatePinnedToCore(tcp_client_task, "tcp_client", 4096, (void *)AF_INET, 5, NULL, 1);
 
     while (1)
@@ -383,8 +414,7 @@ void app_main(void)
         // Send event if there is a change in state
         if (curr_broken != prev_broken)
         {
-            gettimeofday(&tv_now, NULL);
-            publish_break(curr_broken, tv_now.tv_sec, tv_now.tv_usec);
+            publish_break(curr_broken);
         }
         prev_broken = curr_broken;
     }

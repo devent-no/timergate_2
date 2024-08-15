@@ -8,13 +8,13 @@ export default {
   methods: {
     formatTime(value) {
       const time = new Date(value);
-      return (
+      return ( "time: "+
         ('00'+time.getHours()).slice(-2) +
         ":" +
         ('00'+time.getMinutes()).slice(-2) +
         ":" +
         ('00'+time.getSeconds()).slice(-2) +
-        ":" +
+        " ms: " +
         ('0000'+time.getMilliseconds()).slice(-4)
       ).toString();
     },

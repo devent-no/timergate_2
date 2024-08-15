@@ -29,6 +29,19 @@ export default {
     clearTimes() {
       this.breaks = {};
     },
+    async syncTime() {
+        await fetch("http://"+this.hostname+"/api/v1/time/sync", {
+          method: "POST",
+          headers: {
+            Accept: "application/json",
+            "Content-Type": "application/json;charset=utf-8",
+            "Access-Control-Allow-Origin": "*",
+          },
+          body: JSON.stringify({
+            timestamp: 1234
+          }),
+        })
+    },
     onSocketOpen(evt) {
       this.socket_ready = true;
     },
@@ -71,6 +84,7 @@ export default {
 <template>
   <main>
     <h1>Timergate</h1>
+    <button @click="syncTime()">Sync Time</button>
     <h1>Poles</h1>
     <div style="width: 100%; height: 250px">
       <Pole
