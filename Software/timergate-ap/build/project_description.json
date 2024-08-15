@@ -1,7 +1,7 @@
 {
     "version":            "1",
     "project_name":       "timergate_server",
-    "project_version":    "7ccb85b-dirty",
+    "project_version":    "073286e-dirty",
     "project_path":       "/home/elias/workspace/Kunder/Devent/timergate/Software/timergate-ap",
     "idf_path":           "/home/elias/esp/esp-idf",
     "build_dir":          "/home/elias/workspace/Kunder/Devent/timergate/Software/timergate-ap/build",
