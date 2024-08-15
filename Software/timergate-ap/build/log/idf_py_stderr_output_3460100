@@ -1,9 +1,0 @@
-Compiler supported targets: xtensa-esp32s3-elf
-
-CMake Error at main/CMakeLists.txt:10 (message):
-  
-  /home/elias/workspace/Kunder/Devent/timergate/Software/timergate-ap/main/../../client/dist
-  doesn't exit.  Please run 'npm run build' in
-  /home/elias/workspace/Kunder/Devent/timergate/Software/timergate-ap/main/../../client
-
-
