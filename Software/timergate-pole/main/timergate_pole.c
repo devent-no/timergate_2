@@ -36,13 +36,13 @@
 #include "esp_adc/adc_cali.h"
 #include "esp_adc/adc_cali_scheme.h"
 #include "led_strip.h"
+#include "esp_now.h"
 
 #include "lwip/sockets.h"
 #include "lwip/dns.h"
 #include "lwip/netdb.h"
 
 #include "esp_log.h"
-#include "mqtt_client.h"
 
 /* Constants that aren't configurable in menuconfig */
 #define HOST_IP_ADDR "192.168.32.174"
@@ -53,6 +53,7 @@ static int sock;
 char host_ip[] = HOST_IP_ADDR;
 
 QueueHandle_t xQueue;
+QueueHandle_t xQueueBreak;
 char mac_addr[18];
 
 struct sockaddr_in dest_addr;
@@ -88,6 +89,16 @@ led_strip_config_t strip_config = {
 led_strip_rmt_config_t rmt_config = {
     .resolution_hz = 10 * 1000 * 1000, // 10MHz
 };
+
+typedef struct
+{
+    uint8_t type;     // Broadcast or unicast ESPNOW data.
+    uint8_t state;    // Indicate that if has received broadcast ESPNOW data or not.
+    uint16_t seq_num; // Sequence number of ESPNOW data.
+    uint16_t crc;     // CRC16 value of ESPNOW data.
+    uint32_t magic;   // Magic number which is used to determine which device to send unicast ESPNOW data.
+    char payload[0];  // Real payload of ESPNOW data.
+} __attribute__((packed)) example_espnow_data_t;
 
 #define LEDC_MODE LEDC_LOW_SPEED_MODE
 #define PWM_SEND_0 9
@@ -239,12 +250,12 @@ static void publish_sensor()
 
 static void publish_break(int broken)
 {
-    char event[60];
+    char *event = malloc(140);
     struct timeval tv_now;
     gettimeofday(&tv_now, NULL);
     ESP_LOGI(TAG, "Break state change: %d @ %lld", curr_broken, tv_now.tv_sec);
     sprintf(event, "{\"K\":1,\"M\":\"%s\",\"B\":%d,\"T\":%lld, \"U\":%ld}\n", mac_addr, broken, tv_now.tv_sec, tv_now.tv_usec);
-    add_to_queue(event);
+    xQueueSendToBack(xQueueBreak, &event, portMAX_DELAY);
 }
 
 static void store_mac()
@@ -290,6 +301,36 @@ static void sync_time()
     ESP_LOGI(TAG, "Unix timestamp is: %lld", tv_now.tv_sec);
 }
 
+static void example_espnow_recv_cb(const esp_now_recv_info_t *recv_info, const uint8_t *data, int len)
+{
+    uint8_t *mac_addr = recv_info->src_addr;
+
+    if (mac_addr == NULL || data == NULL || len <= 0)
+    {
+        ESP_LOGE(TAG, "Receive cb arg error");
+        return;
+    }
+
+    example_espnow_data_t *buf = (example_espnow_data_t *)data;
+
+    int payload_len = len - sizeof(example_espnow_data_t);
+
+    ESP_LOGI(TAG, "Receive broadcast ESPNOW data, len = %d", len);
+    ESP_LOGI(TAG, "Payload len = %d, payload %s", payload_len, buf->payload);
+    if (strncmp(buf->payload, "SYNC", 4) == 0)
+    {
+        sync_time();
+    }
+}
+
+static esp_err_t example_espnow_init(void)
+{
+    ESP_ERROR_CHECK(esp_now_init());
+    ESP_ERROR_CHECK(esp_now_register_recv_cb(example_espnow_recv_cb));
+
+    return ESP_OK;
+}
+
 static void check_socket()
 {
     char rx_buffer[128];
@@ -325,7 +366,7 @@ static void check_socket()
                 {
                     timestamp = strtol(command + 5, NULL, 10);
                     ESP_LOGI(TAG, "Got timestamp: %lld", timestamp);
-                    sync_time();
+                    example_espnow_init();
                 }
 
                 cmd_index = 0;
@@ -341,6 +382,7 @@ static void check_socket()
 static void tcp_client_task(void *pvParameters)
 {
     char *cmd;
+    char *break_cmd;
     while (1)
     {
         vTaskDelay(10 / portTICK_PERIOD_MS);
@@ -362,6 +404,20 @@ static void tcp_client_task(void *pvParameters)
                 {
                     ESP_LOGE(TAG, "Error occurred during sending: errno %d", errno);
                     connected = false;
+                }
+            }
+            if (xQueueReceive(xQueueBreak, &break_cmd, 0) == pdPASS)
+            {
+                //ESP_LOGI(TAG, "Sending from xQueueBreak: %s", break_cmd);
+                int written = send(sock, break_cmd, strlen(break_cmd), 0);
+                if (written < 0)
+                {
+                    ESP_LOGE(TAG, "Error occurred during sending: errno %d", errno);
+                    connected = false;
+                }
+                if (break_cmd != NULL){
+                    free(break_cmd);
+                    break_cmd = NULL;
                 }
             }
             check_socket();
@@ -393,6 +449,7 @@ void app_main(void)
     store_mac();
 
     xQueue = xQueueCreate(1, sizeof(char *));
+    xQueueBreak = xQueueCreate(10, sizeof(char *));
     xTaskCreatePinnedToCore(tcp_client_task, "tcp_client", 4096, (void *)AF_INET, 5, NULL, 1);
 
     while (1)

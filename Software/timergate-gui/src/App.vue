@@ -44,6 +44,19 @@ export default {
           }),
         })
     },
+    async checkTime() {
+        await fetch("http://"+this.hostname+"/api/v1/time/check", {
+          method: "POST",
+          headers: {
+            Accept: "application/json",
+            "Content-Type": "application/json;charset=utf-8",
+            "Access-Control-Allow-Origin": "*",
+          },
+          body: JSON.stringify({
+            timestamp: Math.floor(Date.now() / 1000)
+          }),
+        })
+    },
     onSocketOpen(evt) {
       this.socket_ready = true;
     },
@@ -100,6 +113,7 @@ export default {
     <h1>Timergate</h1>
       <h3>{{ time }}</h3>
     <button @click="syncTime()">Sync Time</button>
+    <button @click="checkTime()">Check Time Diff</button>
     <h1>Poles</h1>
     <div style="width: 100%; height: 250px">
       <Pole
@@ -130,9 +144,3 @@ export default {
     </div>
   </main>
 </template>
-
-<style scoped>
-header {
-  line-height: 1.5;
-}
-</style>
