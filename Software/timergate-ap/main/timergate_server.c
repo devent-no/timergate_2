@@ -23,8 +23,8 @@
 #define KEEPALIVE_COUNT 3
 #define STACK_SIZE 5000
 
-#define ESPNOW_WIFI_IF ESP_IF_WIFI_STA
-#define ESPNOW_SEND_LEN 20
+#define ESPNOW_WIFI_IF ESP_IF_WIFI_AP
+#define ESPNOW_SEND_LEN 15
 
 static const char *REST_TAG = "timergate-ap";
 #define REST_CHECK(a, str, goto_tag, ...)                                              \
@@ -348,10 +348,10 @@ static esp_err_t example_espnow_init(void)
     if (esp_now_send(send_param->dest_mac, send_param->buffer, send_param->len) != ESP_OK)
     {
         ESP_LOGE(REST_TAG, "Send error");
-        example_espnow_deinit(send_param);
     }
-
-    ESP_LOGI(REST_TAG, "ESPNOW data sent");
+    else{
+        ESP_LOGI(REST_TAG, "ESPNOW data sent");
+    }
     example_espnow_deinit(send_param);
 
     // Sync local time

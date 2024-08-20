@@ -45,7 +45,7 @@
 #include "esp_log.h"
 
 /* Constants that aren't configurable in menuconfig */
-#define HOST_IP_ADDR "192.168.32.174"
+#define HOST_IP_ADDR "192.168.4.1"
 #define PORT 3333
 #define NUM_SENSORS 7
 static const char *TAG = "timergate-pole";

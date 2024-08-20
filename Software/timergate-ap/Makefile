@@ -17,12 +17,12 @@ flash:
 monitor:
 	idf.py monitor -p ${DEV}
 
-config:
+menuconfig:
 	idf.py menuconfig
 
 
 add-dependency:
 	idf.py add-dependency "espressif/led_strip^2.5.3"
 	idf.py update-dependencies
-	
+
 .PHONY: build

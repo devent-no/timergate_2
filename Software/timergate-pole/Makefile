@@ -11,4 +11,7 @@ flash:
 monitor:
 	idf.py monitor -p ${DEV}
 
+menuconfig:
+	idf.py menuconfig
+
 .PHONY: build

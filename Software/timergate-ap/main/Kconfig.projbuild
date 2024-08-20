@@ -1,8 +1,8 @@
 menu "Timergate Server Configuration"
 
-    config EXAMPLE_MDNS_HOST_NAME
+    config TIMERGATE_MDNS_HOST_NAME
         string "mDNS Host Name"
-        default "esp-home"
+        default "timergate"
         help
             Specify the domain name used in the mDNS service.
             Note that webpage also take it as a part of URL where it will send GET/POST requests to.
