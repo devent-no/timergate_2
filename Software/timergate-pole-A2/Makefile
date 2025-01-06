@@ -1,6 +1,6 @@
 #. $HOME/esp/esp-idf/export.sh
 
-DEV=/dev/ttyACM0
+DEV=/dev/ttyACM1
 
 build:
 	idf.py build

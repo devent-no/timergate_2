@@ -1,0 +1,5 @@
+Notes Devent IR-sensor A1 -> A2
+===============================
+
+- Add DC block on receiver to remove sunlight. 
+- Remove 

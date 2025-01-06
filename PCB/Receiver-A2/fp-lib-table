@@ -1,0 +1,4 @@
+(fp_lib_table
+  (version 7)
+  (lib (name "Devent")(type "KiCad")(uri "${KIPRJMOD}/Devent.pretty")(options "")(descr ""))
+)
