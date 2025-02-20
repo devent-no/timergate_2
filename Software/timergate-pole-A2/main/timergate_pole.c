@@ -1,11 +1,4 @@
-/* LEDC (LED Controller) basic example
-
-   This example code is in the Public Domain (or CC0 licensed, at your option.)
-
-   Unless required by applicable law or agreed to in writing, this
-   software is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
-   CONDITIONS OF ANY KIND, either express or implied.
-*/
+/* Timergate Pole for hardware revision A2 */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -45,10 +38,23 @@
 #include "esp_log.h"
 
 /* Constants that aren't configurable in menuconfig */
-//#define HOST_IP_ADDR "192.168.4.1"
 #define HOST_IP_ADDR "192.168.4.1"
 #define PORT 3333
 #define NUM_SENSORS 7
+#define LED_GPIO 39
+#define LEDC_MODE LEDC_LOW_SPEED_MODE
+#define PWM_SEND_0 9
+#define PWM_RCV_0 18
+#define PWM_RCV_1 21
+#define PWM_RCV_2 38
+#define PWM_RCV_3 45
+#define PWM_RCV_4 46
+#define PWM_RCV_5 47
+#define PWM_RCV_6 48
+#define LEDC_DUTY_RES LEDC_TIMER_13_BIT // Set duty resolution to 13 bits
+#define LEDC_DUTY (4095)                // Set duty to 50%. ((2 ** 13) - 1) * 50% = 4095
+#define PWM_0_FREQUENCY (9000)          // Frequency in Hertz.
+
 static const char *TAG = "timergate-pole";
 static int sock;
 char host_ip[] = HOST_IP_ADDR;
@@ -63,16 +69,13 @@ static int adc_raw[NUM_SENSORS][10];
 adc_oneshot_unit_handle_t adc1_handle;
 
 static led_strip_handle_t led_strip;
-uint8_t led_gpio[NUM_SENSORS] = {39, 40, 41, 42, 35, 36, 37};
 uint8_t led_val[NUM_SENSORS] = {0};
-
 uint8_t adc_channel[NUM_SENSORS] = {ADC_CHANNEL_0, ADC_CHANNEL_1, ADC_CHANNEL_3, ADC_CHANNEL_4, ADC_CHANNEL_5, ADC_CHANNEL_6, ADC_CHANNEL_7};
-
 uint16_t break_limit[NUM_SENSORS] = {1000, 1000, 1000, 1000, 1000, 1000, 1000};
-
+uint8_t rcv_gpios[NUM_SENSORS] = {PWM_RCV_0, PWM_RCV_1, PWM_RCV_2, PWM_RCV_3, PWM_RCV_4, PWM_RCV_5, PWM_RCV_6};
+ledc_channel_t rcv_channels[NUM_SENSORS] = {LEDC_CHANNEL_1, LEDC_CHANNEL_2, LEDC_CHANNEL_3, LEDC_CHANNEL_4, LEDC_CHANNEL_5, LEDC_CHANNEL_6, LEDC_CHANNEL_7};
 bool enabled[NUM_SENSORS] = {true, true, true, true, true, true, true};
-
-uint8_t sensor_break[NUM_SENSORS] = {0};
+bool sensor_break[NUM_SENSORS] = {false};
 
 uint16_t break_time;
 bool curr_broken = false;
@@ -83,8 +86,25 @@ bool connected = false;
 char *cmd;
 int64_t timestamp;
 
+bool highpoint_search = false;
+int highpoint_offset = 0;
+int highpoint_max = 0;
+int highpoint_offset_max = 0;
+int highpoint_channel = 0;
+
+typedef struct
+{
+    int32_t restart_counter;
+    uint16_t offsets[NUM_SENSORS];
+    uint16_t break_limit[NUM_SENSORS];
+    uint8_t sensor_enabled[NUM_SENSORS];
+} nvs_data_t;
+
+nvs_data_t nvs_data;
+
 led_strip_config_t strip_config = {
-    .max_leds = 1, // at least one LED on board
+    .max_leds = 7, // at least one LED on board
+    .strip_gpio_num = LED_GPIO,
 };
 
 led_strip_rmt_config_t rmt_config = {
@@ -100,19 +120,6 @@ typedef struct
     uint32_t magic;   // Magic number which is used to determine which device to send unicast ESPNOW data.
     char payload[0];  // Real payload of ESPNOW data.
 } __attribute__((packed)) example_espnow_data_t;
-
-#define LEDC_MODE LEDC_LOW_SPEED_MODE
-#define PWM_SEND_0 9
-#define PWM_RCV_0 18
-#define PWM_RCV_1 21
-#define PWM_RCV_2 38
-#define PWM_RCV_3 45
-#define PWM_RCV_4 46
-#define PWM_RCV_5 47
-#define PWM_RCV_6 48
-#define LEDC_DUTY_RES LEDC_TIMER_13_BIT // Set duty resolution to 13 bits
-#define LEDC_DUTY (4095)                // Set duty to 50%. ((2 ** 13) - 1) * 50% = 4095
-#define PWM_0_FREQUENCY (9000)          // Frequency in Hertz.
 
 static void pwm_init(int timer_num, int frequency, int channel, int gpio, int hpoint)
 {
@@ -140,21 +147,141 @@ void led_set(uint8_t led_nr, uint8_t value)
     if (led_val[led_nr] == value)
         return;
 
-    strip_config.strip_gpio_num = led_gpio[led_nr];
-    led_strip_new_rmt_device(&strip_config, &rmt_config, &led_strip);
-
     if (value)
     {
-        led_strip_set_pixel(led_strip, 0, 16, 16, 16);
+        led_strip_set_pixel(led_strip, led_nr, 16, 16, 16);
         led_strip_refresh(led_strip);
     }
     else
     {
-        led_strip_clear(led_strip);
+        led_strip_set_pixel(led_strip, led_nr, 0, 0, 0);
+        led_strip_refresh(led_strip);
     }
-    led_strip_del(led_strip);
 
     led_val[led_nr] = value;
+}
+
+void nvs_setup()
+{
+    esp_err_t err = nvs_flash_init();
+    if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND)
+    {
+        // NVS partition was truncated and needs to be erased
+        // Retry nvs_flash_init
+        ESP_ERROR_CHECK(nvs_flash_erase());
+        err = nvs_flash_init();
+    }
+    ESP_ERROR_CHECK(err);
+}
+
+void nvs_read()
+{
+    esp_err_t err;
+    // Open
+    printf("Opening Non-Volatile Storage (NVS) handle... ");
+    nvs_handle_t my_handle;
+    err = nvs_open("storage", NVS_READWRITE, &my_handle);
+    if (err != ESP_OK)
+    {
+        printf("Error (%s) opening NVS handle!\n", esp_err_to_name(err));
+    }
+    else
+    {
+        printf("Done\n");
+
+        // Read
+        printf("Reading restart counter from NVS ... ");
+        err = nvs_get_i32(my_handle, "restart_counter", &nvs_data.restart_counter);
+        switch (err)
+        {
+        case ESP_OK:
+            printf("Done\n");
+            printf("Restart counter = %" PRIu32 "\n", nvs_data.restart_counter);
+            break;
+        case ESP_ERR_NVS_NOT_FOUND:
+            printf("The value is not initialized yet!\n");
+            break;
+        default:
+            printf("Error (%s) reading!\n", esp_err_to_name(err));
+        }
+
+        char var_s[30];
+        printf("Reading offsets in NVS ... ");
+        for (int i = 0; i < NUM_SENSORS; i++)
+        {
+            sprintf(var_s, "offset_%d", i);
+            err = nvs_get_u16(my_handle, var_s, &nvs_data.offsets[i]);
+        }
+
+        for (int i = 0; i < NUM_SENSORS; i++)
+        {
+            sprintf(var_s, "break_limit_%d", i);
+            err = nvs_get_u16(my_handle, var_s, &nvs_data.break_limit[i]);
+        }
+
+        // Close
+        nvs_close(my_handle);
+    }
+}
+
+void nvs_update_restart()
+{
+    esp_err_t err;
+    printf("Opening Non-Volatile Storage (NVS) handle... ");
+    nvs_handle_t my_handle;
+    err = nvs_open("storage", NVS_READWRITE, &my_handle);
+    if (err != ESP_OK)
+    {
+        printf("Error (%s) opening NVS handle!\n", esp_err_to_name(err));
+    }
+    else
+    {
+        // Write
+        printf("Updating restart counter in NVS ... ");
+        nvs_data.restart_counter++;
+        err = nvs_set_i32(my_handle, "restart_counter", nvs_data.restart_counter);
+        printf((err != ESP_OK) ? "Failed!\n" : "Done\n");
+
+        printf("Committing updates in NVS ... ");
+        err = nvs_commit(my_handle);
+        printf((err != ESP_OK) ? "Failed!\n" : "Done\n");
+        // Close
+        nvs_close(my_handle);
+    }
+}
+
+void nvs_update_offsets()
+{
+    esp_err_t err;
+    printf("Opening Non-Volatile Storage (NVS) handle... ");
+    nvs_handle_t my_handle;
+    err = nvs_open("storage", NVS_READWRITE, &my_handle);
+    if (err != ESP_OK)
+    {
+        printf("Error (%s) opening NVS handle!\n", esp_err_to_name(err));
+    }
+    else
+    {
+        char var_s[30];
+        printf("Updating offsets in NVS ... ");
+        for (int i = 0; i < NUM_SENSORS; i++)
+        {
+            sprintf(var_s, "offset_%d", i);
+            err = nvs_set_u16(my_handle, var_s, nvs_data.offsets[i]);
+        }
+
+        for (int i = 0; i < NUM_SENSORS; i++)
+        {
+            sprintf(var_s, "break_limit_%d", i);
+            err = nvs_set_u16(my_handle, var_s, nvs_data.break_limit[i]);
+        }
+
+        printf("Committing updates in NVS ... ");
+        err = nvs_commit(my_handle);
+        printf((err != ESP_OK) ? "Failed!\n" : "Done\n");
+        // Close
+        nvs_close(my_handle);
+    }
 }
 
 static void adc_init()
@@ -367,6 +494,10 @@ static void check_socket()
                     if (adc_nr < 7 && val < 4906)
                     {
                         break_limit[adc_nr] = val;
+                        nvs_data.break_limit[adc_nr] = val;
+                    }
+                    if(adc_nr == 6){
+                        nvs_update_offsets();
                     }
                 }
                 if (strncmp(command, "time", 4) == 0)
@@ -375,7 +506,15 @@ static void check_socket()
                     ESP_LOGI(TAG, "Got timestamp: %lld", timestamp);
                     example_espnow_init();
                 }
-
+                if (strncmp(command, "hsearch", 7) == 0)
+                {
+                    int channel = strtol(command + 8, NULL, 10);
+                    ESP_LOGI(TAG, "Hsearch channel: %d", channel);
+                    highpoint_search = true;
+                    highpoint_offset = 0;
+                    highpoint_channel = channel;
+                    highpoint_max = 0;
+                }
                 cmd_index = 0;
             }
             else
@@ -415,14 +554,15 @@ static void tcp_client_task(void *pvParameters)
             }
             if (xQueueReceive(xQueueBreak, &break_cmd, 0) == pdPASS)
             {
-                //ESP_LOGI(TAG, "Sending from xQueueBreak: %s", break_cmd);
+                // ESP_LOGI(TAG, "Sending from xQueueBreak: %s", break_cmd);
                 int written = send(sock, break_cmd, strlen(break_cmd), 0);
                 if (written < 0)
                 {
                     ESP_LOGE(TAG, "Error occurred during sending: errno %d", errno);
                     connected = false;
                 }
-                if (break_cmd != NULL){
+                if (break_cmd != NULL)
+                {
                     free(break_cmd);
                     break_cmd = NULL;
                 }
@@ -442,14 +582,25 @@ static void wifi_init()
 
 void app_main(void)
 {
+
+    nvs_setup();
+    nvs_read();
+
     pwm_init(LEDC_TIMER_0, PWM_0_FREQUENCY, LEDC_CHANNEL_0, PWM_SEND_0, 0);
-    pwm_init(LEDC_TIMER_1, PWM_0_FREQUENCY, LEDC_CHANNEL_1, PWM_RCV_0, 0);
-    pwm_init(LEDC_TIMER_1, PWM_0_FREQUENCY, LEDC_CHANNEL_2, PWM_RCV_1, 1000);
-    pwm_init(LEDC_TIMER_1, PWM_0_FREQUENCY, LEDC_CHANNEL_3, PWM_RCV_2, 2000);
-    pwm_init(LEDC_TIMER_1, PWM_0_FREQUENCY, LEDC_CHANNEL_4, PWM_RCV_3, 3000);
-    pwm_init(LEDC_TIMER_1, PWM_0_FREQUENCY, LEDC_CHANNEL_5, PWM_RCV_4, 4000);
-    pwm_init(LEDC_TIMER_1, PWM_0_FREQUENCY, LEDC_CHANNEL_6, PWM_RCV_5, 5000);
-    pwm_init(LEDC_TIMER_1, PWM_0_FREQUENCY, LEDC_CHANNEL_7, PWM_RCV_6, 6000);
+    for (int i = 0; i < NUM_SENSORS; i++)
+    {
+        ESP_LOGI(TAG, "Offset for sensor %d = %d", i, (int)nvs_data.offsets[i]);
+        pwm_init(LEDC_TIMER_1, PWM_0_FREQUENCY, rcv_channels[i], rcv_gpios[i], nvs_data.offsets[i]);
+
+        ledc_set_duty_with_hpoint(LEDC_MODE, rcv_channels[i], LEDC_DUTY, nvs_data.offsets[i]);
+        ledc_update_duty(LEDC_MODE, rcv_channels[i]);
+
+
+        ESP_LOGI(TAG, "Break for sensor %d = %d", i, (int)nvs_data.break_limit[i]);
+        break_limit[i] = nvs_data.break_limit[i];
+    }
+
+    led_strip_new_rmt_device(&strip_config, &rmt_config, &led_strip);
 
     esp_log_level_set("gpio", ESP_LOG_WARN);
 
@@ -460,9 +611,10 @@ void app_main(void)
     tcp_setup();
     tcp_connect();
     store_mac();
+    nvs_update_restart();
 
     xQueue = xQueueCreate(1, sizeof(char *));
-    xQueueBreak = xQueueCreate(10, sizeof(char *));
+    xQueueBreak = xQueueCreate(30, sizeof(char *));
     xTaskCreatePinnedToCore(tcp_client_task, "tcp_client", 4096, (void *)AF_INET, 5, NULL, 1);
 
     while (1)
@@ -483,11 +635,46 @@ void app_main(void)
 
         publish_sensor();
 
-        // Send event if there is a change in state
-        if (curr_broken != prev_broken)
+        if (highpoint_search)
         {
-            publish_break(curr_broken);
+            // ESP_LOGI(TAG, "offset: %d", highpoint_offset);
+            ledc_set_duty_with_hpoint(LEDC_MODE, LEDC_CHANNEL_1 + highpoint_channel, LEDC_DUTY, highpoint_offset);
+            ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_1 + highpoint_channel);
+            if (adc_raw[0][highpoint_channel] > highpoint_max)
+            {
+                highpoint_max = adc_raw[0][highpoint_channel];
+                highpoint_offset_max = highpoint_offset;
+            }
+            if (highpoint_offset >= 8092)
+            {
+                ledc_set_duty_with_hpoint(LEDC_MODE, rcv_channels[highpoint_channel], LEDC_DUTY, highpoint_offset_max);
+                ledc_update_duty(LEDC_MODE, rcv_channels[highpoint_channel]);
+
+                nvs_data.offsets[highpoint_channel] = highpoint_offset_max;
+                ESP_LOGI(TAG, "hsearch done for channel %d, max adc value: %d, offset: %d", highpoint_channel, highpoint_max, highpoint_offset_max);
+
+                if (highpoint_channel == 6)
+                {
+                    highpoint_search = false;
+                    nvs_update_offsets();
+                }
+                else
+                {
+                    highpoint_channel++;
+                    highpoint_offset = 0;
+                    highpoint_max = 0;
+                }
+            }
+            highpoint_offset += 30;
         }
-        prev_broken = curr_broken;
+        else
+        {
+            // Send event if there is a change in state
+            if (curr_broken != prev_broken)
+            {
+                publish_break(curr_broken);
+            }
+            prev_broken = curr_broken;
+        }
     }
 }

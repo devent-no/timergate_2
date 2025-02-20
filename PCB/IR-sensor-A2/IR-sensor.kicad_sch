@@ -3356,7 +3356,7 @@
 		(uuid "74b154f4-b9a0-473b-ab2e-68a1b3216120")
 	)
 	(junction
-		(at 289.56 128.27)
+		(at 289.56 129.54)
 		(diameter 0)
 		(color 0 0 0 0)
 		(uuid "75f72d67-e53c-4ce5-b95d-f1e2de92b511")
@@ -3422,7 +3422,7 @@
 		(uuid "a6f20e3a-d9e8-4227-aa9e-7089e8c4c6db")
 	)
 	(junction
-		(at 269.24 138.43)
+		(at 269.24 139.7)
 		(diameter 0)
 		(color 0 0 0 0)
 		(uuid "abce7ed6-6c2d-4633-841d-ff10864eb55e")
@@ -3434,7 +3434,7 @@
 		(uuid "bd53b974-de58-473a-a2af-39cec83d36a4")
 	)
 	(junction
-		(at 302.26 140.97)
+		(at 302.26 142.24)
 		(diameter 0)
 		(color 0 0 0 0)
 		(uuid "ce7eee07-ca74-4148-aa97-ec0a7ce91ae8")
@@ -3464,7 +3464,7 @@
 		(uuid "f3283201-866f-465b-ac0c-0a73b25e976a")
 	)
 	(junction
-		(at 269.24 128.27)
+		(at 269.24 129.54)
 		(diameter 0)
 		(color 0 0 0 0)
 		(uuid "f3d04a84-ed07-4780-9ac3-e3a743b954ab")
@@ -3476,7 +3476,7 @@
 		(uuid "f6e44fd0-4f7c-49aa-9300-c54187ad1a67")
 	)
 	(junction
-		(at 289.56 140.97)
+		(at 289.56 142.24)
 		(diameter 0)
 		(color 0 0 0 0)
 		(uuid "feb043ab-c6db-4ba9-b9bc-51abb00c596c")
@@ -3749,7 +3749,7 @@
 	)
 	(wire
 		(pts
-			(xy 289.56 119.38) (xy 289.56 128.27)
+			(xy 289.56 120.65) (xy 289.56 129.54)
 		)
 		(stroke
 			(width 0)
@@ -3789,7 +3789,7 @@
 	)
 	(wire
 		(pts
-			(xy 250.19 142.24) (xy 250.19 138.43)
+			(xy 250.19 142.24) (xy 250.19 139.7)
 		)
 		(stroke
 			(width 0)
@@ -3999,7 +3999,7 @@
 	)
 	(wire
 		(pts
-			(xy 269.24 138.43) (xy 271.78 138.43)
+			(xy 269.24 139.7) (xy 271.78 139.7)
 		)
 		(stroke
 			(width 0)
@@ -4079,7 +4079,7 @@
 	)
 	(wire
 		(pts
-			(xy 289.56 128.27) (xy 289.56 140.97)
+			(xy 289.56 129.54) (xy 289.56 142.24)
 		)
 		(stroke
 			(width 0)
@@ -4269,7 +4269,7 @@
 	)
 	(wire
 		(pts
-			(xy 289.56 140.97) (xy 287.02 140.97)
+			(xy 289.56 142.24) (xy 287.02 142.24)
 		)
 		(stroke
 			(width 0)
@@ -4329,7 +4329,7 @@
 	)
 	(wire
 		(pts
-			(xy 269.24 128.27) (xy 269.24 138.43)
+			(xy 269.24 129.54) (xy 269.24 139.7)
 		)
 		(stroke
 			(width 0)
@@ -4389,7 +4389,7 @@
 	)
 	(wire
 		(pts
-			(xy 269.24 128.27) (xy 275.59 128.27)
+			(xy 269.24 129.54) (xy 275.59 129.54)
 		)
 		(stroke
 			(width 0)
@@ -4439,7 +4439,7 @@
 	)
 	(wire
 		(pts
-			(xy 262.89 138.43) (xy 269.24 138.43)
+			(xy 262.89 139.7) (xy 269.24 139.7)
 		)
 		(stroke
 			(width 0)
@@ -4509,7 +4509,7 @@
 	)
 	(wire
 		(pts
-			(xy 271.78 143.51) (xy 270.51 143.51)
+			(xy 271.78 144.78) (xy 270.51 144.78)
 		)
 		(stroke
 			(width 0)
@@ -4609,7 +4609,7 @@
 	)
 	(wire
 		(pts
-			(xy 270.51 143.51) (xy 270.51 157.48)
+			(xy 270.51 144.78) (xy 270.51 158.75)
 		)
 		(stroke
 			(width 0)
@@ -4659,7 +4659,7 @@
 	)
 	(wire
 		(pts
-			(xy 283.21 128.27) (xy 289.56 128.27)
+			(xy 283.21 129.54) (xy 289.56 129.54)
 		)
 		(stroke
 			(width 0)
@@ -4709,7 +4709,7 @@
 	)
 	(wire
 		(pts
-			(xy 269.24 119.38) (xy 269.24 128.27)
+			(xy 269.24 120.65) (xy 269.24 129.54)
 		)
 		(stroke
 			(width 0)
@@ -4759,7 +4759,7 @@
 	)
 	(wire
 		(pts
-			(xy 302.26 140.97) (xy 336.55 140.97)
+			(xy 302.26 142.24) (xy 336.55 142.24)
 		)
 		(stroke
 			(width 0)
@@ -5129,7 +5129,7 @@
 	)
 	(wire
 		(pts
-			(xy 269.24 119.38) (xy 275.59 119.38)
+			(xy 269.24 120.65) (xy 275.59 120.65)
 		)
 		(stroke
 			(width 0)
@@ -5149,7 +5149,7 @@
 	)
 	(wire
 		(pts
-			(xy 250.19 138.43) (xy 255.27 138.43)
+			(xy 250.19 139.7) (xy 255.27 139.7)
 		)
 		(stroke
 			(width 0)
@@ -5189,7 +5189,7 @@
 	)
 	(wire
 		(pts
-			(xy 302.26 140.97) (xy 302.26 143.51)
+			(xy 302.26 142.24) (xy 302.26 144.78)
 		)
 		(stroke
 			(width 0)
@@ -5249,7 +5249,7 @@
 	)
 	(wire
 		(pts
-			(xy 289.56 140.97) (xy 293.37 140.97)
+			(xy 289.56 142.24) (xy 293.37 142.24)
 		)
 		(stroke
 			(width 0)
@@ -5369,7 +5369,7 @@
 	)
 	(wire
 		(pts
-			(xy 300.99 140.97) (xy 302.26 140.97)
+			(xy 300.99 142.24) (xy 302.26 142.24)
 		)
 		(stroke
 			(width 0)
@@ -5559,7 +5559,7 @@
 	)
 	(wire
 		(pts
-			(xy 283.21 119.38) (xy 289.56 119.38)
+			(xy 283.21 120.65) (xy 289.56 120.65)
 		)
 		(stroke
 			(width 0)
@@ -5589,7 +5589,7 @@
 	)
 	(wire
 		(pts
-			(xy 302.26 151.13) (xy 302.26 157.48)
+			(xy 302.26 152.4) (xy 302.26 158.75)
 		)
 		(stroke
 			(width 0)
@@ -5733,7 +5733,7 @@
 	)
 	(text "~100 Hz second order low-pass with 100 gain"
 		(exclude_from_sim no)
-		(at 251.46 106.68 0)
+		(at 251.714 108.966 0)
 		(effects
 			(font
 				(size 1.27 1.27)
@@ -5744,7 +5744,6 @@
 	)
 	(label "DOG_6"
 		(at 396.24 58.42 180)
-		(fields_autoplaced yes)
 		(effects
 			(font
 				(size 1.27 1.27)
@@ -5755,7 +5754,6 @@
 	)
 	(label "DOG_6"
 		(at 332.74 99.06 180)
-		(fields_autoplaced yes)
 		(effects
 			(font
 				(size 1.27 1.27)
@@ -5766,7 +5764,6 @@
 	)
 	(label "PWM_RCV"
 		(at 217.17 153.67 0)
-		(fields_autoplaced yes)
 		(effects
 			(font
 				(size 1.27 1.27)
@@ -5777,7 +5774,6 @@
 	)
 	(label "PWM_RCV_6"
 		(at 370.84 99.06 180)
-		(fields_autoplaced yes)
 		(effects
 			(font
 				(size 1.27 1.27)
@@ -5788,7 +5784,6 @@
 	)
 	(label "DOG_1"
 		(at 396.24 45.72 180)
-		(fields_autoplaced yes)
 		(effects
 			(font
 				(size 1.27 1.27)
@@ -5799,7 +5794,6 @@
 	)
 	(label "PWM_RCV_2"
 		(at 358.14 48.26 0)
-		(fields_autoplaced yes)
 		(effects
 			(font
 				(size 1.27 1.27)
@@ -5810,7 +5804,6 @@
 	)
 	(label "DOG_3"
 		(at 332.74 91.44 180)
-		(fields_autoplaced yes)
 		(effects
 			(font
 				(size 1.27 1.27)
@@ -5821,7 +5814,6 @@
 	)
 	(label "PWM_RCV_5"
 		(at 287.02 55.88 0)
-		(fields_autoplaced yes)
 		(effects
 			(font
 				(size 1.27 1.27)
@@ -5832,7 +5824,6 @@
 	)
 	(label "PWM_RCV_6"
 		(at 287.02 58.42 0)
-		(fields_autoplaced yes)
 		(effects
 			(font
 				(size 1.27 1.27)
@@ -5843,7 +5834,6 @@
 	)
 	(label "PWM_RCV_5"
 		(at 358.14 55.88 0)
-		(fields_autoplaced yes)
 		(effects
 			(font
 				(size 1.27 1.27)
@@ -5854,7 +5844,6 @@
 	)
 	(label "PWM_RCV_2"
 		(at 370.84 88.9 180)
-		(fields_autoplaced yes)
 		(effects
 			(font
 				(size 1.27 1.27)
@@ -5865,7 +5854,6 @@
 	)
 	(label "DOG_5"
 		(at 332.74 96.52 180)
-		(fields_autoplaced yes)
 		(effects
 			(font
 				(size 1.27 1.27)
@@ -5876,7 +5864,6 @@
 	)
 	(label "DOG_6"
 		(at 327.66 58.42 180)
-		(fields_autoplaced yes)
 		(effects
 			(font
 				(size 1.27 1.27)
@@ -5887,7 +5874,6 @@
 	)
 	(label "PWM_RCV_7"
 		(at 370.84 101.6 180)
-		(fields_autoplaced yes)
 		(effects
 			(font
 				(size 1.27 1.27)
@@ -5898,7 +5884,6 @@
 	)
 	(label "PWM_RCV_2"
 		(at 287.02 48.26 0)
-		(fields_autoplaced yes)
 		(effects
 			(font
 				(size 1.27 1.27)
@@ -5909,7 +5894,6 @@
 	)
 	(label "PWM_RCV_3"
 		(at 287.02 50.8 0)
-		(fields_autoplaced yes)
 		(effects
 			(font
 				(size 1.27 1.27)
@@ -5920,7 +5904,6 @@
 	)
 	(label "DOG"
 		(at 350.52 86.36 0)
-		(fields_autoplaced yes)
 		(effects
 			(font
 				(size 1.27 1.27)
@@ -5931,7 +5914,6 @@
 	)
 	(label "DOG_7"
 		(at 327.66 60.96 180)
-		(fields_autoplaced yes)
 		(effects
 			(font
 				(size 1.27 1.27)
@@ -5942,7 +5924,6 @@
 	)
 	(label "PWM_SEND"
 		(at 114.3 224.79 180)
-		(fields_autoplaced yes)
 		(effects
 			(font
 				(size 1.27 1.27)
@@ -5953,7 +5934,6 @@
 	)
 	(label "DOG_3"
 		(at 327.66 50.8 180)
-		(fields_autoplaced yes)
 		(effects
 			(font
 				(size 1.27 1.27)
@@ -5964,7 +5944,6 @@
 	)
 	(label "DOG_3"
 		(at 396.24 50.8 180)
-		(fields_autoplaced yes)
 		(effects
 			(font
 				(size 1.27 1.27)
@@ -5975,7 +5954,6 @@
 	)
 	(label "DOG_7"
 		(at 332.74 101.6 180)
-		(fields_autoplaced yes)
 		(effects
 			(font
 				(size 1.27 1.27)
@@ -5986,7 +5964,6 @@
 	)
 	(label "INDICATOR_IN"
 		(at 140.97 231.14 180)
-		(fields_autoplaced yes)
 		(effects
 			(font
 				(size 1.27 1.27)
@@ -5997,7 +5974,6 @@
 	)
 	(label "DOG_2"
 		(at 396.24 48.26 180)
-		(fields_autoplaced yes)
 		(effects
 			(font
 				(size 1.27 1.27)
@@ -6008,7 +5984,6 @@
 	)
 	(label "PWM_SEND"
 		(at 287.02 43.18 0)
-		(fields_autoplaced yes)
 		(effects
 			(font
 				(size 1.27 1.27)
@@ -6019,7 +5994,6 @@
 	)
 	(label "PWM_RCV_7"
 		(at 358.14 60.96 0)
-		(fields_autoplaced yes)
 		(effects
 			(font
 				(size 1.27 1.27)
@@ -6030,7 +6004,6 @@
 	)
 	(label "PWM_RCV"
 		(at 388.62 86.36 0)
-		(fields_autoplaced yes)
 		(effects
 			(font
 				(size 1.27 1.27)
@@ -6041,7 +6014,6 @@
 	)
 	(label "PWM_RCV_4"
 		(at 287.02 53.34 0)
-		(fields_autoplaced yes)
 		(effects
 			(font
 				(size 1.27 1.27)
@@ -6052,7 +6024,6 @@
 	)
 	(label "PWM_RCV_3"
 		(at 358.14 50.8 0)
-		(fields_autoplaced yes)
 		(effects
 			(font
 				(size 1.27 1.27)
@@ -6063,7 +6034,6 @@
 	)
 	(label "DOG_2"
 		(at 327.66 48.26 180)
-		(fields_autoplaced yes)
 		(effects
 			(font
 				(size 1.27 1.27)
@@ -6074,7 +6044,6 @@
 	)
 	(label "DOG_5"
 		(at 327.66 55.88 180)
-		(fields_autoplaced yes)
 		(effects
 			(font
 				(size 1.27 1.27)
@@ -6085,7 +6054,6 @@
 	)
 	(label "PWM_RCV_4"
 		(at 370.84 93.98 180)
-		(fields_autoplaced yes)
 		(effects
 			(font
 				(size 1.27 1.27)
@@ -6095,8 +6063,7 @@
 		(uuid "a4ff29f1-51c0-42c2-9075-c59757b2a6bd")
 	)
 	(label "DOG"
-		(at 336.55 140.97 0)
-		(fields_autoplaced yes)
+		(at 336.55 142.24 0)
 		(effects
 			(font
 				(size 1.27 1.27)
@@ -6107,7 +6074,6 @@
 	)
 	(label "DOG_1"
 		(at 327.66 45.72 180)
-		(fields_autoplaced yes)
 		(effects
 			(font
 				(size 1.27 1.27)
@@ -6118,7 +6084,6 @@
 	)
 	(label "INDICATOR_OUT"
 		(at 327.66 43.18 180)
-		(fields_autoplaced yes)
 		(effects
 			(font
 				(size 1.27 1.27)
@@ -6129,7 +6094,6 @@
 	)
 	(label "PWM_RCV_4"
 		(at 358.14 53.34 0)
-		(fields_autoplaced yes)
 		(effects
 			(font
 				(size 1.27 1.27)
@@ -6140,7 +6104,6 @@
 	)
 	(label "PWM_RCV_7"
 		(at 287.02 60.96 0)
-		(fields_autoplaced yes)
 		(effects
 			(font
 				(size 1.27 1.27)
@@ -6151,7 +6114,6 @@
 	)
 	(label "DOG_5"
 		(at 396.24 55.88 180)
-		(fields_autoplaced yes)
 		(effects
 			(font
 				(size 1.27 1.27)
@@ -6162,7 +6124,6 @@
 	)
 	(label "PWM_SEND"
 		(at 358.14 43.18 0)
-		(fields_autoplaced yes)
 		(effects
 			(font
 				(size 1.27 1.27)
@@ -6173,7 +6134,6 @@
 	)
 	(label "PWM_RCV_1"
 		(at 358.14 45.72 0)
-		(fields_autoplaced yes)
 		(effects
 			(font
 				(size 1.27 1.27)
@@ -6184,7 +6144,6 @@
 	)
 	(label "DOG_2"
 		(at 332.74 88.9 180)
-		(fields_autoplaced yes)
 		(effects
 			(font
 				(size 1.27 1.27)
@@ -6195,7 +6154,6 @@
 	)
 	(label "PWM_RCV_3"
 		(at 370.84 91.44 180)
-		(fields_autoplaced yes)
 		(effects
 			(font
 				(size 1.27 1.27)
@@ -6206,7 +6164,6 @@
 	)
 	(label "INDICATOR_IN"
 		(at 396.24 43.18 180)
-		(fields_autoplaced yes)
 		(effects
 			(font
 				(size 1.27 1.27)
@@ -6217,7 +6174,6 @@
 	)
 	(label "DOG_1"
 		(at 332.74 86.36 180)
-		(fields_autoplaced yes)
 		(effects
 			(font
 				(size 1.27 1.27)
@@ -6228,7 +6184,6 @@
 	)
 	(label "DOG_4"
 		(at 327.66 53.34 180)
-		(fields_autoplaced yes)
 		(effects
 			(font
 				(size 1.27 1.27)
@@ -6239,7 +6194,6 @@
 	)
 	(label "DOG_7"
 		(at 396.24 60.96 180)
-		(fields_autoplaced yes)
 		(effects
 			(font
 				(size 1.27 1.27)
@@ -6250,7 +6204,6 @@
 	)
 	(label "PWM_RCV_6"
 		(at 358.14 58.42 0)
-		(fields_autoplaced yes)
 		(effects
 			(font
 				(size 1.27 1.27)
@@ -6261,7 +6214,6 @@
 	)
 	(label "PWM_RCV_1"
 		(at 287.02 45.72 0)
-		(fields_autoplaced yes)
 		(effects
 			(font
 				(size 1.27 1.27)
@@ -6272,7 +6224,6 @@
 	)
 	(label "PWM_RCV_5"
 		(at 370.84 96.52 180)
-		(fields_autoplaced yes)
 		(effects
 			(font
 				(size 1.27 1.27)
@@ -6283,7 +6234,6 @@
 	)
 	(label "DOG_4"
 		(at 396.24 53.34 180)
-		(fields_autoplaced yes)
 		(effects
 			(font
 				(size 1.27 1.27)
@@ -6294,7 +6244,6 @@
 	)
 	(label "PWM_RCV_1"
 		(at 370.84 86.36 180)
-		(fields_autoplaced yes)
 		(effects
 			(font
 				(size 1.27 1.27)
@@ -6305,7 +6254,6 @@
 	)
 	(label "INDICATOR_OUT"
 		(at 158.75 231.14 0)
-		(fields_autoplaced yes)
 		(effects
 			(font
 				(size 1.27 1.27)
@@ -6316,7 +6264,6 @@
 	)
 	(label "DOG_4"
 		(at 332.74 93.98 180)
-		(fields_autoplaced yes)
 		(effects
 			(font
 				(size 1.27 1.27)
@@ -6380,7 +6327,7 @@
 				(hide yes)
 			)
 		)
-		(property "MPN" "RC0402FR-07200RL"
+		(property "MPN" "0402WGF2000TCE"
 			(at 68.58 200.66 0)
 			(effects
 				(font
@@ -6389,7 +6336,7 @@
 				(hide yes)
 			)
 		)
-		(property "SPN" "C114764"
+		(property "SPN" "C25087"
 			(at 68.58 200.66 0)
 			(effects
 				(font
@@ -6418,7 +6365,7 @@
 		(at 341.63 101.6 0)
 		(unit 1)
 		(exclude_from_sim yes)
-		(in_bom yes)
+		(in_bom no)
 		(on_board yes)
 		(dnp no)
 		(fields_autoplaced yes)
@@ -6549,7 +6496,7 @@
 	)
 	(symbol
 		(lib_id "power:GND")
-		(at 270.51 157.48 0)
+		(at 270.51 158.75 0)
 		(unit 1)
 		(exclude_from_sim no)
 		(in_bom yes)
@@ -6558,7 +6505,7 @@
 		(fields_autoplaced yes)
 		(uuid "08c93237-f40c-4aad-8890-ae58538012a3")
 		(property "Reference" "#PWR025"
-			(at 270.51 163.83 0)
+			(at 270.51 165.1 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -6567,7 +6514,7 @@
 			)
 		)
 		(property "Value" "GND"
-			(at 270.51 161.6131 0)
+			(at 270.51 162.8831 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -6575,7 +6522,7 @@
 			)
 		)
 		(property "Footprint" ""
-			(at 270.51 157.48 0)
+			(at 270.51 158.75 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -6584,7 +6531,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 270.51 157.48 0)
+			(at 270.51 158.75 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -6593,7 +6540,7 @@
 			)
 		)
 		(property "Description" ""
-			(at 270.51 157.48 0)
+			(at 270.51 158.75 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -6750,7 +6697,7 @@
 		(at 379.73 91.44 0)
 		(unit 1)
 		(exclude_from_sim yes)
-		(in_bom yes)
+		(in_bom no)
 		(on_board yes)
 		(dnp no)
 		(fields_autoplaced yes)
@@ -6943,7 +6890,7 @@
 		(mirror x)
 		(unit 1)
 		(exclude_from_sim no)
-		(in_bom yes)
+		(in_bom no)
 		(on_board yes)
 		(dnp no)
 		(uuid "14f831ff-95b9-4e63-8a08-ac6c8b743fb9")
@@ -7520,7 +7467,7 @@
 				(hide yes)
 			)
 		)
-		(property "MPN" "RC0402FR-071KL"
+		(property "MPN" "0402WGF1001TCE"
 			(at 121.92 157.48 0)
 			(effects
 				(font
@@ -7529,7 +7476,7 @@
 				(hide yes)
 			)
 		)
-		(property "SPN" "C2935237"
+		(property "SPN" "C11702"
 			(at 121.92 157.48 0)
 			(effects
 				(font
@@ -7558,7 +7505,7 @@
 		(at 379.73 88.9 0)
 		(unit 1)
 		(exclude_from_sim yes)
-		(in_bom yes)
+		(in_bom no)
 		(on_board yes)
 		(dnp no)
 		(fields_autoplaced yes)
@@ -7978,7 +7925,7 @@
 		(at 379.73 101.6 0)
 		(unit 1)
 		(exclude_from_sim yes)
-		(in_bom yes)
+		(in_bom no)
 		(on_board yes)
 		(dnp no)
 		(fields_autoplaced yes)
@@ -8112,7 +8059,7 @@
 		(at 379.73 96.52 0)
 		(unit 1)
 		(exclude_from_sim yes)
-		(in_bom yes)
+		(in_bom no)
 		(on_board yes)
 		(dnp no)
 		(fields_autoplaced yes)
@@ -8330,7 +8277,7 @@
 	)
 	(symbol
 		(lib_id "Device:C")
-		(at 279.4 119.38 270)
+		(at 279.4 120.65 270)
 		(unit 1)
 		(exclude_from_sim no)
 		(in_bom yes)
@@ -8339,7 +8286,7 @@
 		(fields_autoplaced yes)
 		(uuid "4504f564-2c76-41fe-af21-ccb95ce117d1")
 		(property "Reference" "C13"
-			(at 279.4 113.0767 90)
+			(at 279.4 114.3467 90)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -8347,7 +8294,7 @@
 			)
 		)
 		(property "Value" "100n"
-			(at 279.4 115.5009 90)
+			(at 279.4 116.7709 90)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -8355,7 +8302,7 @@
 			)
 		)
 		(property "Footprint" "Capacitor_SMD:C_0402_1005Metric"
-			(at 275.59 120.3452 0)
+			(at 275.59 121.6152 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -8364,7 +8311,7 @@
 			)
 		)
 		(property "Datasheet" "~"
-			(at 279.4 119.38 0)
+			(at 279.4 120.65 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -8373,7 +8320,7 @@
 			)
 		)
 		(property "Description" ""
-			(at 279.4 119.38 0)
+			(at 279.4 120.65 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -8382,7 +8329,7 @@
 			)
 		)
 		(property "MPN" "CC0402KRX5R9BB104"
-			(at 279.4 119.38 90)
+			(at 279.4 120.65 90)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -8391,7 +8338,7 @@
 			)
 		)
 		(property "SPN" "C105882"
-			(at 279.4 119.38 90)
+			(at 279.4 120.65 90)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -8693,7 +8640,7 @@
 	)
 	(symbol
 		(lib_id "Device:C")
-		(at 302.26 147.32 0)
+		(at 302.26 148.59 0)
 		(unit 1)
 		(exclude_from_sim no)
 		(in_bom yes)
@@ -8702,7 +8649,7 @@
 		(fields_autoplaced yes)
 		(uuid "4d54d217-824b-4138-9918-4af4dc7e5dfc")
 		(property "Reference" "C11"
-			(at 305.181 146.1079 0)
+			(at 305.181 147.3779 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -8711,7 +8658,7 @@
 			)
 		)
 		(property "Value" "100n"
-			(at 305.181 148.5321 0)
+			(at 305.181 149.8021 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -8720,7 +8667,7 @@
 			)
 		)
 		(property "Footprint" "Capacitor_SMD:C_0402_1005Metric"
-			(at 303.2252 151.13 0)
+			(at 303.2252 152.4 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -8729,7 +8676,7 @@
 			)
 		)
 		(property "Datasheet" "~"
-			(at 302.26 147.32 0)
+			(at 302.26 148.59 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -8738,7 +8685,7 @@
 			)
 		)
 		(property "Description" ""
-			(at 302.26 147.32 0)
+			(at 302.26 148.59 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -8747,7 +8694,7 @@
 			)
 		)
 		(property "MPN" "CC0402KRX5R9BB104"
-			(at 302.26 147.32 0)
+			(at 302.26 148.59 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -8756,7 +8703,7 @@
 			)
 		)
 		(property "SPN" "C105882"
-			(at 302.26 147.32 0)
+			(at 302.26 148.59 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -8959,7 +8906,7 @@
 	)
 	(symbol
 		(lib_id "Device:R")
-		(at 259.08 138.43 270)
+		(at 259.08 139.7 270)
 		(unit 1)
 		(exclude_from_sim no)
 		(in_bom yes)
@@ -8968,7 +8915,7 @@
 		(fields_autoplaced yes)
 		(uuid "57812b9f-a045-4b86-a6b4-bca981a6b56b")
 		(property "Reference" "R16"
-			(at 259.08 133.2697 90)
+			(at 259.08 134.5397 90)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -8976,7 +8923,7 @@
 			)
 		)
 		(property "Value" "1k"
-			(at 259.08 135.6939 90)
+			(at 259.08 136.9639 90)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -8984,7 +8931,7 @@
 			)
 		)
 		(property "Footprint" "Resistor_SMD:R_0402_1005Metric"
-			(at 259.08 136.652 90)
+			(at 259.08 137.922 90)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -8993,7 +8940,7 @@
 			)
 		)
 		(property "Datasheet" "~"
-			(at 259.08 138.43 0)
+			(at 259.08 139.7 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -9002,7 +8949,7 @@
 			)
 		)
 		(property "Description" ""
-			(at 259.08 138.43 0)
+			(at 259.08 139.7 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -9010,8 +8957,8 @@
 				(hide yes)
 			)
 		)
-		(property "MPN" "RC0402FR-071KL"
-			(at 259.08 138.43 0)
+		(property "MPN" "0402WGF1001TCE"
+			(at 259.08 139.7 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -9019,8 +8966,8 @@
 				(hide yes)
 			)
 		)
-		(property "SPN" "C2935237"
-			(at 259.08 138.43 0)
+		(property "SPN" "C11702"
+			(at 259.08 139.7 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -9355,7 +9302,7 @@
 		(at 341.63 86.36 0)
 		(unit 1)
 		(exclude_from_sim yes)
-		(in_bom yes)
+		(in_bom no)
 		(on_board yes)
 		(dnp no)
 		(fields_autoplaced yes)
@@ -9423,7 +9370,7 @@
 		(at 341.63 91.44 0)
 		(unit 1)
 		(exclude_from_sim yes)
-		(in_bom yes)
+		(in_bom no)
 		(on_board yes)
 		(dnp no)
 		(fields_autoplaced yes)
@@ -9867,7 +9814,7 @@
 	)
 	(symbol
 		(lib_id "Device:R")
-		(at 297.18 140.97 270)
+		(at 297.18 142.24 270)
 		(unit 1)
 		(exclude_from_sim no)
 		(in_bom yes)
@@ -9876,7 +9823,7 @@
 		(fields_autoplaced yes)
 		(uuid "66be1c91-15cf-4749-8867-0ec0e144f7bb")
 		(property "Reference" "R18"
-			(at 297.18 135.8097 90)
+			(at 297.18 137.0797 90)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -9884,7 +9831,7 @@
 			)
 		)
 		(property "Value" "10k"
-			(at 297.18 138.2339 90)
+			(at 297.18 139.5039 90)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -9892,7 +9839,7 @@
 			)
 		)
 		(property "Footprint" "Resistor_SMD:R_0402_1005Metric"
-			(at 297.18 139.192 90)
+			(at 297.18 140.462 90)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -9901,7 +9848,7 @@
 			)
 		)
 		(property "Datasheet" "~"
-			(at 297.18 140.97 0)
+			(at 297.18 142.24 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -9910,7 +9857,7 @@
 			)
 		)
 		(property "Description" ""
-			(at 297.18 140.97 0)
+			(at 297.18 142.24 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -9919,7 +9866,7 @@
 			)
 		)
 		(property "MPN" "RC0402FR-0710KL"
-			(at 297.18 140.97 0)
+			(at 297.18 142.24 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -9928,7 +9875,7 @@
 			)
 		)
 		(property "SPN" "C60490"
-			(at 297.18 140.97 0)
+			(at 297.18 142.24 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -10155,7 +10102,7 @@
 		(at 341.63 88.9 0)
 		(unit 1)
 		(exclude_from_sim yes)
-		(in_bom yes)
+		(in_bom no)
 		(on_board yes)
 		(dnp no)
 		(fields_autoplaced yes)
@@ -10516,7 +10463,7 @@
 	)
 	(symbol
 		(lib_id "Amplifier_Operational:MCP6004")
-		(at 279.4 140.97 0)
+		(at 279.4 142.24 0)
 		(mirror x)
 		(unit 4)
 		(exclude_from_sim no)
@@ -10525,7 +10472,7 @@
 		(dnp no)
 		(uuid "799f1819-aa84-464f-93a0-f65b66fbd3d6")
 		(property "Reference" "U1"
-			(at 279.4 150.1943 0)
+			(at 279.4 151.4643 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -10533,7 +10480,7 @@
 			)
 		)
 		(property "Value" "MCP6004"
-			(at 279.4 147.7701 0)
+			(at 279.4 149.0401 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -10541,7 +10488,7 @@
 			)
 		)
 		(property "Footprint" "Package_SO:SOIC-14_3.9x8.7mm_P1.27mm"
-			(at 278.13 143.51 0)
+			(at 278.13 144.78 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -10550,7 +10497,7 @@
 			)
 		)
 		(property "Datasheet" "http://ww1.microchip.com/downloads/en/DeviceDoc/21733j.pdf"
-			(at 280.67 146.05 0)
+			(at 280.67 147.32 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -10559,7 +10506,7 @@
 			)
 		)
 		(property "Description" ""
-			(at 279.4 140.97 0)
+			(at 279.4 142.24 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -10568,7 +10515,7 @@
 			)
 		)
 		(property "MPN" "MCP6004T-I/SL"
-			(at 279.4 140.97 0)
+			(at 279.4 142.24 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -10577,7 +10524,7 @@
 			)
 		)
 		(property "SPN" "C7378"
-			(at 279.4 140.97 0)
+			(at 279.4 142.24 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -11268,7 +11215,7 @@
 		(at 341.63 93.98 0)
 		(unit 1)
 		(exclude_from_sim yes)
-		(in_bom yes)
+		(in_bom no)
 		(on_board yes)
 		(dnp no)
 		(fields_autoplaced yes)
@@ -11386,7 +11333,7 @@
 				(hide yes)
 			)
 		)
-		(property "MPN" "RC0402FR-071KL"
+		(property "MPN" "0402WGF1001TCE"
 			(at 140.97 157.48 0)
 			(effects
 				(font
@@ -11395,7 +11342,7 @@
 				(hide yes)
 			)
 		)
-		(property "SPN" "C2935237"
+		(property "SPN" "C11702"
 			(at 140.97 157.48 0)
 			(effects
 				(font
@@ -11862,7 +11809,7 @@
 	)
 	(symbol
 		(lib_id "Device:R")
-		(at 279.4 128.27 270)
+		(at 279.4 129.54 270)
 		(unit 1)
 		(exclude_from_sim no)
 		(in_bom yes)
@@ -11871,7 +11818,7 @@
 		(fields_autoplaced yes)
 		(uuid "9e6c99bc-5fd6-4e8c-9475-82dbf3205eef")
 		(property "Reference" "R17"
-			(at 279.4 123.1097 90)
+			(at 279.4 124.3797 90)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -11879,7 +11826,7 @@
 			)
 		)
 		(property "Value" "100k"
-			(at 279.4 125.5339 90)
+			(at 279.4 126.8039 90)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -11887,7 +11834,7 @@
 			)
 		)
 		(property "Footprint" "Resistor_SMD:R_0402_1005Metric"
-			(at 279.4 126.492 90)
+			(at 279.4 127.762 90)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -11896,7 +11843,7 @@
 			)
 		)
 		(property "Datasheet" "~"
-			(at 279.4 128.27 0)
+			(at 279.4 129.54 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -11905,7 +11852,7 @@
 			)
 		)
 		(property "Description" ""
-			(at 279.4 128.27 0)
+			(at 279.4 129.54 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -11914,7 +11861,7 @@
 			)
 		)
 		(property "MPN" "RC0402FR-07100KL"
-			(at 279.4 128.27 0)
+			(at 279.4 129.54 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -11923,7 +11870,7 @@
 			)
 		)
 		(property "SPN" "C60491"
-			(at 279.4 128.27 0)
+			(at 279.4 129.54 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -12139,7 +12086,7 @@
 		(at 379.73 93.98 0)
 		(unit 1)
 		(exclude_from_sim yes)
-		(in_bom yes)
+		(in_bom no)
 		(on_board yes)
 		(dnp no)
 		(fields_autoplaced yes)
@@ -12824,7 +12771,7 @@
 		(at 379.73 99.06 0)
 		(unit 1)
 		(exclude_from_sim yes)
-		(in_bom yes)
+		(in_bom no)
 		(on_board yes)
 		(dnp no)
 		(fields_autoplaced yes)
@@ -12942,7 +12889,7 @@
 				(hide yes)
 			)
 		)
-		(property "MPN" "RC0402FR-071KL"
+		(property "MPN" "0402WGF1001TCE"
 			(at 205.74 160.02 0)
 			(effects
 				(font
@@ -12951,7 +12898,7 @@
 				(hide yes)
 			)
 		)
-		(property "SPN" "C2935237"
+		(property "SPN" "C11702"
 			(at 205.74 160.02 0)
 			(effects
 				(font
@@ -13459,7 +13406,7 @@
 	)
 	(symbol
 		(lib_id "power:GND")
-		(at 302.26 157.48 0)
+		(at 302.26 158.75 0)
 		(unit 1)
 		(exclude_from_sim no)
 		(in_bom yes)
@@ -13468,7 +13415,7 @@
 		(fields_autoplaced yes)
 		(uuid "debddb23-7916-4173-8670-990fd4d2a0da")
 		(property "Reference" "#PWR026"
-			(at 302.26 163.83 0)
+			(at 302.26 165.1 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -13477,7 +13424,7 @@
 			)
 		)
 		(property "Value" "GND"
-			(at 302.26 161.6131 0)
+			(at 302.26 162.8831 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -13485,7 +13432,7 @@
 			)
 		)
 		(property "Footprint" ""
-			(at 302.26 157.48 0)
+			(at 302.26 158.75 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -13494,7 +13441,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 302.26 157.48 0)
+			(at 302.26 158.75 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -13503,7 +13450,7 @@
 			)
 		)
 		(property "Description" ""
-			(at 302.26 157.48 0)
+			(at 302.26 158.75 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -13800,7 +13747,7 @@
 		(at 379.73 86.36 0)
 		(unit 1)
 		(exclude_from_sim yes)
-		(in_bom yes)
+		(in_bom no)
 		(on_board yes)
 		(dnp no)
 		(fields_autoplaced yes)
@@ -14069,7 +14016,7 @@
 		(mirror x)
 		(unit 1)
 		(exclude_from_sim no)
-		(in_bom yes)
+		(in_bom no)
 		(on_board yes)
 		(dnp no)
 		(uuid "f233bb22-c56e-48c0-a666-66393c874e4c")
@@ -14323,7 +14270,7 @@
 		(at 341.63 99.06 0)
 		(unit 1)
 		(exclude_from_sim yes)
-		(in_bom yes)
+		(in_bom no)
 		(on_board yes)
 		(dnp no)
 		(fields_autoplaced yes)
@@ -14391,7 +14338,7 @@
 		(at 341.63 96.52 0)
 		(unit 1)
 		(exclude_from_sim yes)
-		(in_bom yes)
+		(in_bom no)
 		(on_board yes)
 		(dnp no)
 		(fields_autoplaced yes)

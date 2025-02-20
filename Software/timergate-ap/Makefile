@@ -6,7 +6,7 @@ build:
 	idf.py build
 
 prepare:
-	. /home/elias/esp/esp-idf/export.sh
+	bash -c ". /home/elias/esp/esp-idf/export.sh"
 
 target:
 	idf.py set-target esp32s3

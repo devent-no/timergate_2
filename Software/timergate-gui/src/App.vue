@@ -57,6 +57,20 @@ export default {
           }),
         })
     },
+    async hSearch() {
+        await fetch("http://"+this.hostname+"/api/v1/time/hsearch", {
+          method: "POST",
+          headers: {
+            Accept: "application/json",
+            "Content-Type": "application/json;charset=utf-8",
+            "Access-Control-Allow-Origin": "*",
+          },
+          body: JSON.stringify({
+            channel: 0
+          }),
+        })
+    },
+
     onSocketOpen(evt) {
       this.socket_ready = true;
     },
@@ -114,6 +128,7 @@ export default {
       <h3>{{ time }}</h3>
     <button @click="syncTime()">Sync Time</button>
     <button @click="checkTime()">Check Time Diff</button>
+    <button @click="hSearch()">Highpoint search</button>
     <h1>Poles</h1>
     <div style="width: 100%; height: 250px">
       <Pole

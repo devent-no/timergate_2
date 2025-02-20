@@ -415,6 +415,57 @@ static esp_err_t time_sync_post_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+static esp_err_t hsearch_post_handler(httpd_req_t *req)
+{
+    int total_len = req->content_len;
+    int cur_len = 0;
+    char *buf = ((rest_server_context_t *)(req->user_ctx))->scratch;
+    int received = 0;
+    if (total_len >= SCRATCH_BUFSIZE)
+    {
+        /* Respond with 500 Internal Server Error */
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "content too long");
+        return ESP_FAIL;
+    }
+    while (cur_len < total_len)
+    {
+        received = httpd_req_recv(req, buf + cur_len, total_len);
+        if (received <= 0)
+        {
+            /* Respond with 500 Internal Server Error */
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to post control value");
+            return ESP_FAIL;
+        }
+        cur_len += received;
+    }
+    buf[total_len] = '\0';
+
+    cJSON *root = cJSON_Parse(buf);
+
+    int channel = cJSON_GetObjectItem(root, "channel")->valueint;
+
+    // Sync connected poles. We need two because the are freed elsewhere.
+    char *hsearch_command0 = malloc(30);
+    char *hsearch_command1 = malloc(30);
+    sprintf(hsearch_command0, "hsearch: %d\n", channel);
+    sprintf(hsearch_command1, "hsearch: %d\n", channel);
+    if (pole_ids[0])
+    {
+        xQueueSendToBack(xQueue[0], &hsearch_command0, portMAX_DELAY);
+    }
+    if (pole_ids[1])
+    {
+        xQueueSendToBack(xQueue[1], &hsearch_command1, portMAX_DELAY);
+    }
+
+    ESP_LOGI(REST_TAG, "Hsync command sent");
+
+    httpd_resp_sendstr(req, "{\"response\": \"OK\"}");
+    return ESP_OK;
+}
+
+
+
 static esp_err_t ws_handler(httpd_req_t *req)
 {
     if (req->method == HTTP_GET)
@@ -653,6 +704,13 @@ esp_err_t start_rest_server(const char *base_path)
         .handler = time_sync_post_handler,
         .user_ctx = rest_context};
     httpd_register_uri_handler(server, &time_sync_post_uri);
+
+    httpd_uri_t hsearch_post_uri = {
+        .uri = "/api/v1/time/hsearch",
+        .method = HTTP_POST,
+        .handler = hsearch_post_handler,
+        .user_ctx = rest_context};
+    httpd_register_uri_handler(server, &hsearch_post_uri);
 
     httpd_uri_t ws = {
         .uri = "/ws",
