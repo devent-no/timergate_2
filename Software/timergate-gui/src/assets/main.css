@@ -27,9 +27,21 @@ a,
   padding: 3px;
 }
 
+.frame {
+  width: 303px;
+  border: 1px solid #949494;
+  height: 22px;
+}
+
+.break {
+  border-right: 1px solid red;
+  padding-top: 1px;
+  height: 20px;
+}
+
 .bar {
-  margin-left: 5px;
-  height: 20px; 
+  margin-left: 1px;
+  height: 18px;
 }
 
 .centered {
@@ -39,4 +51,10 @@ a,
 
 ul {
   padding: 5px;
+}
+
+.advanced {
+  border: 1px solid #949494;
+  margin-top: 5px;
+  margin-bottom: 5px;
 }
