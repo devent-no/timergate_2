@@ -1,2 +1,60 @@
+# Build directories
 */build/*
+build/
+
+# ESP-IDF specific
+sdkconfig.old
+sdkconfig.backup
+
+# Dependencies
+node_modules/
+
+# Build output for Vue app
+dist/
+.DS_Store
+
+# Editor specific files
+.vscode/
+.idea/
+*.swp
+*.swo
+*.sublime-workspace
+*.sublime-project
+
+# FreeCAD backup files
 *.FCStd1
+
+# Python-relaterte filer (hvis relevant)
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+
+# System filer
+.DS_Store
+Thumbs.db
+
+# Loggfiler
+*.log
+npm-debug.log*
+
+# Midlertidige filer
+*.tmp
+*.temp
+
+# Binærfiler og filer som lages under bygging av ESP32
+*.bin
+*.elf
+*.map
+*.hex
+*.dis
+*.dfu
+*.o
+*.a
+*.d
+*.gch/
+*.pch
