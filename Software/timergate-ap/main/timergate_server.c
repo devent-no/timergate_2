@@ -17,6 +17,8 @@
 
 #include "freertos/ringbuf.h"
 
+
+
 #define PORT 3333
 #define KEEPALIVE_IDLE 1
 #define KEEPALIVE_INTERVAL 1
@@ -537,13 +539,18 @@ static void ws_send_message(char *msg)
     }
     if (xSemaphoreTake(ws_send_semaphore, portMAX_DELAY) == pdTRUE)
     {
-        httpd_ws_frame_t ws_pkt;
-        memset(&ws_pkt, 0, sizeof(httpd_ws_frame_t));
-        ws_pkt.payload = (uint8_t *)msg;
-        ws_pkt.len = strlen(msg);
-        ws_pkt.type = HTTPD_WS_TYPE_TEXT;
-
-        httpd_ws_send_frame_async(server, fd, &ws_pkt);
+        // Bruk enklere teknikk for å sende data via socket direkte
+        int len = strlen(msg);
+        int written = send(fd, msg, len, 0);
+        if (written < 0)
+        {
+            ESP_LOGE(REST_TAG, "Error occurred during sending: errno %d", errno);
+        }
+        else if (written < len)
+        {
+            ESP_LOGW(REST_TAG, "Message partially sent: %d of %d bytes", written, len);
+        }
+        
         xSemaphoreGive(ws_send_semaphore);
     }
     else
@@ -551,6 +558,7 @@ static void ws_send_message(char *msg)
         ESP_LOGI(REST_TAG, "Unable to take semaphore");
     }
 }
+
 
 static int get_pole_id()
 {
@@ -771,13 +779,14 @@ esp_err_t start_rest_server(const char *base_path)
         .user_ctx = rest_context};
     httpd_register_uri_handler(server, &pole_enabled_post_uri);
 
-    httpd_uri_t ws = {
-        .uri = "/ws",
-        .method = HTTP_GET,
-        .handler = ws_handler,
-        .user_ctx = NULL,
-        .is_websocket = true};
-    httpd_register_uri_handler(server, &ws);
+httpd_uri_t ws = {
+     .uri = "/ws",
+     .method = HTTP_GET,
+     .handler = ws_handler,
+     .user_ctx = NULL
+ };
+ httpd_register_uri_handler(server, &ws);
+
 
     /* URI handler for getting web server files */
     httpd_uri_t common_get_uri = {
