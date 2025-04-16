@@ -58,3 +58,4 @@ npm-debug.log*
 *.d
 *.gch/
 *.pchtimergate-backup-*
+timergate-backup-*
