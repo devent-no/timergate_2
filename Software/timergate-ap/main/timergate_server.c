@@ -522,42 +522,89 @@ static esp_err_t enabled_post_handler(httpd_req_t *req)
 
 static esp_err_t ws_handler(httpd_req_t *req)
 {
-    if (req->method == HTTP_GET)
-    {
+    if (req->method == HTTP_GET) {
         ESP_LOGI(REST_TAG, "Handshake done, the new connection was opened");
         handshake_done = 1;
         fd = httpd_req_to_sockfd(req);
+        
+        // Sende en enkel Welcome-melding for å teste WebSocket
+        char *welcome_msg = "{\"type\": \"welcome\", \"message\": \"WebSocket connected\"}";
+        httpd_ws_frame_t ws_pkt;
+        memset(&ws_pkt, 0, sizeof(httpd_ws_frame_t));
+        ws_pkt.payload = (uint8_t*)welcome_msg;
+        ws_pkt.len = strlen(welcome_msg);
+        ws_pkt.type = HTTPD_WS_TYPE_TEXT;
+        
+        httpd_ws_send_frame(req, &ws_pkt);
     }
+    
+    // Håndter også innkommende meldinger (om nødvendig)
+    if (req->method == HTTP_POST) {
+        httpd_ws_frame_t ws_pkt;
+        uint8_t *buf = NULL;
+        memset(&ws_pkt, 0, sizeof(httpd_ws_frame_t));
+        ws_pkt.type = HTTPD_WS_TYPE_TEXT;
+        
+        esp_err_t ret = httpd_ws_recv_frame(req, &ws_pkt, 0);
+        
+        if (ret != ESP_OK) {
+            ESP_LOGE(REST_TAG, "httpd_ws_recv_frame failed with %d", ret);
+            return ret;
+        }
+        
+        if (ws_pkt.len) {
+            buf = calloc(1, ws_pkt.len + 1);
+            if (buf == NULL) {
+                ESP_LOGE(REST_TAG, "Failed to calloc memory for buf");
+                return ESP_ERR_NO_MEM;
+            }
+            ws_pkt.payload = buf;
+            ret = httpd_ws_recv_frame(req, &ws_pkt, ws_pkt.len);
+            if (ret != ESP_OK) {
+                ESP_LOGE(REST_TAG, "httpd_ws_recv_frame failed with %d", ret);
+                free(buf);
+                return ret;
+            }
+            
+            // Her kan du behandle mottatte meldinger om nødvendig
+            ESP_LOGI(REST_TAG, "Received packet with message: %s", ws_pkt.payload);
+        }
+        free(buf);
+    }
+    
     return ESP_OK;
 }
 
+
+
+
 static void ws_send_message(char *msg)
 {
-    if (!handshake_done)
-    {
+    if (!handshake_done) {
         return;
     }
-    if (xSemaphoreTake(ws_send_semaphore, portMAX_DELAY) == pdTRUE)
-    {
-        // Bruk enklere teknikk for å sende data via socket direkte
-        int len = strlen(msg);
-        int written = send(fd, msg, len, 0);
-        if (written < 0)
-        {
-            ESP_LOGE(REST_TAG, "Error occurred during sending: errno %d", errno);
-        }
-        else if (written < len)
-        {
-            ESP_LOGW(REST_TAG, "Message partially sent: %d of %d bytes", written, len);
+    
+    httpd_handle_t server_handle = server; // Du må ha en global server-handle
+    
+    if (xSemaphoreTake(ws_send_semaphore, portMAX_DELAY) == pdTRUE) {
+        httpd_ws_frame_t ws_pkt;
+        memset(&ws_pkt, 0, sizeof(httpd_ws_frame_t));
+        ws_pkt.payload = (uint8_t*)msg;
+        ws_pkt.len = strlen(msg);
+        ws_pkt.type = HTTPD_WS_TYPE_TEXT;
+        
+        esp_err_t ret = httpd_ws_send_frame_async(server_handle, fd, &ws_pkt);
+        if (ret != ESP_OK) {
+            ESP_LOGE(REST_TAG, "httpd_ws_send_frame_async failed with %d", ret);
         }
         
         xSemaphoreGive(ws_send_semaphore);
-    }
-    else
-    {
+    } else {
         ESP_LOGI(REST_TAG, "Unable to take semaphore");
     }
 }
+
+
 
 
 static int get_pole_id()
@@ -780,12 +827,12 @@ esp_err_t start_rest_server(const char *base_path)
     httpd_register_uri_handler(server, &pole_enabled_post_uri);
 
 httpd_uri_t ws = {
-     .uri = "/ws",
-     .method = HTTP_GET,
-     .handler = ws_handler,
-     .user_ctx = NULL
- };
- httpd_register_uri_handler(server, &ws);
+    .uri = "/ws",
+    .method = HTTP_GET,
+    .handler = ws_handler,
+    .user_ctx = NULL
+};
+httpd_register_uri_handler(server, &ws);
 
 
     /* URI handler for getting web server files */
