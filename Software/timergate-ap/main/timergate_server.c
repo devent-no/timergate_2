@@ -24,6 +24,9 @@ static const char *TAG = "timergate-ap";
 
 esp_err_t init_fs(void)
 {
+    //Additional logging for debugging
+    ESP_LOGI(TAG, "Mounting SPIFFS with base_path=%s, partition_label=%s", conf.base_path, conf.partition_label);
+
     esp_vfs_spiffs_conf_t conf = {
         .base_path = "/www",
         .partition_label = "www",
@@ -187,6 +190,9 @@ esp_err_t spiffs_get_handler(httpd_req_t *req)
     // Kombiner base-path og URI-path på en sikker måte
     strcpy(filepath, base_path);
     strcpy(filepath + base_len, uri_path);
+
+    // Debug print
+    ESP_LOGI(TAG, "Full filepath: %s", filepath);
     
     if (stat(filepath, &file_stat) == -1) {
         ESP_LOGE(TAG, "Failed to stat file : %s", filepath);
