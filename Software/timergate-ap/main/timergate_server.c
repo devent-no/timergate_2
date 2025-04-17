@@ -1,6 +1,8 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <dirent.h>
+#include <errno.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
@@ -20,13 +22,29 @@
 
 static const char *TAG = "timergate-ap";
 
+// Legg til denne funksjonen for å liste filer i SPIFFS
+void list_spiffs_files(const char *path) {
+    DIR *dir = opendir(path);
+    if (!dir) {
+        ESP_LOGE(TAG, "Failed to open directory %s (errno: %d)", path, errno);
+        return;
+    }
+    
+    struct dirent *entry;
+    while ((entry = readdir(dir)) != NULL) {
+        if (entry->d_type == DT_REG) {
+            ESP_LOGI(TAG, "  File: %s/%s", path, entry->d_name);
+        } else if (entry->d_type == DT_DIR) {
+            char next_path[FILE_PATH_MAX];
+            snprintf(next_path, sizeof(next_path), "%s/%s", path, entry->d_name);
+            ESP_LOGI(TAG, "  Dir: %s", next_path);
+            list_spiffs_files(next_path); // Sjekk undermapper rekursivt
+        }
+    }
+    closedir(dir);
+}
 
-
-esp_err_t init_fs(void)
-{
-    //Additional logging for debugging
-    ESP_LOGI(TAG, "Mounting SPIFFS with base_path=%s, partition_label=%s", conf.base_path, conf.partition_label);
-
+esp_err_t init_fs(void) {
     esp_vfs_spiffs_conf_t conf = {
         .base_path = "/www",
         .partition_label = "www",
@@ -34,12 +52,16 @@ esp_err_t init_fs(void)
         .format_if_mount_failed = false
     };
     
+    // Loggmelding flyttet etter variabeldefinisjonen
+    ESP_LOGI(TAG, "Mounting SPIFFS with base_path=%s, partition_label=%s", 
+             conf.base_path, conf.partition_label);
+    
     esp_err_t ret = esp_vfs_spiffs_register(&conf);
     if (ret != ESP_OK) {
         if (ret == ESP_FAIL) {
-            ESP_LOGE(TAG, "Failed to mount or format filesystem");
+            ESP_LOGE(TAG, "Failed to mount or format filesystem (ESP_FAIL)");
         } else if (ret == ESP_ERR_NOT_FOUND) {
-            ESP_LOGE(TAG, "Failed to find SPIFFS partition");
+            ESP_LOGE(TAG, "Failed to find SPIFFS partition (ESP_ERR_NOT_FOUND)");
         } else {
             ESP_LOGE(TAG, "Failed to initialize SPIFFS (%s)", esp_err_to_name(ret));
         }
@@ -53,10 +75,110 @@ esp_err_t init_fs(void)
     } else {
         ESP_LOGI(TAG, "Partition size: total: %d, used: %d", total, used);
     }
+    
+    // List alle filer i SPIFFS
+    ESP_LOGI(TAG, "Listing all files in SPIFFS:");
+    list_spiffs_files("/www");
+    
     return ESP_OK;
 }
 
 
+
+
+
+esp_err_t spiffs_get_handler(httpd_req_t *req) {
+    char filepath[FILE_PATH_MAX];
+    FILE *fd = NULL;
+    struct stat file_stat;
+    
+    const char *base_path = (const char*) req->user_ctx;
+    const char *uri_path = req->uri;
+
+    ESP_LOGI(TAG, "Requested URI: %s", uri_path);
+    
+    // Hvis URI-en er /, bruk /index.html
+    if (strcmp(uri_path, "/") == 0) {
+        uri_path = "/index.html";
+        ESP_LOGI(TAG, "Root URI requested, using %s", uri_path);
+    }
+    
+    // Sjekk og sikre at det er nok plass for filbanen
+    int required_len = strlen(base_path) + strlen(uri_path) + 1; // +1 for null-terminering
+    if (required_len > FILE_PATH_MAX) {
+        ESP_LOGE(TAG, "File path too long: required %d bytes, max is %d", required_len, FILE_PATH_MAX);
+        httpd_resp_send_404(req);
+        return ESP_FAIL;
+    }
+    
+    // Sikker konstruksjon av filbanen
+    strcpy(filepath, base_path);
+    strcat(filepath, uri_path);
+    ESP_LOGI(TAG, "Full filepath: %s", filepath);
+
+    if (stat(filepath, &file_stat) == -1) {
+        ESP_LOGE(TAG, "Failed to stat file: %s (errno: %d)", filepath, errno);
+        httpd_resp_send_404(req);
+        return ESP_FAIL;
+    }
+
+    fd = fopen(filepath, "r");
+    if (!fd) {
+        ESP_LOGE(TAG, "Failed to read file: %s (errno: %d)", filepath, errno);
+        httpd_resp_send_404(req);
+        return ESP_FAIL;
+    }
+
+    // Sett content type basert på filtype
+    const char *dot = strrchr(filepath, '.');
+    if (dot && !strcmp(dot, ".html")) {
+        httpd_resp_set_type(req, "text/html");
+    } else if (dot && !strcmp(dot, ".js")) {
+        httpd_resp_set_type(req, "application/javascript");
+    } else if (dot && !strcmp(dot, ".css")) {
+        httpd_resp_set_type(req, "text/css");
+    } else if (dot && !strcmp(dot, ".png")) {
+        httpd_resp_set_type(req, "image/png");
+    } else if (dot && !strcmp(dot, ".ico")) {
+        httpd_resp_set_type(req, "image/x-icon");
+    } else if (dot && !strcmp(dot, ".svg")) {
+        httpd_resp_set_type(req, "image/svg+xml");
+    } else {
+        // Generisk content type for ukjente filtyper
+        httpd_resp_set_type(req, "application/octet-stream");
+    }
+
+    // Send fil-innholdet
+    char *buffer = malloc(SPIFFS_READ_SIZE);
+    if (!buffer) {
+        fclose(fd);
+        ESP_LOGE(TAG, "Failed to allocate memory for file reading");
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+    
+    size_t read_bytes;
+    ESP_LOGI(TAG, "Beginning file send: %s", filepath);
+    do {
+        read_bytes = fread(buffer, 1, SPIFFS_READ_SIZE, fd);
+        if (read_bytes > 0) {
+            if (httpd_resp_send_chunk(req, buffer, read_bytes) != ESP_OK) {
+                fclose(fd);
+                free(buffer);
+                ESP_LOGE(TAG, "File sending failed!");
+                httpd_resp_sendstr_chunk(req, NULL);
+                httpd_resp_send_500(req);
+                return ESP_FAIL;
+            }
+        }
+    } while (read_bytes > 0);
+    
+    free(buffer);
+    fclose(fd);
+    ESP_LOGI(TAG, "File sent successfully: %s", filepath);
+    httpd_resp_send_chunk(req, NULL, 0);
+    return ESP_OK;
+}
 
 
 
@@ -154,110 +276,6 @@ esp_err_t ws_handler(httpd_req_t *req) {
     return ESP_OK;
 }
 
-
-
-
-
-
-
-esp_err_t spiffs_get_handler(httpd_req_t *req)
-{
-    char filepath[FILE_PATH_MAX];
-    FILE *fd = NULL;
-    struct stat file_stat;
-    
-    const char *base_path = (const char*) req->user_ctx;
-    const char *uri_path = req->uri;
-
-    ESP_LOGI(TAG, "Requested URI: %s", uri_path);
-    
-    // Hvis URI-en er /, bruk /index.html
-    if (strcmp(uri_path, "/") == 0) {
-        uri_path = "/index.html";
-        ESP_LOGI(TAG, "Root URI requested, using %s", uri_path);
-    }
-    
-    // Sikker konstruksjon av filbane
-    int base_len = strlen(base_path);
-    int uri_len = strlen(uri_path);
-    
-    if (base_len + uri_len + 1 > FILE_PATH_MAX) {
-        ESP_LOGE(TAG, "File path too long: %s%s", base_path, uri_path);
-        httpd_resp_send_404(req);
-        return ESP_FAIL;
-    }
-    
-    // Kombiner base-path og URI-path på en sikker måte
-    strcpy(filepath, base_path);
-    strcpy(filepath + base_len, uri_path);
-
-    // Debug print
-    ESP_LOGI(TAG, "Full filepath: %s", filepath);
-    
-    if (stat(filepath, &file_stat) == -1) {
-        ESP_LOGE(TAG, "Failed to stat file : %s", filepath);
-        httpd_resp_send_404(req);
-        return ESP_FAIL;
-    }
-
-    fd = fopen(filepath, "r");
-    if (!fd) {
-        ESP_LOGE(TAG, "Failed to read file : %s", filepath);
-        httpd_resp_send_404(req);
-        return ESP_FAIL;
-    }
-
-    // Sett content type basert på filtype
-    const char *dot = strrchr(filepath, '.');
-    if (dot && !strcmp(dot, ".html")) {
-        httpd_resp_set_type(req, "text/html");
-    } else if (dot && !strcmp(dot, ".js")) {
-        httpd_resp_set_type(req, "application/javascript");
-    } else if (dot && !strcmp(dot, ".css")) {
-        httpd_resp_set_type(req, "text/css");
-    } else if (dot && !strcmp(dot, ".png")) {
-        httpd_resp_set_type(req, "image/png");
-    } else if (dot && !strcmp(dot, ".ico")) {
-        httpd_resp_set_type(req, "image/x-icon");
-    } else if (dot && !strcmp(dot, ".svg")) {
-        httpd_resp_set_type(req, "image/svg+xml");
-    }
-
-    // Send fil-innholdet
-    char *buffer = malloc(SPIFFS_READ_SIZE);
-    if (!buffer) {
-        fclose(fd);
-        ESP_LOGE(TAG, "Failed to allocate memory for file reading");
-        httpd_resp_send_500(req);
-        return ESP_FAIL;
-    }
-    
-    size_t read_bytes;
-    do {
-        read_bytes = fread(buffer, 1, SPIFFS_READ_SIZE, fd);
-        if (read_bytes > 0) {
-            if (httpd_resp_send_chunk(req, buffer, read_bytes) != ESP_OK) {
-                fclose(fd);
-                free(buffer);
-                ESP_LOGE(TAG, "File sending failed!");
-                httpd_resp_sendstr_chunk(req, NULL);
-                httpd_resp_send_500(req);
-                return ESP_FAIL;
-            }
-        }
-    } while (read_bytes > 0);
-    
-    free(buffer);
-    fclose(fd);
-    httpd_resp_send_chunk(req, NULL, 0);
-    return ESP_OK;
-}
-
-
-
-
-
-
 httpd_handle_t start_webserver(void) {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     httpd_handle_t server_handle = NULL;
@@ -296,11 +314,6 @@ httpd_handle_t start_webserver(void) {
 
     return server_handle;
 }
-
-
-
-
-
 
 void app_main(void) {
     esp_err_t ret = nvs_flash_init();
@@ -341,8 +354,7 @@ void app_main(void) {
     ws_mutex = xSemaphoreCreateMutex();
     memset(ws_clients, 0, sizeof(ws_clients));
 
-
- // Initialiser filsystemet
+    // Initialiser filsystemet
     ESP_ERROR_CHECK(init_fs());
 
     server = start_webserver();
