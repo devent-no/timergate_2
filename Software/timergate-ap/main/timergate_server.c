@@ -86,7 +86,6 @@ esp_err_t init_fs(void) {
 
 
 
-
 esp_err_t spiffs_get_handler(httpd_req_t *req) {
     char filepath[FILE_PATH_MAX];
     FILE *fd = NULL;
@@ -103,33 +102,75 @@ esp_err_t spiffs_get_handler(httpd_req_t *req) {
         ESP_LOGI(TAG, "Root URI requested, using %s", uri_path);
     }
     
-    // Sjekk og sikre at det er nok plass for filbanen
-    int required_len = strlen(base_path) + strlen(uri_path) + 1; // +1 for null-terminering
-    if (required_len > FILE_PATH_MAX) {
-        ESP_LOGE(TAG, "File path too long: required %d bytes, max is %d", required_len, FILE_PATH_MAX);
-        httpd_resp_send_404(req);
+    // Konstruer filsti
+    if (strlen(base_path) + strlen(uri_path) + 1 > FILE_PATH_MAX) {
+        ESP_LOGE(TAG, "File path too long");
+        httpd_resp_send_500(req);
         return ESP_FAIL;
     }
-    
-    // Sikker konstruksjon av filbanen
-    strcpy(filepath, base_path);
-    strcat(filepath, uri_path);
+    //snprintf(filepath, FILE_PATH_MAX, "%s%s", base_path, uri_path);
+    size_t total_len = strlen(base_path) + strlen(uri_path) + 1;
+    if (total_len > FILE_PATH_MAX) {
+        ESP_LOGE(TAG, "File path too long: %d > %d", (int)total_len, FILE_PATH_MAX);
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+    strlcpy(filepath, base_path, FILE_PATH_MAX);
+    strlcat(filepath, uri_path, FILE_PATH_MAX);
+
+
+
     ESP_LOGI(TAG, "Full filepath: %s", filepath);
 
+    // Sjekk om filen eksisterer
     if (stat(filepath, &file_stat) == -1) {
         ESP_LOGE(TAG, "Failed to stat file: %s (errno: %d)", filepath, errno);
-        httpd_resp_send_404(req);
-        return ESP_FAIL;
+        
+        // Prøv å korrigere banen for assets
+        if (strstr(uri_path, "/assets/") == uri_path) {
+            // URI begynner med /assets/, men kanskje det trengs en spesiell håndtering
+            ESP_LOGI(TAG, "Trying to fix assets path");
+            // Logging for debugging
+            char test_path[FILE_PATH_MAX];
+            if (strlen(base_path) + strlen(uri_path) + 1 > FILE_PATH_MAX) {
+                ESP_LOGE(TAG, "Test path too long");
+                httpd_resp_send_500(req);
+                return ESP_FAIL;
+            }
+            size_t test_len = strlen(base_path) + strlen(uri_path) + 1;
+            if (test_len > FILE_PATH_MAX) {
+                ESP_LOGE(TAG, "Test path too long: %d > %d", (int)test_len, FILE_PATH_MAX);
+                httpd_resp_send_500(req);
+                return ESP_FAIL;
+            }
+            strlcpy(test_path, base_path, FILE_PATH_MAX);
+            strlcat(test_path, uri_path, FILE_PATH_MAX);
+
+            ESP_LOGI(TAG, "Testing alternative path: %s", test_path);
+            
+            if (stat(test_path, &file_stat) != -1) {
+                // Denne banen fungerer!
+                strcpy(filepath, test_path);
+                ESP_LOGI(TAG, "Fixed path found: %s", filepath);
+            } else {
+                ESP_LOGE(TAG, "Alternative path also failed (errno: %d)", errno);
+                httpd_resp_send_404(req);
+                return ESP_FAIL;
+            }
+        } else {
+            httpd_resp_send_404(req);
+            return ESP_FAIL;
+        }
     }
 
     fd = fopen(filepath, "r");
     if (!fd) {
-        ESP_LOGE(TAG, "Failed to read file: %s (errno: %d)", filepath, errno);
+        ESP_LOGE(TAG, "Failed to open file: %s (errno: %d)", filepath, errno);
         httpd_resp_send_404(req);
         return ESP_FAIL;
     }
 
-    // Sett content type basert på filtype
+    // Resten av koden forblir uendret...
     const char *dot = strrchr(filepath, '.');
     if (dot && !strcmp(dot, ".html")) {
         httpd_resp_set_type(req, "text/html");
@@ -144,7 +185,6 @@ esp_err_t spiffs_get_handler(httpd_req_t *req) {
     } else if (dot && !strcmp(dot, ".svg")) {
         httpd_resp_set_type(req, "image/svg+xml");
     } else {
-        // Generisk content type for ukjente filtyper
         httpd_resp_set_type(req, "application/octet-stream");
     }
 
