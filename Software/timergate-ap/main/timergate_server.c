@@ -15,8 +15,52 @@
 #include "esp_timer.h"
 
 #define MAX_WS_CLIENTS 5
+#define FILE_PATH_MAX 512
+#define SPIFFS_READ_SIZE 512
 
 static const char *TAG = "timergate-ap";
+
+
+
+esp_err_t init_fs(void)
+{
+    esp_vfs_spiffs_conf_t conf = {
+        .base_path = "/www",
+        .partition_label = "www",
+        .max_files = 5,
+        .format_if_mount_failed = false
+    };
+    
+    esp_err_t ret = esp_vfs_spiffs_register(&conf);
+    if (ret != ESP_OK) {
+        if (ret == ESP_FAIL) {
+            ESP_LOGE(TAG, "Failed to mount or format filesystem");
+        } else if (ret == ESP_ERR_NOT_FOUND) {
+            ESP_LOGE(TAG, "Failed to find SPIFFS partition");
+        } else {
+            ESP_LOGE(TAG, "Failed to initialize SPIFFS (%s)", esp_err_to_name(ret));
+        }
+        return ESP_FAIL;
+    }
+    
+    size_t total = 0, used = 0;
+    ret = esp_spiffs_info(conf.partition_label, &total, &used);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to get SPIFFS partition information (%s)", esp_err_to_name(ret));
+    } else {
+        ESP_LOGI(TAG, "Partition size: total: %d, used: %d", total, used);
+    }
+    return ESP_OK;
+}
+
+
+
+
+
+
+
+
+
 
 static httpd_handle_t server = NULL;
 static int ws_clients[MAX_WS_CLIENTS];
@@ -107,11 +151,113 @@ esp_err_t ws_handler(httpd_req_t *req) {
     return ESP_OK;
 }
 
+
+
+
+
+
+
+esp_err_t spiffs_get_handler(httpd_req_t *req)
+{
+    char filepath[FILE_PATH_MAX];
+    FILE *fd = NULL;
+    struct stat file_stat;
+    
+    const char *base_path = (const char*) req->user_ctx;
+    const char *uri_path = req->uri;
+
+    ESP_LOGI(TAG, "Requested URI: %s", uri_path);
+    
+    // Hvis URI-en er /, bruk /index.html
+    if (strcmp(uri_path, "/") == 0) {
+        uri_path = "/index.html";
+        ESP_LOGI(TAG, "Root URI requested, using %s", uri_path);
+    }
+    
+    // Sikker konstruksjon av filbane
+    int base_len = strlen(base_path);
+    int uri_len = strlen(uri_path);
+    
+    if (base_len + uri_len + 1 > FILE_PATH_MAX) {
+        ESP_LOGE(TAG, "File path too long: %s%s", base_path, uri_path);
+        httpd_resp_send_404(req);
+        return ESP_FAIL;
+    }
+    
+    // Kombiner base-path og URI-path på en sikker måte
+    strcpy(filepath, base_path);
+    strcpy(filepath + base_len, uri_path);
+    
+    if (stat(filepath, &file_stat) == -1) {
+        ESP_LOGE(TAG, "Failed to stat file : %s", filepath);
+        httpd_resp_send_404(req);
+        return ESP_FAIL;
+    }
+
+    fd = fopen(filepath, "r");
+    if (!fd) {
+        ESP_LOGE(TAG, "Failed to read file : %s", filepath);
+        httpd_resp_send_404(req);
+        return ESP_FAIL;
+    }
+
+    // Sett content type basert på filtype
+    const char *dot = strrchr(filepath, '.');
+    if (dot && !strcmp(dot, ".html")) {
+        httpd_resp_set_type(req, "text/html");
+    } else if (dot && !strcmp(dot, ".js")) {
+        httpd_resp_set_type(req, "application/javascript");
+    } else if (dot && !strcmp(dot, ".css")) {
+        httpd_resp_set_type(req, "text/css");
+    } else if (dot && !strcmp(dot, ".png")) {
+        httpd_resp_set_type(req, "image/png");
+    } else if (dot && !strcmp(dot, ".ico")) {
+        httpd_resp_set_type(req, "image/x-icon");
+    } else if (dot && !strcmp(dot, ".svg")) {
+        httpd_resp_set_type(req, "image/svg+xml");
+    }
+
+    // Send fil-innholdet
+    char *buffer = malloc(SPIFFS_READ_SIZE);
+    if (!buffer) {
+        fclose(fd);
+        ESP_LOGE(TAG, "Failed to allocate memory for file reading");
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+    
+    size_t read_bytes;
+    do {
+        read_bytes = fread(buffer, 1, SPIFFS_READ_SIZE, fd);
+        if (read_bytes > 0) {
+            if (httpd_resp_send_chunk(req, buffer, read_bytes) != ESP_OK) {
+                fclose(fd);
+                free(buffer);
+                ESP_LOGE(TAG, "File sending failed!");
+                httpd_resp_sendstr_chunk(req, NULL);
+                httpd_resp_send_500(req);
+                return ESP_FAIL;
+            }
+        }
+    } while (read_bytes > 0);
+    
+    free(buffer);
+    fclose(fd);
+    httpd_resp_send_chunk(req, NULL, 0);
+    return ESP_OK;
+}
+
+
+
+
+
+
 httpd_handle_t start_webserver(void) {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     httpd_handle_t server_handle = NULL;
 
     if (httpd_start(&server_handle, &config) == ESP_OK) {
+        // WebSocket handler
         httpd_uri_t ws = {
             .uri = "/ws",
             .method = HTTP_GET,
@@ -120,10 +266,35 @@ httpd_handle_t start_webserver(void) {
             .is_websocket = true
         };
         httpd_register_uri_handler(server_handle, &ws);
+        
+        // Root URI handler
+        httpd_uri_t root = {
+            .uri = "/",
+            .method = HTTP_GET,
+            .handler = spiffs_get_handler,
+            .user_ctx = "/www"
+        };
+        httpd_register_uri_handler(server_handle, &root);
+        
+        // All other URIs
+        httpd_uri_t common = {
+            .uri = "/*",
+            .method = HTTP_GET,
+            .handler = spiffs_get_handler,
+            .user_ctx = "/www"
+        };
+        httpd_register_uri_handler(server_handle, &common);
+
+        ESP_LOGI(TAG, "Web server started");
     }
 
     return server_handle;
 }
+
+
+
+
+
 
 void app_main(void) {
     esp_err_t ret = nvs_flash_init();
@@ -163,6 +334,10 @@ void app_main(void) {
 
     ws_mutex = xSemaphoreCreateMutex();
     memset(ws_clients, 0, sizeof(ws_clients));
+
+
+ // Initialiser filsystemet
+    ESP_ERROR_CHECK(init_fs());
 
     server = start_webserver();
     xTaskCreate(ws_broadcast_task, "ws_broadcast_task", 4096, NULL, 5, NULL);

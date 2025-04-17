@@ -242,5 +242,5 @@ void app_main(void)
         mg_mgr_poll(&mgr, 1000); // Infinite event loop
     }*/
 
-    //ESP_ERROR_CHECK(start_rest_server(CONFIG_EXAMPLE_WEB_MOUNT_POINT));
+    ESP_ERROR_CHECK(start_rest_server(CONFIG_EXAMPLE_WEB_MOUNT_POINT));
 }
