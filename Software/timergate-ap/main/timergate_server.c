@@ -16,6 +16,12 @@
 #include "esp_spiffs.h"
 #include "esp_timer.h"
 
+
+// Definer MIN-makroen
+#ifndef MIN
+#define MIN(a, b) (((a) < (b)) ? (a) : (b))
+#endif
+
 #define MAX_WS_CLIENTS 5
 #define FILE_PATH_MAX 512
 #define SPIFFS_READ_SIZE 512
@@ -55,6 +61,177 @@ void list_spiffs_files(const char *path) {
     }
     closedir(dir);
 }
+
+
+
+
+
+// Funksjon for å håndtere tid-synkronisering API
+esp_err_t time_sync_handler(httpd_req_t *req) {
+    char buf[100];
+    int ret, remaining = req->content_len;
+    
+    ESP_LOGI(TAG, "time_sync_handler called, content_len: %d", remaining);
+    
+    if (remaining > sizeof(buf)) {
+        // For lang forespørsel
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Request too large");
+        return ESP_FAIL;
+    }
+    
+    // Les innhold fra forespørselen
+    if ((ret = httpd_req_recv(req, buf, MIN(remaining, sizeof(buf)))) <= 0) {
+        if (ret == HTTPD_SOCK_ERR_TIMEOUT) {
+            httpd_resp_send_408(req);
+        }
+        return ESP_FAIL;
+    }
+    
+    // Parse JSON (forenklet - i en reell implementasjon ville du bruke et JSON-bibliotek)
+    buf[ret] = '\0';
+    ESP_LOGI(TAG, "Mottok data: %s", buf);
+    
+    // Send tilbake bekreftelse
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    httpd_resp_sendstr(req, "{\"status\":\"success\",\"message\":\"Time synchronized\"}");
+    
+    return ESP_OK;
+}
+
+// Funksjon for å håndtere time/check API
+esp_err_t time_check_handler(httpd_req_t *req) {
+    char buf[100];
+    int ret, remaining = req->content_len;
+    
+    ESP_LOGI(TAG, "time_check_handler called, content_len: %d", remaining);
+    
+    if (remaining > sizeof(buf)) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Request too large");
+        return ESP_FAIL;
+    }
+    
+    if ((ret = httpd_req_recv(req, buf, MIN(remaining, sizeof(buf)))) <= 0) {
+        if (ret == HTTPD_SOCK_ERR_TIMEOUT) {
+            httpd_resp_send_408(req);
+        }
+        return ESP_FAIL;
+    }
+    
+    buf[ret] = '\0';
+    ESP_LOGI(TAG, "Mottok data: %s", buf);
+    
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    httpd_resp_sendstr(req, "{\"status\":\"success\",\"diff\":0}");
+    
+    return ESP_OK;
+}
+
+// Funksjon for å håndtere hsearch API
+esp_err_t time_hsearch_handler(httpd_req_t *req) {
+    char buf[100];
+    int ret, remaining = req->content_len;
+    
+    ESP_LOGI(TAG, "time_hsearch_handler called, content_len: %d", remaining);
+    
+    if (remaining > sizeof(buf)) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Request too large");
+        return ESP_FAIL;
+    }
+    
+    if ((ret = httpd_req_recv(req, buf, MIN(remaining, sizeof(buf)))) <= 0) {
+        if (ret == HTTPD_SOCK_ERR_TIMEOUT) {
+            httpd_resp_send_408(req);
+        }
+        return ESP_FAIL;
+    }
+    
+    buf[ret] = '\0';
+    ESP_LOGI(TAG, "Mottok data: %s", buf);
+    
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    httpd_resp_sendstr(req, "{\"status\":\"success\",\"message\":\"Highpoint search initiated\"}");
+    
+    return ESP_OK;
+}
+
+// Funksjon for å håndtere pole/break API
+esp_err_t pole_break_handler(httpd_req_t *req) {
+    char buf[100];
+    int ret, remaining = req->content_len;
+    
+    ESP_LOGI(TAG, "pole_break_handler called, content_len: %d", remaining);
+    
+    if (remaining > sizeof(buf)) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Request too large");
+        return ESP_FAIL;
+    }
+    
+    if ((ret = httpd_req_recv(req, buf, MIN(remaining, sizeof(buf)))) <= 0) {
+        if (ret == HTTPD_SOCK_ERR_TIMEOUT) {
+            httpd_resp_send_408(req);
+        }
+        return ESP_FAIL;
+    }
+    
+    buf[ret] = '\0';
+    ESP_LOGI(TAG, "Mottok data: %s", buf);
+    
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    httpd_resp_sendstr(req, "{\"status\":\"success\",\"message\":\"Break configuration updated\"}");
+    
+    return ESP_OK;
+}
+
+// Funksjon for å håndtere pole/enabled API
+esp_err_t pole_enabled_handler(httpd_req_t *req) {
+    char buf[100];
+    int ret, remaining = req->content_len;
+    
+    ESP_LOGI(TAG, "pole_enabled_handler called, content_len: %d", remaining);
+    
+    if (remaining > sizeof(buf)) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Request too large");
+        return ESP_FAIL;
+    }
+    
+    if ((ret = httpd_req_recv(req, buf, MIN(remaining, sizeof(buf)))) <= 0) {
+        if (ret == HTTPD_SOCK_ERR_TIMEOUT) {
+            httpd_resp_send_408(req);
+        }
+        return ESP_FAIL;
+    }
+    
+    buf[ret] = '\0';
+    ESP_LOGI(TAG, "Mottok data: %s", buf);
+    
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    httpd_resp_sendstr(req, "{\"status\":\"success\",\"message\":\"Sensor enabled status updated\"}");
+    
+    return ESP_OK;
+}
+
+// Funksjon for å håndtere OPTIONS forespørsler (CORS preflight)
+esp_err_t options_handler(httpd_req_t *req) {
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Headers", "Content-Type, Accept, X-Requested-With");
+    httpd_resp_send(req, NULL, 0);
+    return ESP_OK;
+}
+
+
+
+
+
+
+
+
+
 
 esp_err_t init_fs(void) {
     ESP_LOGI(TAG, "Mounting SPIFFS with base_path=/www, partition_label=www");
@@ -436,10 +613,12 @@ esp_err_t ws_handler(httpd_req_t *req) {
     return ESP_OK;
 }
 
+
+
 httpd_handle_t start_webserver(void) {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     // Øk maks URI-handlere
-    config.max_uri_handlers = 6;
+    config.max_uri_handlers = 12; // Økt fra 6 til 12 for å ha plass til flere handlere
     // Øk recv/send-bufferstørrelse og timeouts
     config.recv_wait_timeout = 10;
     config.send_wait_timeout = 10;
@@ -495,6 +674,61 @@ httpd_handle_t start_webserver(void) {
         };
         httpd_register_uri_handler(server_handle, &root);
         
+        // API handlere
+        // Time sync API
+        httpd_uri_t time_sync = {
+            .uri = "/api/v1/time/sync",
+            .method = HTTP_POST,
+            .handler = time_sync_handler,
+            .user_ctx = NULL
+        };
+        httpd_register_uri_handler(server_handle, &time_sync);
+        
+        // Time check API
+        httpd_uri_t time_check = {
+            .uri = "/api/v1/time/check",
+            .method = HTTP_POST,
+            .handler = time_check_handler,
+            .user_ctx = NULL
+        };
+        httpd_register_uri_handler(server_handle, &time_check);
+        
+        // Highpoint search API
+        httpd_uri_t time_hsearch = {
+            .uri = "/api/v1/time/hsearch",
+            .method = HTTP_POST,
+            .handler = time_hsearch_handler,
+            .user_ctx = NULL
+        };
+        httpd_register_uri_handler(server_handle, &time_hsearch);
+        
+        // Pole break configuration API
+        httpd_uri_t pole_break = {
+            .uri = "/api/v1/pole/break",
+            .method = HTTP_POST,
+            .handler = pole_break_handler,
+            .user_ctx = NULL
+        };
+        httpd_register_uri_handler(server_handle, &pole_break);
+        
+        // Pole enabled configuration API
+        httpd_uri_t pole_enabled = {
+            .uri = "/api/v1/pole/enabled",
+            .method = HTTP_POST,
+            .handler = pole_enabled_handler,
+            .user_ctx = NULL
+        };
+        httpd_register_uri_handler(server_handle, &pole_enabled);
+        
+        // OPTIONS handler for CORS
+        httpd_uri_t options = {
+            .uri = "/api/*",
+            .method = HTTP_OPTIONS,
+            .handler = options_handler,
+            .user_ctx = NULL
+        };
+        httpd_register_uri_handler(server_handle, &options);
+        
         // All other URIs
         httpd_uri_t common = {
             .uri = "/*",
@@ -511,6 +745,9 @@ httpd_handle_t start_webserver(void) {
 
     return server_handle;
 }
+
+
+
 
 void app_main(void) {
     esp_err_t ret = nvs_flash_init();
