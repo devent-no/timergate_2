@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <dirent.h>
 #include <errno.h>
+#include <inttypes.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
@@ -15,7 +16,7 @@
 #include "lwip/sockets.h"
 #include "esp_spiffs.h"
 #include "esp_timer.h"
-
+#include "esp_now.h"
 
 // Definer MIN-makroen
 #ifndef MIN
@@ -25,6 +26,27 @@
 #define MAX_WS_CLIENTS 5
 #define FILE_PATH_MAX 512
 #define SPIFFS_READ_SIZE 512
+
+// Legg til disse nye definisjonene
+#define MAX_POLES 5
+
+// Datastruktur for å lagre informasjon fra målestolpene
+typedef struct {
+    uint8_t mac[ESP_NOW_ETH_ALEN];  // MAC-adresse til målestolpen
+    uint8_t k;                      // Type melding (0=ADC verdier, 1=Sensor breaks, 2=Settings)
+    uint32_t t;                     // Timestamp (sekunder)
+    uint32_t u;                     // Mikrosekunder
+    int32_t v[7];                   // ADC verdier
+    int32_t b[7];                   // Broken status
+    int32_t o[7];                   // Offsets
+    int32_t e[7];                   // Enabled status
+} pole_data_t;
+
+// Globale variabler for å lagre data fra målestolpene
+static pole_data_t pole_data[MAX_POLES];
+static int pole_count = 0;
+static SemaphoreHandle_t pole_data_mutex;
+
 
 static const char *TAG = "timergate-ap";
 
@@ -528,13 +550,95 @@ static httpd_handle_t server = NULL;
 static int ws_clients[MAX_WS_CLIENTS];
 static SemaphoreHandle_t ws_mutex;
 
-char *generate_mock_data() {
-    static char json_msg[128];
-    snprintf(json_msg, sizeof(json_msg),
-             "{\"type\":\"data\",\"payload\":{\"gate\":1,\"timestamp\":%lld,\"status\":\"active\"}}",
-             esp_timer_get_time() / 1000);
+// char *generate_mock_data() {
+//     static char json_msg[128];
+//     snprintf(json_msg, sizeof(json_msg),
+//              "{\"type\":\"data\",\"payload\":{\"gate\":1,\"timestamp\":%lld,\"status\":\"active\"}}",
+//              esp_timer_get_time() / 1000);
+//     return json_msg;
+// }
+
+
+char *generate_real_data() {
+    static char json_msg[512];
+    
+    // Ta låsen før vi leser pole_data
+    xSemaphoreTake(pole_data_mutex, portMAX_DELAY);
+    
+    // Finn en pole med data
+    int idx = -1;
+    for (int i = 0; i < pole_count; i++) {
+        if (pole_data[i].k == 0) {  // Vi er interessert i ADC verdier
+            idx = i;
+            break;
+        }
+    }
+    
+    if (idx >= 0) {
+        // Generer JSON med reelle data i det formatet GUI-et forventer
+        char mac_str[18];
+        sprintf(mac_str, "%02x:%02x:%02x:%02x:%02x:%02x", 
+                pole_data[idx].mac[0], pole_data[idx].mac[1], pole_data[idx].mac[2],
+                pole_data[idx].mac[3], pole_data[idx].mac[4], pole_data[idx].mac[5]);
+        
+        sprintf(json_msg, 
+                "{\"M\":\"%s\",\"K\":%d,\"T\":%" PRIu32 ",\"U\":%" PRIu32 ",\"V\":[%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 "],\"B\":[%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 "]}",
+                mac_str, pole_data[idx].k, pole_data[idx].t, pole_data[idx].u,
+                pole_data[idx].v[0], pole_data[idx].v[1], pole_data[idx].v[2], 
+                pole_data[idx].v[3], pole_data[idx].v[4], pole_data[idx].v[5], pole_data[idx].v[6],
+                pole_data[idx].b[0], pole_data[idx].b[1], pole_data[idx].b[2], 
+                pole_data[idx].b[3], pole_data[idx].b[4], pole_data[idx].b[5], pole_data[idx].b[6]);
+        
+        ESP_LOGI(TAG, "Sending pole data: %s", json_msg);
+    } else if (pole_count > 0) {
+        // Vi har målestolper, men ingen ADC-data ennå
+        sprintf(json_msg, "{\"type\":\"waiting\",\"message\":\"Waiting for ADC data from poles\"}");
+    } else {
+        // Ingen målestolper registrert ennå
+        sprintf(json_msg, "{\"type\":\"no_poles\",\"message\":\"No poles connected yet\"}");
+    }
+    
+    xSemaphoreGive(pole_data_mutex);
     return json_msg;
 }
+
+
+
+
+// void ws_broadcast_task(void *pvParameter) {
+//     while (1) {
+//         if (server == NULL) {
+//             vTaskDelay(pdMS_TO_TICKS(1000));
+//             continue;
+//         }
+
+//         char *msg = generate_real_data();
+
+//         httpd_ws_frame_t ws_pkt = {
+//             .final = true,
+//             .fragmented = false,
+//             .type = HTTPD_WS_TYPE_TEXT,
+//             .payload = (uint8_t *)msg,
+//             .len = strlen(msg)
+//         };
+
+//         xSemaphoreTake(ws_mutex, portMAX_DELAY);
+//         for (int i = 0; i < MAX_WS_CLIENTS; ++i) {
+//             if (ws_clients[i] != 0) {
+//                 esp_err_t ret = httpd_ws_send_frame_async(server, ws_clients[i], &ws_pkt);
+//                 if (ret != ESP_OK) {
+//                     ESP_LOGW(TAG, "WebSocket send failed to fd %d: %s", ws_clients[i], esp_err_to_name(ret));
+//                     ws_clients[i] = 0;
+//                 }
+//             }
+//         }
+//         xSemaphoreGive(ws_mutex);
+
+//         vTaskDelay(pdMS_TO_TICKS(1000));
+//     }
+// }
+
+
 
 void ws_broadcast_task(void *pvParameter) {
     while (1) {
@@ -543,7 +647,8 @@ void ws_broadcast_task(void *pvParameter) {
             continue;
         }
 
-        char *msg = generate_mock_data();
+        // Bruk reelle data i stedet for mock-data
+        char *msg = generate_real_data();
         httpd_ws_frame_t ws_pkt = {
             .final = true,
             .fragmented = false,
@@ -564,9 +669,13 @@ void ws_broadcast_task(void *pvParameter) {
         }
         xSemaphoreGive(ws_mutex);
 
-        vTaskDelay(pdMS_TO_TICKS(1000));
+        // Raskere oppdatering
+        vTaskDelay(pdMS_TO_TICKS(200));  // 5 ganger per sekund i stedet for 1 gang per sekund
     }
 }
+
+
+
 
 esp_err_t ws_handler(httpd_req_t *req) {
     if (req->method == HTTP_GET) {
@@ -748,6 +857,142 @@ httpd_handle_t start_webserver(void) {
 
 
 
+// Legg til denne funksjonen etter de eksisterende funksjonene, men før app_main
+
+// ESP-NOW mottaker callback
+void esp_now_recv_cb(const esp_now_recv_info_t *recv_info, const uint8_t *data, int len) {
+    // Hent MAC-adressen fra recv_info
+    const uint8_t *mac_addr = recv_info->src_addr;
+    
+    ESP_LOGI(TAG, "ESP-NOW data mottatt fra %02x:%02x:%02x:%02x:%02x:%02x, len=%d", 
+             mac_addr[0], mac_addr[1], mac_addr[2], mac_addr[3], mac_addr[4], mac_addr[5], len);
+    
+    // Resten av funksjonen som før, men bruk mac_addr fra recv_info->src_addr
+    
+    // Sjekk at lengden er riktig for vår struktur (forenklet sjekk)
+    if (len < 10) {  // Minst 1 byte for k + 4 bytes for t + 4 bytes for u + litt data
+        ESP_LOGE(TAG, "Mottok data med feil lengde: %d", len);
+        return;
+    }
+    
+    xSemaphoreTake(pole_data_mutex, portMAX_DELAY);
+    
+    // Finn pole i vår liste eller legg til en ny
+    int pole_idx = -1;
+    for (int i = 0; i < pole_count; i++) {
+        if (memcmp(pole_data[i].mac, mac_addr, ESP_NOW_ETH_ALEN) == 0) {
+            pole_idx = i;
+            break;
+        }
+    }
+    
+    if (pole_idx < 0 && pole_count < MAX_POLES) {
+        pole_idx = pole_count++;
+        memcpy(pole_data[pole_idx].mac, mac_addr, ESP_NOW_ETH_ALEN);
+        ESP_LOGI(TAG, "Ny målestolpe lagt til, totalt: %d", pole_count);
+    }
+    
+    if (pole_idx >= 0) {
+        // Parse data (enkel implementasjon - dette må tilpasses det faktiske formatet)
+        uint8_t k = data[0];
+        pole_data[pole_idx].k = k;
+        
+        // Les timestamp
+        memcpy(&pole_data[pole_idx].t, &data[1], sizeof(uint32_t));
+        memcpy(&pole_data[pole_idx].u, &data[5], sizeof(uint32_t));
+        
+        ESP_LOGI(TAG, "Mottok data type %d fra målestolpe %d", k, pole_idx);
+        
+        // Les ADC verdier eller andre data basert på type melding
+        if (k == 0 && len >= 9 + sizeof(int32_t) * 14) {  // ADC verdier
+            memcpy(pole_data[pole_idx].v, &data[9], sizeof(int32_t) * 7);
+            memcpy(pole_data[pole_idx].b, &data[9 + sizeof(int32_t) * 7], sizeof(int32_t) * 7);
+            
+            // Log noen verdier for debugging
+            ESP_LOGI(TAG, "ADC verdier: %" PRId32 ", %" PRId32 ", %" PRId32 ", ...", 
+                    pole_data[pole_idx].v[0], pole_data[pole_idx].v[1], pole_data[pole_idx].v[2]);
+        } else if (k == 2 && len >= 9 + sizeof(int32_t) * 21) {  // Settings
+            memcpy(pole_data[pole_idx].e, &data[9], sizeof(int32_t) * 7);
+            memcpy(pole_data[pole_idx].o, &data[9 + sizeof(int32_t) * 7], sizeof(int32_t) * 7);
+            memcpy(pole_data[pole_idx].b, &data[9 + sizeof(int32_t) * 14], sizeof(int32_t) * 7);
+            
+            ESP_LOGI(TAG, "Settings mottatt for målestolpe %d", pole_idx);
+        }
+    }
+    
+    xSemaphoreGive(pole_data_mutex);
+}
+
+
+// Funksjon for å initialisere ESP-NOW
+void init_esp_now(void) {
+    ESP_LOGI(TAG, "Initialiserer ESP-NOW");
+    
+    // Initialiser ESP-NOW
+    if (esp_now_init() != ESP_OK) {
+        ESP_LOGE(TAG, "Feil ved initialisering av ESP-NOW");
+        return;
+    }
+    
+    // Registrer callback
+    if (esp_now_register_recv_cb(esp_now_recv_cb) != ESP_OK) {
+        ESP_LOGE(TAG, "Feil ved registrering av ESP-NOW mottaker callback");
+        return;
+    }
+    
+    ESP_LOGI(TAG, "ESP-NOW initialisert, venter på data fra målestolper...");
+}
+
+
+
+
+// void app_main(void) {
+//     esp_err_t ret = nvs_flash_init();
+//     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+//         ESP_ERROR_CHECK(nvs_flash_erase());
+//         ESP_ERROR_CHECK(nvs_flash_init());
+//     }
+
+//     ESP_ERROR_CHECK(esp_netif_init());
+//     ESP_ERROR_CHECK(esp_event_loop_create_default());
+//     esp_netif_create_default_wifi_ap();
+
+//     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+//     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+
+//     wifi_config_t wifi_config = {
+//         .ap = {
+//             .ssid = "Timergate",
+//             .ssid_len = strlen("Timergate"),
+//             .channel = 1,
+//             .password = "12345678",
+//             .max_connection = 4,
+//             .authmode = WIFI_AUTH_WPA_WPA2_PSK
+//         }
+//     };
+
+//     if (strlen((char *)wifi_config.ap.password) == 0) {
+//         wifi_config.ap.authmode = WIFI_AUTH_OPEN;
+//     }
+
+//     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
+//     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &wifi_config));
+//     ESP_ERROR_CHECK(esp_wifi_start());
+
+//     ESP_LOGI(TAG, "wifi_init_softap finished. SSID:%s password:%s channel:%d",
+//              "Timergate", "12345678", 1);
+
+//     ws_mutex = xSemaphoreCreateMutex();
+//     memset(ws_clients, 0, sizeof(ws_clients));
+
+//     // Initialiser filsystemet
+//     ESP_ERROR_CHECK(init_fs());
+
+//     server = start_webserver();
+//     xTaskCreate(ws_broadcast_task, "ws_broadcast_task", 4096, NULL, 5, NULL);
+// }
+
+
 
 void app_main(void) {
     esp_err_t ret = nvs_flash_init();
@@ -785,11 +1030,18 @@ void app_main(void) {
     ESP_LOGI(TAG, "wifi_init_softap finished. SSID:%s password:%s channel:%d",
              "Timergate", "12345678", 1);
 
+    // Initialiser mutexer
     ws_mutex = xSemaphoreCreateMutex();
+    pole_data_mutex = xSemaphoreCreateMutex();  // Nytt mutex for pole data
+    
     memset(ws_clients, 0, sizeof(ws_clients));
+    memset(pole_data, 0, sizeof(pole_data));  // Initialiser pole data array
 
     // Initialiser filsystemet
     ESP_ERROR_CHECK(init_fs());
+    
+    // Initialiser ESP-NOW (ny linje)
+    init_esp_now();
 
     server = start_webserver();
     xTaskCreate(ws_broadcast_task, "ws_broadcast_task", 4096, NULL, 5, NULL);
