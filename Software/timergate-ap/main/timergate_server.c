@@ -85,7 +85,8 @@ void list_spiffs_files(const char *path) {
 }
 
 
-
+esp_err_t simulate_pole_data_handler(httpd_req_t *req);
+esp_err_t websocket_test_page_handler(httpd_req_t *req);
 
 
 // Funksjon for å håndtere tid-synkronisering API
@@ -561,46 +562,91 @@ static SemaphoreHandle_t ws_mutex;
 
 char *generate_real_data() {
     static char json_msg[512];
+    static uint32_t last_log_time = 0;
+    const uint32_t log_interval_ms = 5000; // Logg bare hvert 5. sekund
+    uint32_t current_time = esp_timer_get_time() / 1000;
+    bool should_log = (current_time - last_log_time) >= log_interval_ms;
     
     // Ta låsen før vi leser pole_data
     xSemaphoreTake(pole_data_mutex, portMAX_DELAY);
     
-    // Finn en pole med data
-    int idx = -1;
+    // Sjekk om vi har noen tilkoblede målestolper
+    if (pole_count == 0) {
+        if (should_log) {
+            ESP_LOGI(TAG, "Ingen målestolper registrert ennå");
+            last_log_time = current_time;
+        }
+        sprintf(json_msg, "{\"type\":\"no_poles\",\"message\":\"Ingen målestolper tilkoblet\"}");
+        xSemaphoreGive(pole_data_mutex);
+        return json_msg;
+    }
+    
+    // Finn en pole med ADC-data (k=0) først
+    int adc_idx = -1;
     for (int i = 0; i < pole_count; i++) {
-        if (pole_data[i].k == 0) {  // Vi er interessert i ADC verdier
-            idx = i;
+        if (pole_data[i].k == 0) {
+            adc_idx = i;
             break;
         }
     }
     
-    if (idx >= 0) {
-        // Generer JSON med reelle data i det formatet GUI-et forventer
+    // Finn en pole med break-event (k=1)
+    int break_idx = -1;
+    for (int i = 0; i < pole_count; i++) {
+        if (pole_data[i].k == 1) {
+            break_idx = i;
+            break;
+        }
+    }
+    
+    // Prioriter å sende break-event hvis tilgjengelig
+    if (break_idx >= 0) {
+        // Generer JSON for break-event
         char mac_str[18];
         sprintf(mac_str, "%02x:%02x:%02x:%02x:%02x:%02x", 
-                pole_data[idx].mac[0], pole_data[idx].mac[1], pole_data[idx].mac[2],
-                pole_data[idx].mac[3], pole_data[idx].mac[4], pole_data[idx].mac[5]);
+                pole_data[break_idx].mac[0], pole_data[break_idx].mac[1], pole_data[break_idx].mac[2],
+                pole_data[break_idx].mac[3], pole_data[break_idx].mac[4], pole_data[break_idx].mac[5]);
         
         sprintf(json_msg, 
-                "{\"M\":\"%s\",\"K\":%d,\"T\":%" PRIu32 ",\"U\":%" PRIu32 ",\"V\":[%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 "],\"B\":[%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 "]}",
-                mac_str, pole_data[idx].k, pole_data[idx].t, pole_data[idx].u,
-                pole_data[idx].v[0], pole_data[idx].v[1], pole_data[idx].v[2], 
-                pole_data[idx].v[3], pole_data[idx].v[4], pole_data[idx].v[5], pole_data[idx].v[6],
-                pole_data[idx].b[0], pole_data[idx].b[1], pole_data[idx].b[2], 
-                pole_data[idx].b[3], pole_data[idx].b[4], pole_data[idx].b[5], pole_data[idx].b[6]);
+                "{\"M\":\"%s\",\"K\":1,\"T\":%" PRIu32 ",\"U\":%" PRIu32 ",\"B\":1}",
+                mac_str, pole_data[break_idx].t, pole_data[break_idx].u);
         
-        ESP_LOGI(TAG, "Sending pole data: %s", json_msg);
-    } else if (pole_count > 0) {
-        // Vi har målestolper, men ingen ADC-data ennå
-        sprintf(json_msg, "{\"type\":\"waiting\",\"message\":\"Waiting for ADC data from poles\"}");
-    } else {
-        // Ingen målestolper registrert ennå
-        sprintf(json_msg, "{\"type\":\"no_poles\",\"message\":\"No poles connected yet\"}");
+        ESP_LOGI(TAG, "Sending break event data: %s", json_msg);
+        
+        // Fjern flagget for å indikere at denne har blitt sendt
+        pole_data[break_idx].k = 0;  // Reset til ADC-modus
+    }
+    // Ellers send ADC-data hvis tilgjengelig
+    else if (adc_idx >= 0) {
+        // Generer JSON med ADC-data i formatet GUI-et forventer
+        char mac_str[18];
+        sprintf(mac_str, "%02x:%02x:%02x:%02x:%02x:%02x", 
+                pole_data[adc_idx].mac[0], pole_data[adc_idx].mac[1], pole_data[adc_idx].mac[2],
+                pole_data[adc_idx].mac[3], pole_data[adc_idx].mac[4], pole_data[adc_idx].mac[5]);
+        
+        sprintf(json_msg, 
+                "{\"M\":\"%s\",\"K\":0,\"T\":%" PRIu32 ",\"U\":%" PRIu32 ",\"V\":[%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 "],\"B\":[%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 "]}",
+                mac_str, pole_data[adc_idx].t, pole_data[adc_idx].u,
+                pole_data[adc_idx].v[0], pole_data[adc_idx].v[1], pole_data[adc_idx].v[2], 
+                pole_data[adc_idx].v[3], pole_data[adc_idx].v[4], pole_data[adc_idx].v[5], pole_data[adc_idx].v[6],
+                pole_data[adc_idx].b[0], pole_data[adc_idx].b[1], pole_data[adc_idx].b[2], 
+                pole_data[adc_idx].b[3], pole_data[adc_idx].b[4], pole_data[adc_idx].b[5], pole_data[adc_idx].b[6]);
+        
+        ESP_LOGI(TAG, "Sending ADC data: MAC=%s, values=[%" PRId32 ",%" PRId32 ",...], broken=[%" PRId32 ",%" PRId32 ",...]",
+                mac_str, pole_data[adc_idx].v[0], pole_data[adc_idx].v[1], 
+                pole_data[adc_idx].b[0], pole_data[adc_idx].b[1]);
+    } 
+    // Ingen relevant data funnet
+    else {
+        sprintf(json_msg, "{\"type\":\"waiting\",\"message\":\"Målestolper tilkoblet, venter på data\"}");
+        ESP_LOGI(TAG, "No relevant data available from poles yet");
     }
     
     xSemaphoreGive(pole_data_mutex);
     return json_msg;
 }
+
+
 
 
 
@@ -639,16 +685,29 @@ char *generate_real_data() {
 // }
 
 
-
 void ws_broadcast_task(void *pvParameter) {
+    static uint32_t last_log_time = 0;
+    const uint32_t log_interval_ms = 5000; // Logg bare hvert 5. sekund
+    
     while (1) {
         if (server == NULL) {
             vTaskDelay(pdMS_TO_TICKS(1000));
             continue;
         }
 
+        // Få gjeldende millis-verdi
+        uint32_t current_time = esp_timer_get_time() / 1000;
+        bool should_log = (current_time - last_log_time) >= log_interval_ms;
+        
         // Bruk reelle data i stedet for mock-data
         char *msg = generate_real_data();
+        
+        // Logg bare med jevne mellomrom
+        if (should_log) {
+            ESP_LOGI(TAG, "Broadcasting WebSocket message: %s", msg);
+            last_log_time = current_time;
+        }
+        
         httpd_ws_frame_t ws_pkt = {
             .final = true,
             .fragmented = false,
@@ -657,6 +716,8 @@ void ws_broadcast_task(void *pvParameter) {
             .len = strlen(msg)
         };
 
+        int active_clients = 0;
+        
         xSemaphoreTake(ws_mutex, portMAX_DELAY);
         for (int i = 0; i < MAX_WS_CLIENTS; ++i) {
             if (ws_clients[i] != 0) {
@@ -664,16 +725,23 @@ void ws_broadcast_task(void *pvParameter) {
                 if (ret != ESP_OK) {
                     ESP_LOGW(TAG, "WebSocket send failed to fd %d: %s", ws_clients[i], esp_err_to_name(ret));
                     ws_clients[i] = 0;
+                } else {
+                    active_clients++;
                 }
             }
         }
+        
+        // Logg bare med jevne mellomrom
+        if (should_log) {
+            ESP_LOGI(TAG, "WebSocket broadcast complete - sent to %d active clients", active_clients);
+        }
+        
         xSemaphoreGive(ws_mutex);
 
-        // Raskere oppdatering
-        vTaskDelay(pdMS_TO_TICKS(200));  // 5 ganger per sekund i stedet for 1 gang per sekund
+        // Du kan beholde den høye oppdateringsfrekvensen til WebSocket
+        vTaskDelay(pdMS_TO_TICKS(200));
     }
 }
-
 
 
 
@@ -727,7 +795,7 @@ esp_err_t ws_handler(httpd_req_t *req) {
 httpd_handle_t start_webserver(void) {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     // Øk maks URI-handlere
-    config.max_uri_handlers = 12; // Økt fra 6 til 12 for å ha plass til flere handlere
+    config.max_uri_handlers = 20; // Økt fra 6 til 12 for å ha plass til flere handlere
     // Øk recv/send-bufferstørrelse og timeouts
     config.recv_wait_timeout = 10;
     config.send_wait_timeout = 10;
@@ -847,6 +915,29 @@ httpd_handle_t start_webserver(void) {
         };
         httpd_register_uri_handler(server_handle, &common);
 
+
+
+        // Legg til i start_webserver-funksjonen, sammen med de andre API-handlerne
+        httpd_uri_t simulate_pole = {
+            .uri = "/api/v1/debug/simulate",
+            .method = HTTP_GET,
+            .handler = simulate_pole_data_handler,
+            .user_ctx = NULL
+        };
+        httpd_register_uri_handler(server_handle, &simulate_pole);
+
+        // Legg til i start_webserver-funksjonen
+        httpd_uri_t ws_test = {
+            .uri = "/ws_test",
+            .method = HTTP_GET,
+            .handler = websocket_test_page_handler,
+            .user_ctx = NULL
+        };
+        httpd_register_uri_handler(server_handle, &ws_test);
+
+
+
+
         ESP_LOGI(TAG, "Web server started");
     } else {
         ESP_LOGE(TAG, "Failed to start web server!");
@@ -867,13 +958,17 @@ void esp_now_recv_cb(const esp_now_recv_info_t *recv_info, const uint8_t *data, 
     ESP_LOGI(TAG, "ESP-NOW data mottatt fra %02x:%02x:%02x:%02x:%02x:%02x, len=%d", 
              mac_addr[0], mac_addr[1], mac_addr[2], mac_addr[3], mac_addr[4], mac_addr[5], len);
     
-    // Resten av funksjonen som før, men bruk mac_addr fra recv_info->src_addr
-    
-    // Sjekk at lengden er riktig for vår struktur (forenklet sjekk)
-    if (len < 10) {  // Minst 1 byte for k + 4 bytes for t + 4 bytes for u + litt data
-        ESP_LOGE(TAG, "Mottok data med feil lengde: %d", len);
+    // Sjekk at lengden er riktig for vår struktur
+    if (len < 10) {
+        ESP_LOGE(TAG, "Mottok data med feil lengde: %d (forventet minst 10 bytes)", len);
         return;
     }
+    
+    // Logg raw data for debugging
+    ESP_LOGI(TAG, "Data header: k=%d, t=%02x%02x%02x%02x, u=%02x%02x%02x%02x", 
+             data[0], 
+             data[1], data[2], data[3], data[4],
+             data[5], data[6], data[7], data[8]);
     
     xSemaphoreTake(pole_data_mutex, portMAX_DELAY);
     
@@ -889,39 +984,173 @@ void esp_now_recv_cb(const esp_now_recv_info_t *recv_info, const uint8_t *data, 
     if (pole_idx < 0 && pole_count < MAX_POLES) {
         pole_idx = pole_count++;
         memcpy(pole_data[pole_idx].mac, mac_addr, ESP_NOW_ETH_ALEN);
-        ESP_LOGI(TAG, "Ny målestolpe lagt til, totalt: %d", pole_count);
+        ESP_LOGI(TAG, "Ny målestolpe lagt til, indeks=%d, totalt: %d", pole_idx, pole_count);
+    } else if (pole_idx < 0) {
+        ESP_LOGW(TAG, "Maks antall målestolper nådd (%d), ignorerer ny tilkobling", MAX_POLES);
+        xSemaphoreGive(pole_data_mutex);
+        return;
     }
     
-    if (pole_idx >= 0) {
-        // Parse data (enkel implementasjon - dette må tilpasses det faktiske formatet)
-        uint8_t k = data[0];
-        pole_data[pole_idx].k = k;
+    // Parse data
+    uint8_t k = data[0];
+    pole_data[pole_idx].k = k;
+    
+    // Les timestamp
+    memcpy(&pole_data[pole_idx].t, &data[1], sizeof(uint32_t));
+    memcpy(&pole_data[pole_idx].u, &data[5], sizeof(uint32_t));
+    
+    ESP_LOGI(TAG, "Mottok data type %d fra målestolpe %d, timestamp=%u.%06u", 
+            k, pole_idx, pole_data[pole_idx].t, pole_data[pole_idx].u);
+    
+    // Les ADC verdier eller andre data basert på type melding
+    if (k == 0 && len >= 9 + sizeof(int32_t) * 14) {  // ADC verdier
+        memcpy(pole_data[pole_idx].v, &data[9], sizeof(int32_t) * 7);
+        memcpy(pole_data[pole_idx].b, &data[9 + sizeof(int32_t) * 7], sizeof(int32_t) * 7);
         
-        // Les timestamp
-        memcpy(&pole_data[pole_idx].t, &data[1], sizeof(uint32_t));
-        memcpy(&pole_data[pole_idx].u, &data[5], sizeof(uint32_t));
+        ESP_LOGI(TAG, "ADC verdier: [%" PRId32 ", %" PRId32 ", %" PRId32 ", %" PRId32 ", %" PRId32 ", %" PRId32 ", %" PRId32 "]", 
+                pole_data[pole_idx].v[0], pole_data[pole_idx].v[1], pole_data[pole_idx].v[2],
+                pole_data[pole_idx].v[3], pole_data[pole_idx].v[4], pole_data[pole_idx].v[5],
+                pole_data[pole_idx].v[6]);
+        ESP_LOGI(TAG, "Broken status: [%" PRId32 ", %" PRId32 ", %" PRId32 ", %" PRId32 ", %" PRId32 ", %" PRId32 ", %" PRId32 "]", 
+                pole_data[pole_idx].b[0], pole_data[pole_idx].b[1], pole_data[pole_idx].b[2],
+                pole_data[pole_idx].b[3], pole_data[pole_idx].b[4], pole_data[pole_idx].b[5],
+                pole_data[pole_idx].b[6]);
+    } else if (k == 1) {  // Break event
+        // Antar at en enkelt break-verdi fins i data[9]
+        int32_t break_value;
+        memcpy(&break_value, &data[9], sizeof(int32_t));
+        ESP_LOGI(TAG, "Break event mottatt: verdi=%" PRId32, break_value);
+    } else if (k == 2 && len >= 9 + sizeof(int32_t) * 21) {  // Settings
+        memcpy(pole_data[pole_idx].e, &data[9], sizeof(int32_t) * 7);
+        memcpy(pole_data[pole_idx].o, &data[9 + sizeof(int32_t) * 7], sizeof(int32_t) * 7);
+        memcpy(pole_data[pole_idx].b, &data[9 + sizeof(int32_t) * 14], sizeof(int32_t) * 7);
         
-        ESP_LOGI(TAG, "Mottok data type %d fra målestolpe %d", k, pole_idx);
-        
-        // Les ADC verdier eller andre data basert på type melding
-        if (k == 0 && len >= 9 + sizeof(int32_t) * 14) {  // ADC verdier
-            memcpy(pole_data[pole_idx].v, &data[9], sizeof(int32_t) * 7);
-            memcpy(pole_data[pole_idx].b, &data[9 + sizeof(int32_t) * 7], sizeof(int32_t) * 7);
-            
-            // Log noen verdier for debugging
-            ESP_LOGI(TAG, "ADC verdier: %" PRId32 ", %" PRId32 ", %" PRId32 ", ...", 
-                    pole_data[pole_idx].v[0], pole_data[pole_idx].v[1], pole_data[pole_idx].v[2]);
-        } else if (k == 2 && len >= 9 + sizeof(int32_t) * 21) {  // Settings
-            memcpy(pole_data[pole_idx].e, &data[9], sizeof(int32_t) * 7);
-            memcpy(pole_data[pole_idx].o, &data[9 + sizeof(int32_t) * 7], sizeof(int32_t) * 7);
-            memcpy(pole_data[pole_idx].b, &data[9 + sizeof(int32_t) * 14], sizeof(int32_t) * 7);
-            
-            ESP_LOGI(TAG, "Settings mottatt for målestolpe %d", pole_idx);
-        }
+        ESP_LOGI(TAG, "Settings mottatt for målestolpe %d:", pole_idx);
+        ESP_LOGI(TAG, "  Enabled: [%" PRId32 ", %" PRId32 ", %" PRId32 ", %" PRId32 ", %" PRId32 ", %" PRId32 ", %" PRId32 "]", 
+                pole_data[pole_idx].e[0], pole_data[pole_idx].e[1], pole_data[pole_idx].e[2],
+                pole_data[pole_idx].e[3], pole_data[pole_idx].e[4], pole_data[pole_idx].e[5],
+                pole_data[pole_idx].e[6]);
+    } else {
+        ESP_LOGW(TAG, "Ukjent melding eller ugyldig lengde: k=%d, len=%d", k, len);
     }
     
     xSemaphoreGive(pole_data_mutex);
 }
+
+
+// Legg til denne funksjonen i timergate_server.c
+esp_err_t websocket_test_page_handler(httpd_req_t *req) {
+    ESP_LOGI(TAG, "WebSocket test page requested");
+    
+    // En enkel HTML-side med JavaScript for WebSocket-testing
+    const char *html = "<!DOCTYPE html>\n"
+        "<html>\n"
+        "<head>\n"
+        "    <title>Timergate WebSocket Test</title>\n"
+        "    <style>\n"
+        "        body { font-family: Arial, sans-serif; margin: 20px; }\n"
+        "        #messages { border: 1px solid #ccc; padding: 10px; height: 300px; overflow-y: auto; margin-bottom: 10px; }\n"
+        "        .time { color: #888; font-size: 0.8em; }\n"
+        "        .error { color: red; }\n"
+        "        .connected { color: green; }\n"
+        "        .json { font-family: monospace; white-space: pre-wrap; }\n"
+        "    </style>\n"
+        "</head>\n"
+        "<body>\n"
+        "    <h1>Timergate WebSocket Test</h1>\n"
+        "    <div>\n"
+        "        <button id='connect'>Koble til</button>\n"
+        "        <button id='disconnect'>Koble fra</button>\n"
+        "        <span id='status'>Ikke tilkoblet</span>\n"
+        "    </div>\n"
+        "    <h2>Meldinger:</h2>\n"
+        "    <div id='messages'></div>\n"
+        "    <script>\n"
+        "        let socket;\n"
+        "        let messageCount = 0;\n"
+        "        let maxMessages = 100;\n"
+        "\n"
+        "        function addMessage(text, className) {\n"
+        "            const messages = document.getElementById('messages');\n"
+        "            const time = new Date().toLocaleTimeString();\n"
+        "            const msg = document.createElement('div');\n"
+        "\n"
+        "            let content = `<span class='time'>${time}</span> `;\n"
+        "            \n"
+        "            if (className === 'json') {\n"
+        "                try {\n"
+        "                    // Formater JSON for bedre lesbarhet\n"
+        "                    const jsonObj = JSON.parse(text);\n"
+        "                    text = JSON.stringify(jsonObj, null, 2);\n"
+        "                } catch (e) {\n"
+        "                    // Hvis ikke JSON, vis som vanlig tekst\n"
+        "                }\n"
+        "            }\n"
+        "            \n"
+        "            content += `<span class='${className}'>${text}</span>`;\n"
+        "            msg.innerHTML = content;\n"
+        "            messages.appendChild(msg);\n"
+        "            messages.scrollTop = messages.scrollHeight;\n"
+        "            \n"
+        "            // Begrens antall meldinger for å unngå minneproblemer\n"
+        "            messageCount++;\n"
+        "            if (messageCount > maxMessages) {\n"
+        "                messages.removeChild(messages.firstChild);\n"
+        "                messageCount--;\n"
+        "            }\n"
+        "        }\n"
+        "\n"
+        "        document.getElementById('connect').addEventListener('click', function() {\n"
+        "            if (socket && socket.readyState <= 1) {\n"
+        "                addMessage('Allerede tilkoblet eller kobler til', 'error');\n"
+        "                return;\n"
+        "            }\n"
+        "\n"
+        "            const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';\n"
+        "            const wsUrl = `${wsProtocol}//${window.location.host}/ws`;\n"
+        "            addMessage(`Kobler til ${wsUrl}`, 'normal');\n"
+        "\n"
+        "            socket = new WebSocket(wsUrl);\n"
+        "\n"
+        "            socket.onopen = function() {\n"
+        "                document.getElementById('status').textContent = 'Tilkoblet';\n"
+        "                document.getElementById('status').style.color = 'green';\n"
+        "                addMessage('WebSocket tilkoblet', 'connected');\n"
+        "            };\n"
+        "\n"
+        "            socket.onmessage = function(event) {\n"
+        "                addMessage(event.data, 'json');\n"
+        "            };\n"
+        "\n"
+        "            socket.onclose = function() {\n"
+        "                document.getElementById('status').textContent = 'Frakoblet';\n"
+        "                document.getElementById('status').style.color = 'red';\n"
+        "                addMessage('WebSocket frakoblet', 'error');\n"
+        "            };\n"
+        "\n"
+        "            socket.onerror = function(error) {\n"
+        "                addMessage('WebSocket feil: ' + error, 'error');\n"
+        "            };\n"
+        "        });\n"
+        "\n"
+        "        document.getElementById('disconnect').addEventListener('click', function() {\n"
+        "            if (socket) {\n"
+        "                socket.close();\n"
+        "                addMessage('WebSocket lukket manuelt', 'normal');\n"
+        "            }\n"
+        "        });\n"
+        "    </script>\n"
+        "</body>\n"
+        "</html>";
+    
+    httpd_resp_set_type(req, "text/html");
+    httpd_resp_send(req, html, strlen(html));
+    
+    return ESP_OK;
+}
+
+
+
 
 
 // Funksjon for å initialisere ESP-NOW
@@ -942,6 +1171,80 @@ void init_esp_now(void) {
     
     ESP_LOGI(TAG, "ESP-NOW initialisert, venter på data fra målestolper...");
 }
+
+
+
+
+
+// Legg til denne funksjonen i timergate_server.c
+esp_err_t simulate_pole_data_handler(httpd_req_t *req) {
+    ESP_LOGI(TAG, "Simulate pole data handler called");
+    
+    // Opprett en simulert målestolpe hvis det ikke finnes noen
+    xSemaphoreTake(pole_data_mutex, portMAX_DELAY);
+    
+    if (pole_count == 0) {
+        // Lag en simulert stolpe med MAC-adresse aa:bb:cc:dd:ee:ff
+        uint8_t mac[ESP_NOW_ETH_ALEN] = {0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff};
+        memcpy(pole_data[0].mac, mac, ESP_NOW_ETH_ALEN);
+        pole_count = 1;
+        ESP_LOGI(TAG, "Opprettet simulert målestolpe med MAC aa:bb:cc:dd:ee:ff");
+    }
+    
+    // Fyll inn simulerte ADC-verdier
+    pole_data[0].k = 0; // ADC-verdier
+    pole_data[0].t = time(NULL);
+    pole_data[0].u = 0;
+    
+    // Simulerte ADC-verdier i et mønster som vil være synlig i GUI
+    for (int i = 0; i < 7; i++) {
+        pole_data[0].v[i] = 2000 + (i * 300);  // Økende verdier
+        pole_data[0].b[i] = (i % 2);  // Veksler mellom 0 og 1
+    }
+    
+    // Simulerte innstillinger hvis de ikke er satt
+    if (pole_data[0].e[0] == 0 && pole_data[0].o[0] == 0 && pole_data[0].b[0] == 0) {
+        for (int i = 0; i < 7; i++) {
+            pole_data[0].e[i] = 1;  // Alt er aktivert
+            pole_data[0].o[i] = 4000;  // Standard offset
+            pole_data[0].b[i] = 1000;  // Standard break-verdi
+        }
+        
+        // Send også en innstillingsmelding
+        pole_data[0].k = 2;
+        ESP_LOGI(TAG, "Opprettet simulerte innstillinger for målestolpe");
+    }
+    
+    ESP_LOGI(TAG, "Simulerte ADC-verdier opprettet: [%d, %d, %d, %d, %d, %d, %d]",
+            pole_data[0].v[0], pole_data[0].v[1], pole_data[0].v[2],
+            pole_data[0].v[3], pole_data[0].v[4], pole_data[0].v[5],
+            pole_data[0].v[6]);
+    
+    xSemaphoreGive(pole_data_mutex);
+    
+    // Simuler et break event (k=1) etter et kort intervall
+    vTaskDelay(pdMS_TO_TICKS(1000));
+    
+    xSemaphoreTake(pole_data_mutex, portMAX_DELAY);
+    pole_data[0].k = 1;  // Break event
+    pole_data[0].t = time(NULL);
+    pole_data[0].u = 500000;  // 500 ms
+    ESP_LOGI(TAG, "Simulert break event opprettet: timestamp=%u.%06u", 
+             pole_data[0].t, pole_data[0].u);
+    xSemaphoreGive(pole_data_mutex);
+    
+    // Send respons til klienten
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    httpd_resp_sendstr(req, "{\"status\":\"success\",\"message\":\"Simulerte data opprettet\"}");
+    
+    return ESP_OK;
+}
+
+
+
+
+
 
 
 
