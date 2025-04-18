@@ -22,7 +22,7 @@
 
 static const char *TAG = "timergate-ap";
 
-// Legg til denne funksjonen for å liste filer i SPIFFS
+// Legg til en hjelpefunksjon for å liste filer i SPIFFS
 void list_spiffs_files(const char *path) {
     DIR *dir = opendir(path);
     if (!dir) {
@@ -32,29 +32,39 @@ void list_spiffs_files(const char *path) {
     
     struct dirent *entry;
     while ((entry = readdir(dir)) != NULL) {
-        if (entry->d_type == DT_REG) {
-            ESP_LOGI(TAG, "  File: %s/%s", path, entry->d_name);
-        } else if (entry->d_type == DT_DIR) {
-            char next_path[FILE_PATH_MAX];
-            snprintf(next_path, sizeof(next_path), "%s/%s", path, entry->d_name);
-            ESP_LOGI(TAG, "  Dir: %s", next_path);
-            list_spiffs_files(next_path); // Sjekk undermapper rekursivt
+        // Bygg full filbane
+        char full_path[FILE_PATH_MAX];
+        if (snprintf(full_path, sizeof(full_path), "%s/%s", path, entry->d_name) >= sizeof(full_path)) {
+            ESP_LOGE(TAG, "Path too long: %s/%s", path, entry->d_name);
+            continue;
+        }
+        
+        // Sjekk filtype
+        struct stat st;
+        if (stat(full_path, &st) == 0) {
+            if (S_ISDIR(st.st_mode)) {
+                ESP_LOGI(TAG, "  Dir: %s", full_path);
+                // Sjekk undermapper rekursivt
+                list_spiffs_files(full_path);
+            } else {
+                ESP_LOGI(TAG, "  File: %s (Size: %ld bytes)", full_path, st.st_size);
+            }
+        } else {
+            ESP_LOGE(TAG, "  Failed to stat: %s (errno: %d)", full_path, errno);
         }
     }
     closedir(dir);
 }
 
 esp_err_t init_fs(void) {
+    ESP_LOGI(TAG, "Mounting SPIFFS with base_path=/www, partition_label=www");
+    
     esp_vfs_spiffs_conf_t conf = {
         .base_path = "/www",
         .partition_label = "www",
-        .max_files = 5,
+        .max_files = 10,  // Økt fra 5 til 10 for å støtte flere filer
         .format_if_mount_failed = false
     };
-    
-    // Loggmelding flyttet etter variabeldefinisjonen
-    ESP_LOGI(TAG, "Mounting SPIFFS with base_path=%s, partition_label=%s", 
-             conf.base_path, conf.partition_label);
     
     esp_err_t ret = esp_vfs_spiffs_register(&conf);
     if (ret != ESP_OK) {
@@ -83,7 +93,113 @@ esp_err_t init_fs(void) {
     return ESP_OK;
 }
 
-
+// Forbedret debug_handler som sender data i chunks
+esp_err_t debug_handler(httpd_req_t *req) {
+    ESP_LOGI(TAG, "DEBUG handler called");
+    
+    httpd_resp_set_type(req, "text/plain");
+    
+    // Start med å sende en header
+    httpd_resp_sendstr_chunk(req, "SPIFFS Filesystem Debug Info:\n\n");
+    
+    // Sjekk /www-mappen - send resultater i små deler
+    DIR *dir = opendir("/www");
+    if (dir) {
+        httpd_resp_sendstr_chunk(req, "Files in /www directory:\n");
+        struct dirent *entry;
+        while ((entry = readdir(dir)) != NULL) {
+            struct stat st;
+            char path[FILE_PATH_MAX];
+            snprintf(path, sizeof(path), "/www/%s", entry->d_name);
+            
+            if (stat(path, &st) == 0) {
+                // Send hvert filnavn som en separat chunk
+                char file_info[64]; // Mindre buffer for hver fil
+                
+                // Begrens filnavnlengden for sikkerhets skyld
+                char safe_name[32];
+                strlcpy(safe_name, entry->d_name, sizeof(safe_name));
+                
+                snprintf(file_info, sizeof(file_info), "  %s (%ld bytes)\n", safe_name, st.st_size);
+                httpd_resp_sendstr_chunk(req, file_info);
+            }
+        }
+        closedir(dir);
+        httpd_resp_sendstr_chunk(req, "\n");
+    } else {
+        httpd_resp_sendstr_chunk(req, "Failed to open /www directory\n\n");
+    }
+    
+    // Sjekk /www/assets-mappen - send resultater i små deler
+    dir = opendir("/www/assets");
+    if (dir) {
+        httpd_resp_sendstr_chunk(req, "Files in /www/assets directory:\n");
+        struct dirent *entry;
+        while ((entry = readdir(dir)) != NULL) {
+            struct stat st;
+            char path[FILE_PATH_MAX];
+            snprintf(path, sizeof(path), "/www/assets/%s", entry->d_name);
+            
+            if (stat(path, &st) == 0) {
+                // Send hvert filnavn som en separat chunk
+                char file_info[64];
+                
+                // Begrens filnavnlengden
+                char safe_name[32];
+                strlcpy(safe_name, entry->d_name, sizeof(safe_name));
+                
+                snprintf(file_info, sizeof(file_info), "  %s (%ld bytes)\n", safe_name, st.st_size);
+                httpd_resp_sendstr_chunk(req, file_info);
+            }
+        }
+        closedir(dir);
+        httpd_resp_sendstr_chunk(req, "\n");
+    } else {
+        httpd_resp_sendstr_chunk(req, "Failed to open /www/assets directory\n");
+    }
+    
+    // Sjekk spesifikke testfiler
+    httpd_resp_sendstr_chunk(req, "\nTesting specific asset files:\n");
+    
+    const char* test_files[] = {
+        "/www/index.html",
+        "/www/assets/index.js",
+        "/www/assets/index.css"
+    };
+    
+    for (int i = 0; i < 3; i++) {
+        struct stat st;
+        if (stat(test_files[i], &st) == 0) {
+            char file_info[64];
+            
+            // Bruk bare siste delen av filnavnet for sikkerhets skyld
+            const char* basename = strrchr(test_files[i], '/');
+            basename = basename ? basename + 1 : test_files[i];
+            
+            snprintf(file_info, sizeof(file_info), "  %s exists (%ld bytes)\n", test_files[i], st.st_size);
+            httpd_resp_sendstr_chunk(req, file_info);
+            
+            // Prøv å åpne filen for å bekrefte lesbarhet
+            FILE *f = fopen(test_files[i], "r");
+            if (f) {
+                httpd_resp_sendstr_chunk(req, "    File can be opened for reading: YES\n");
+                fclose(f);
+            } else {
+                char err_info[64];
+                snprintf(err_info, sizeof(err_info), "    File can be opened for reading: NO (errno: %d)\n", errno);
+                httpd_resp_sendstr_chunk(req, err_info);
+            }
+        } else {
+            char err_info[64];
+            snprintf(err_info, sizeof(err_info), "  %s does NOT exist (errno: %d)\n", test_files[i], errno);
+            httpd_resp_sendstr_chunk(req, err_info);
+        }
+    }
+    
+    // Avslutt responsen med en tom chunk
+    httpd_resp_sendstr_chunk(req, NULL);
+    return ESP_OK;
+}
 
 esp_err_t spiffs_get_handler(httpd_req_t *req) {
     char filepath[FILE_PATH_MAX];
@@ -99,6 +215,12 @@ esp_err_t spiffs_get_handler(httpd_req_t *req) {
     if (strcmp(uri_path, "/") == 0) {
         uri_path = "/index.html";
         ESP_LOGI(TAG, "Root URI requested, using %s", uri_path);
+    }
+    
+    // Spesialbehandling for assets
+    bool is_asset = strstr(uri_path, "/assets/") == uri_path;
+    if (is_asset) {
+        ESP_LOGI(TAG, "Asset request detected: %s", uri_path);
     }
     
     // Konstruer filsti
@@ -121,21 +243,33 @@ esp_err_t spiffs_get_handler(httpd_req_t *req) {
     if (stat(filepath, &file_stat) == -1) {
         ESP_LOGE(TAG, "Failed to stat file: %s (errno: %d)", filepath, errno);
         
-
-        if (strstr(uri_path, "/assets/") == uri_path) {
-            char exact_path[FILE_PATH_MAX];
-            strlcpy(exact_path, "/www", FILE_PATH_MAX);
-            strlcat(exact_path, uri_path, FILE_PATH_MAX);
+        // Prøv flere alternative baner for assets
+        if (is_asset) {
+            // Prøv med direkte filnavn for kjente assets
+            char test_path[FILE_PATH_MAX];
+            bool found = false;
             
-            ESP_LOGI(TAG, "Trying exact SPIFFS path: %s", exact_path);
+            if (strstr(uri_path, ".js")) {
+                strlcpy(test_path, "/www/assets/index.js", FILE_PATH_MAX);
+                ESP_LOGI(TAG, "Trying JS fallback path: %s", test_path);
+                if (stat(test_path, &file_stat) != -1) {
+                    strlcpy(filepath, test_path, FILE_PATH_MAX);
+                    found = true;
+                    ESP_LOGI(TAG, "Found JS file with fallback path: %s", filepath);
+                }
+            }
+            else if (strstr(uri_path, ".css")) {
+                strlcpy(test_path, "/www/assets/index.css", FILE_PATH_MAX);
+                ESP_LOGI(TAG, "Trying CSS fallback path: %s", test_path);
+                if (stat(test_path, &file_stat) != -1) {
+                    strlcpy(filepath, test_path, FILE_PATH_MAX);
+                    found = true;
+                    ESP_LOGI(TAG, "Found CSS file with fallback path: %s", filepath);
+                }
+            }
             
-            // Sjekk direkte på den eksakte banen
-            if (stat(exact_path, &file_stat) != -1) {
-                // Dette burde funke!
-                strlcpy(filepath, exact_path, FILE_PATH_MAX);
-                ESP_LOGI(TAG, "Found asset with exact path: %s", filepath);
-            } else {
-                ESP_LOGE(TAG, "Asset file not found with exact path either: %s (errno: %d)", exact_path, errno);
+            if (!found) {
+                ESP_LOGE(TAG, "All fallback paths failed for asset: %s", uri_path);
                 httpd_resp_send_404(req);
                 return ESP_FAIL;
             }
@@ -143,8 +277,6 @@ esp_err_t spiffs_get_handler(httpd_req_t *req) {
             httpd_resp_send_404(req);
             return ESP_FAIL;
         }
-
-
     }
 
     fd = fopen(filepath, "r");
@@ -154,14 +286,16 @@ esp_err_t spiffs_get_handler(httpd_req_t *req) {
         return ESP_FAIL;
     }
 
-    // Sett riktig content-type basert på filendelse
+    // Sett riktig content-type
     const char *dot = strrchr(filepath, '.');
     if (dot && !strcmp(dot, ".html")) {
         httpd_resp_set_type(req, "text/html");
     } else if (dot && !strcmp(dot, ".js")) {
         httpd_resp_set_type(req, "application/javascript");
+        ESP_LOGI(TAG, "Setting content-type: application/javascript for %s", filepath);
     } else if (dot && !strcmp(dot, ".css")) {
         httpd_resp_set_type(req, "text/css");
+        ESP_LOGI(TAG, "Setting content-type: text/css for %s", filepath);
     } else if (dot && !strcmp(dot, ".png")) {
         httpd_resp_set_type(req, "image/png");
     } else if (dot && !strcmp(dot, ".ico")) {
@@ -170,6 +304,11 @@ esp_err_t spiffs_get_handler(httpd_req_t *req) {
         httpd_resp_set_type(req, "image/svg+xml");
     } else {
         httpd_resp_set_type(req, "application/octet-stream");
+    }
+
+    // Sett caching-headers for bedre ytelse
+    if (is_asset) {
+        httpd_resp_set_hdr(req, "Cache-Control", "max-age=86400");
     }
 
     // Send fil-innholdet
@@ -182,31 +321,31 @@ esp_err_t spiffs_get_handler(httpd_req_t *req) {
     }
     
     size_t read_bytes;
+    size_t total_sent = 0;
     ESP_LOGI(TAG, "Beginning file send: %s", filepath);
+    
     do {
         read_bytes = fread(buffer, 1, SPIFFS_READ_SIZE, fd);
         if (read_bytes > 0) {
-            if (httpd_resp_send_chunk(req, buffer, read_bytes) != ESP_OK) {
+            esp_err_t res = httpd_resp_send_chunk(req, buffer, read_bytes);
+            if (res != ESP_OK) {
                 fclose(fd);
                 free(buffer);
-                ESP_LOGE(TAG, "File sending failed!");
+                ESP_LOGE(TAG, "File sending failed! Error: %s", esp_err_to_name(res));
                 httpd_resp_sendstr_chunk(req, NULL);
                 httpd_resp_send_500(req);
                 return ESP_FAIL;
             }
+            total_sent += read_bytes;
         }
     } while (read_bytes > 0);
     
     free(buffer);
     fclose(fd);
-    ESP_LOGI(TAG, "File sent successfully: %s", filepath);
+    ESP_LOGI(TAG, "File sent successfully: %s (Total bytes: %d)", filepath, total_sent);
     httpd_resp_send_chunk(req, NULL, 0);
     return ESP_OK;
 }
-
-
-
-
 
 static httpd_handle_t server = NULL;
 static int ws_clients[MAX_WS_CLIENTS];
@@ -299,8 +438,16 @@ esp_err_t ws_handler(httpd_req_t *req) {
 
 httpd_handle_t start_webserver(void) {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
+    // Øk maks URI-handlere
+    config.max_uri_handlers = 6;
+    // Øk recv/send-bufferstørrelse og timeouts
+    config.recv_wait_timeout = 10;
+    config.send_wait_timeout = 10;
+    
     httpd_handle_t server_handle = NULL;
 
+    ESP_LOGI(TAG, "Starting HTTP server");
+    
     if (httpd_start(&server_handle, &config) == ESP_OK) {
         // WebSocket handler
         httpd_uri_t ws = {
@@ -311,6 +458,33 @@ httpd_handle_t start_webserver(void) {
             .is_websocket = true
         };
         httpd_register_uri_handler(server_handle, &ws);
+        
+        // Debug handler for diagnostikk
+        httpd_uri_t debug = {
+            .uri = "/debug",
+            .method = HTTP_GET,
+            .handler = debug_handler,
+            .user_ctx = "/www"
+        };
+        httpd_register_uri_handler(server_handle, &debug);
+        
+        // Spesifikk handler for JS-filer
+        httpd_uri_t js_files = {
+            .uri = "/assets/*.js",
+            .method = HTTP_GET,
+            .handler = spiffs_get_handler,
+            .user_ctx = "/www"
+        };
+        httpd_register_uri_handler(server_handle, &js_files);
+        
+        // Spesifikk handler for CSS-filer
+        httpd_uri_t css_files = {
+            .uri = "/assets/*.css",
+            .method = HTTP_GET,
+            .handler = spiffs_get_handler,
+            .user_ctx = "/www"
+        };
+        httpd_register_uri_handler(server_handle, &css_files);
         
         // Root URI handler
         httpd_uri_t root = {
@@ -331,6 +505,8 @@ httpd_handle_t start_webserver(void) {
         httpd_register_uri_handler(server_handle, &common);
 
         ESP_LOGI(TAG, "Web server started");
+    } else {
+        ESP_LOGE(TAG, "Failed to start web server!");
     }
 
     return server_handle;
