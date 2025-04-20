@@ -245,7 +245,7 @@ void tcp_client_handler(void *arg) {
                     command[cmd_index] = 0; // Null-terminer kommandostrengen
                     
                     // Logg mottatt kommando
-                    ESP_LOGI(TAG, "Mottatt kommando fra målestolpe %d: %s", pole_idx, command);
+                    //ESP_LOGI(TAG, "Mottatt kommando fra målestolpe %d: %s", pole_idx, command);
                     
                     // Tolke MAC-adresse fra "ID: MAC" kommando hvis den sendes
                     if (strncmp(command, "ID: ", 4) == 0) {
@@ -1472,6 +1472,8 @@ esp_err_t simulate_pole_data_handler(httpd_req_t *req) {
 //
 httpd_handle_t start_webserver(void) {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
+    config.uri_match_fn = httpd_uri_match_wildcard; //Important when when gui-files is hashed
+
     // Øk maks URI-handlere
     config.max_uri_handlers = 20; // Økt fra 6 til 12 for å ha plass til flere handlere
     // Øk recv/send-bufferstørrelse og timeouts
@@ -1504,8 +1506,7 @@ httpd_handle_t start_webserver(void) {
         
         // Spesifikk handler for JS-filer
         httpd_uri_t js_files = {
-            //.uri = "/assets/*.js",
-            .uri = "/assets/index-BdKXx-9K.js",
+            .uri = "/assets/*.js",  //when config.uri_match_fn is set
             .method = HTTP_GET,
             .handler = spiffs_get_handler,
             .user_ctx = "/www"
@@ -1514,8 +1515,7 @@ httpd_handle_t start_webserver(void) {
         
         // Spesifikk handler for CSS-filer
         httpd_uri_t css_files = {
-            //.uri = "/assets/*.css",
-            .uri = "/assets/index-TLBSqdy1.css",
+            .uri = "/assets/*.css", //when config.uri_match_fn is set
             .method = HTTP_GET,
             .handler = spiffs_get_handler,
             .user_ctx = "/www"
