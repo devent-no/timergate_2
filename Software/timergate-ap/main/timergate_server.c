@@ -1,4 +1,7 @@
-//Del 1: Inkluderinger, definisjoner og strukturer
+//
+//--------------- Del 1: Inkluderinger, definisjoner og strukturer ----------------
+//
+
 
 #include <stdio.h>
 #include <string.h>
@@ -78,12 +81,12 @@ static int ws_clients[MAX_WS_CLIENTS];
 static SemaphoreHandle_t ws_mutex;
 
 
+//
+//
+//--------------- Del 2: Hjelpefunksjoner for filsystem og TCP-kommunikasjon ----------------
+//
+//
 
-
-
-
-
-//Del 2: Hjelpefunksjoner for filsystem og TCP-kommunikasjon
 // Legg til en hjelpefunksjon for å liste filer i SPIFFS
 void list_spiffs_files(const char *path) {
     DIR *dir = opendir(path);
@@ -187,11 +190,10 @@ esp_err_t init_fs(void) {
 }
 
 
-
-//
-//
-//Del 3: TCP Server og Client Handler
-//
+// 
+// 
+//--------------- Del 3: TCP Server og Client Handler ---------------- 
+// 
 //
 // Funksjon som håndterer en målestolpes TCP-forbindelse
 void tcp_client_handler(void *arg) {
@@ -254,7 +256,7 @@ void tcp_client_handler(void *arg) {
                         ESP_LOGI(TAG, "Målestolpe %d har MAC: '%s'", pole_idx, tcp_poles[pole_idx].mac);
                     }
                     
-                    //Send direkte til WebSocket-klienter hvis det allerede er JSON-format
+                    // Send direkte til WebSocket-klienter
                     char ws_msg[256];
                     if (command[0] == '{' && strchr(command, '}')) {
                         // Kommandoen er allerede i JSON-format, send direkte
@@ -265,14 +267,6 @@ void tcp_client_handler(void *arg) {
                         sprintf(ws_msg, "{\"M\":\"%s\",\"K\":3,\"cmd\":\"%s\"}", 
                                 tcp_poles[pole_idx].mac, command);
                     }
-
-                    // Send til WebSocket klienter
-                    // Vi må konvertere dataene til JSON-format som WebSocket-klientene forventer
-                    //char ws_msg[256];
-                    //sprintf(ws_msg, "{\"M\":\"%s\",\"K\":3,\"cmd\":\"%s\"}", 
-                    //        tcp_poles[pole_idx].mac, command);
-
-
                     
                     // Send til alle WebSocket-klienter
                     httpd_ws_frame_t ws_pkt = {
@@ -394,11 +388,13 @@ CLEAN_UP:
     vTaskDelete(NULL);
 }
 
-//
-//
-//Del 4: API Handlers (oppdaterte versjoner)
-//
-//
+
+// 
+// 
+//--------------- Del 4: API Handlers (oppdaterte versjoner) ---------------- 
+// 
+// 
+
 // Funksjon for å håndtere tid-synkronisering API (oppdatert versjon)
 esp_err_t time_sync_handler(httpd_req_t *req) {
     char buf[100];
@@ -642,992 +638,977 @@ esp_err_t pole_break_handler(httpd_req_t *req) {
 }
 
 
-//
-//
-// Del 5: Flere API Handlers og WebSocket-håndtering
-//
-//
+// 
+// 
+//--------------- Del 5: Flere API Handlers og WebSocket-håndtering ---------------- 
+// 
+// 
+
 // Oppdatert versjon av pole_enabled_handler
 esp_err_t pole_enabled_handler(httpd_req_t *req) {
-    char buf[100];
-    int ret, remaining = req->content_len;
-    
-    ESP_LOGI(TAG, "pole_enabled_handler called, content_len: %d", remaining);
-    
-    if (remaining > sizeof(buf)) {
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Request too large");
-        return ESP_FAIL;
-    }
-    
-    if ((ret = httpd_req_recv(req, buf, MIN(remaining, sizeof(buf)))) <= 0) {
-        if (ret == HTTPD_SOCK_ERR_TIMEOUT) {
-            httpd_resp_send_408(req);
-        }
-        return ESP_FAIL;
-    }
-    
-    buf[ret] = '\0';
-    ESP_LOGI(TAG, "Mottok data: %s", buf);
-    
-    // Parse JSON data
-    char mac[18] = {0};
-    int sensor_nr = -1;
-    int enabled = -1;
-    
-    // Finn MAC-adressen
-    char *mac_start = strstr(buf, "\"mac\":\"");
-    if (mac_start) {
-        mac_start += 7; // Hopp over "mac":"
-        char *mac_end = strchr(mac_start, '\"');
-        if (mac_end && (mac_end - mac_start) < 18) {
-            strncpy(mac, mac_start, mac_end - mac_start);
-            mac[mac_end - mac_start] = '\0';
-        }
-    }
-    
-    // Finn sensor_nr
-    char *sensor_start = strstr(buf, "\"sensor_nr\":");
-    if (sensor_start) {
-        sensor_start += 12; // Hopp over "sensor_nr":
-        sensor_nr = atoi(sensor_start);
-    }
-    
-    // Finn enabled
-    char *enabled_start = strstr(buf, "\"enabled\":");
-    if (enabled_start) {
-        enabled_start += 10; // Hopp over "enabled":
-        enabled = atoi(enabled_start);
-    }
-    
-    ESP_LOGI(TAG, "Parsed values - MAC: %s, Sensor: %d, Enabled: %d", mac, sensor_nr, enabled);
-    
-    if (strlen(mac) > 0 && sensor_nr >= 0 && (enabled == 0 || enabled == 1)) {
-        // Bygg kommandoen som skal sendes til målestolpen
-        char command[64];
-        sprintf(command, "enabled: %d %d\n", sensor_nr, enabled);
-        
-        // Send kommandoen
-        if (send_command_to_pole_by_mac(mac, command)) {
-            ESP_LOGI(TAG, "Kommando sendt: %s", command);
-        } else {
-            ESP_LOGW(TAG, "Kunne ikke sende kommando - målestolpe ikke tilkoblet");
-        }
-    } else {
-        ESP_LOGW(TAG, "Ugyldig forespørsel - mangler data");
-    }
-    
-    httpd_resp_set_type(req, "application/json");
-    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
-    httpd_resp_sendstr(req, "{\"status\":\"success\",\"message\":\"Sensor enabled status updated\"}");
-    
-    return ESP_OK;
+   char buf[100];
+   int ret, remaining = req->content_len;
+   
+   ESP_LOGI(TAG, "pole_enabled_handler called, content_len: %d", remaining);
+   
+   if (remaining > sizeof(buf)) {
+       httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Request too large");
+       return ESP_FAIL;
+   }
+   
+   if ((ret = httpd_req_recv(req, buf, MIN(remaining, sizeof(buf)))) <= 0) {
+       if (ret == HTTPD_SOCK_ERR_TIMEOUT) {
+           httpd_resp_send_408(req);
+       }
+       return ESP_FAIL;
+   }
+   
+   buf[ret] = '\0';
+   ESP_LOGI(TAG, "Mottok data: %s", buf);
+   
+   // Parse JSON data
+   char mac[18] = {0};
+   int sensor_nr = -1;
+   int enabled = -1;
+   
+   // Finn MAC-adressen
+   char *mac_start = strstr(buf, "\"mac\":\"");
+   if (mac_start) {
+       mac_start += 7; // Hopp over "mac":"
+       char *mac_end = strchr(mac_start, '\"');
+       if (mac_end && (mac_end - mac_start) < 18) {
+           strncpy(mac, mac_start, mac_end - mac_start);
+           mac[mac_end - mac_start] = '\0';
+       }
+   }
+   
+   // Finn sensor_nr
+   char *sensor_start = strstr(buf, "\"sensor_nr\":");
+   if (sensor_start) {
+       sensor_start += 12; // Hopp over "sensor_nr":
+       sensor_nr = atoi(sensor_start);
+   }
+   
+   // Finn enabled
+   char *enabled_start = strstr(buf, "\"enabled\":");
+   if (enabled_start) {
+       enabled_start += 10; // Hopp over "enabled":
+       enabled = atoi(enabled_start);
+   }
+   
+   ESP_LOGI(TAG, "Parsed values - MAC: %s, Sensor: %d, Enabled: %d", mac, sensor_nr, enabled);
+   
+   if (strlen(mac) > 0 && sensor_nr >= 0 && (enabled == 0 || enabled == 1)) {
+       // Bygg kommandoen som skal sendes til målestolpen
+       char command[64];
+       sprintf(command, "enabled: %d %d\n", sensor_nr, enabled);
+       
+       // Send kommandoen
+       if (send_command_to_pole_by_mac(mac, command)) {
+           ESP_LOGI(TAG, "Kommando sendt: %s", command);
+       } else {
+           ESP_LOGW(TAG, "Kunne ikke sende kommando - målestolpe ikke tilkoblet");
+       }
+   } else {
+       ESP_LOGW(TAG, "Ugyldig forespørsel - mangler data");
+   }
+   
+   httpd_resp_set_type(req, "application/json");
+   httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+   httpd_resp_sendstr(req, "{\"status\":\"success\",\"message\":\"Sensor enabled status updated\"}");
+   
+   return ESP_OK;
 }
 
 // Funksjon for å håndtere OPTIONS forespørsler (CORS preflight)
 esp_err_t options_handler(httpd_req_t *req) {
-    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
-    httpd_resp_set_hdr(req, "Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-    httpd_resp_set_hdr(req, "Access-Control-Allow-Headers", "Content-Type, Accept, X-Requested-With");
-    httpd_resp_send(req, NULL, 0);
-    return ESP_OK;
+   httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+   httpd_resp_set_hdr(req, "Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+   httpd_resp_set_hdr(req, "Access-Control-Allow-Headers", "Content-Type, Accept, X-Requested-With");
+   httpd_resp_send(req, NULL, 0);
+   return ESP_OK;
 }
 
 // WebSocket-relaterte funksjoner
-char *generate_real_data() {
-    static char json_msg[512];
-    static uint32_t last_log_time = 0;
-    const uint32_t log_interval_ms = 5000; // Logg bare hvert 5. sekund
-    uint32_t current_time = esp_timer_get_time() / 1000;
-    bool should_log = (current_time - last_log_time) >= log_interval_ms;
-    
-    // Ta låsen før vi leser pole_data
-    xSemaphoreTake(pole_data_mutex, portMAX_DELAY);
-    
-    // Sjekk om vi har noen tilkoblede målestolper
-    bool has_tcp_poles = false;
-    xSemaphoreTake(tcp_poles_mutex, portMAX_DELAY);
-    for (int i = 0; i < MAX_TCP_POLES; i++) {
-        if (tcp_poles[i].connected) {
-            has_tcp_poles = true;
-            break;
-        }
-    }
-    xSemaphoreGive(tcp_poles_mutex);
-    
-    if (has_tcp_poles) {
-        // Hvis vi har TCP-forbindelser, men ingen ESP-NOW data ennå
-        if (pole_count == 0) {
-            sprintf(json_msg, "{\"type\":\"waiting\",\"message\":\"Målestolper tilkoblet via TCP, venter på data\"}");
-        }
-    } else if (pole_count == 0) {
-        if (should_log) {
-            ESP_LOGI(TAG, "Ingen målestolper registrert ennå");
-            last_log_time = current_time;
-        }
-        sprintf(json_msg, "{\"type\":\"no_poles\",\"message\":\"Ingen målestolper tilkoblet\"}");
-        xSemaphoreGive(pole_data_mutex);
-        return json_msg;
-    }
-    
-    // Finn en pole med ADC-data (k=0) først
-    int adc_idx = -1;
-    for (int i = 0; i < pole_count; i++) {
-        if (pole_data[i].k == 0) {
-            adc_idx = i;
-            break;
-        }
-    }
-    
-    // Finn en pole med break-event (k=1)
-    int break_idx = -1;
-    for (int i = 0; i < pole_count; i++) {
-        if (pole_data[i].k == 1) {
-            break_idx = i;
-            break;
-        }
-    }
-    
-    // Prioriter å sende break-event hvis tilgjengelig
-    if (break_idx >= 0) {
-        // Generer JSON for break-event
-        char mac_str[18];
-        sprintf(mac_str, "%02x:%02x:%02x:%02x:%02x:%02x", 
-                pole_data[break_idx].mac[0], pole_data[break_idx].mac[1], pole_data[break_idx].mac[2],
-                pole_data[break_idx].mac[3], pole_data[break_idx].mac[4], pole_data[break_idx].mac[5]);
-        
-        sprintf(json_msg, 
-                "{\"M\":\"%s\",\"K\":1,\"T\":%" PRIu32 ",\"U\":%" PRIu32 ",\"B\":1}",
-                mac_str, pole_data[break_idx].t, pole_data[break_idx].u);
-        
-        ESP_LOGI(TAG, "Sending break event data: %s", json_msg);
-        
-        // Fjern flagget for å indikere at denne har blitt sendt
-        pole_data[break_idx].k = 0;  // Reset til ADC-modus
-    }
-    // Ellers send ADC-data hvis tilgjengelig
-    else if (adc_idx >= 0) {
-        // Generer JSON med ADC-data i formatet GUI-et forventer
-        char mac_str[18];
-        sprintf(mac_str, "%02x:%02x:%02x:%02x:%02x:%02x", 
-                pole_data[adc_idx].mac[0], pole_data[adc_idx].mac[1], pole_data[adc_idx].mac[2],
-                pole_data[adc_idx].mac[3], pole_data[adc_idx].mac[4], pole_data[adc_idx].mac[5]);
-        
-        sprintf(json_msg, 
-                "{\"M\":\"%s\",\"K\":0,\"T\":%" PRIu32 ",\"U\":%" PRIu32 ",\"V\":[%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 "],\"B\":[%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 "]}",
-                mac_str, pole_data[adc_idx].t, pole_data[adc_idx].u,
-                pole_data[adc_idx].v[0], pole_data[adc_idx].v[1], pole_data[adc_idx].v[2], 
-                pole_data[adc_idx].v[3], pole_data[adc_idx].v[4], pole_data[adc_idx].v[5], pole_data[adc_idx].v[6],
-                pole_data[adc_idx].b[0], pole_data[adc_idx].b[1], pole_data[adc_idx].b[2], 
-                pole_data[adc_idx].b[3], pole_data[adc_idx].b[4], pole_data[adc_idx].b[5], pole_data[adc_idx].b[6]);
-        
-        ESP_LOGI(TAG, "Sending ADC data: MAC=%s, values=[%" PRId32 ",%" PRId32 ",...], broken=[%" PRId32 ",%" PRId32 ",...]",
-                mac_str, pole_data[adc_idx].v[0], pole_data[adc_idx].v[1], 
-                pole_data[adc_idx].b[0], pole_data[adc_idx].b[1]);
-    } 
-    // Ingen relevant data funnet
-    else {
-        sprintf(json_msg, "{\"type\":\"waiting\",\"message\":\"Målestolper tilkoblet, venter på data\"}");
-        ESP_LOGI(TAG, "No relevant data available from poles yet");
-    }
-    
-    xSemaphoreGive(pole_data_mutex);
-    return json_msg;
-}
-
-void ws_broadcast_task(void *pvParameter) {
-    static uint32_t last_log_time = 0;
-    const uint32_t log_interval_ms = 5000; // Logg bare hvert 5. sekund
-    
-    while (1) {
-        if (server == NULL) {
-            vTaskDelay(pdMS_TO_TICKS(1000));
-            continue;
-        }
-
-        // Få gjeldende millis-verdi
-        uint32_t current_time = esp_timer_get_time() / 1000;
-        bool should_log = (current_time - last_log_time) >= log_interval_ms;
-        
-        // Bruk reelle data i stedet for mock-data
-        char *msg = generate_real_data();
-        
-        // Logg bare med jevne mellomrom
-        if (should_log) {
-            ESP_LOGI(TAG, "Broadcasting WebSocket message: %s", msg);
-            last_log_time = current_time;
-        }
-        
-        httpd_ws_frame_t ws_pkt = {
-            .final = true,
-            .fragmented = false,
-            .type = HTTPD_WS_TYPE_TEXT,
-            .payload = (uint8_t *)msg,
-            .len = strlen(msg)
-        };
-
-        int active_clients = 0;
-        
-        xSemaphoreTake(ws_mutex, portMAX_DELAY);
-        for (int i = 0; i < MAX_WS_CLIENTS; ++i) {
-            if (ws_clients[i] != 0) {
-                esp_err_t ret = httpd_ws_send_frame_async(server, ws_clients[i], &ws_pkt);
-                if (ret != ESP_OK) {
-                    ESP_LOGW(TAG, "WebSocket send failed to fd %d: %s", ws_clients[i], esp_err_to_name(ret));
-                    ws_clients[i] = 0;
-                } else {
-                    active_clients++;
-                }
-            }
-        }
-        
-        // Logg bare med jevne mellomrom
-        if (should_log) {
-            ESP_LOGI(TAG, "WebSocket broadcast complete - sent to %d active clients", active_clients);
-        }
-        
-        xSemaphoreGive(ws_mutex);
-
-        // Du kan beholde den høye oppdateringsfrekvensen til WebSocket
-        vTaskDelay(pdMS_TO_TICKS(200));
-    }
-}
-
 esp_err_t ws_handler(httpd_req_t *req) {
-    if (req->method == HTTP_GET) {
-        ESP_LOGI(TAG, "Handshake done, the new connection was opened");
-        int fd = httpd_req_to_sockfd(req);
+   if (req->method == HTTP_GET) {
+       ESP_LOGI(TAG, "Handshake done, the new connection was opened");
+       int fd = httpd_req_to_sockfd(req);
 
-        xSemaphoreTake(ws_mutex, portMAX_DELAY);
-        for (int i = 0; i < MAX_WS_CLIENTS; ++i) {
-            if (ws_clients[i] == 0) {
-                ws_clients[i] = fd;
-                break;
-            }
-        }
-        xSemaphoreGive(ws_mutex);
-        return ESP_OK;
-    }
+       xSemaphoreTake(ws_mutex, portMAX_DELAY);
+       for (int i = 0; i < MAX_WS_CLIENTS; ++i) {
+           if (ws_clients[i] == 0) {
+               ws_clients[i] = fd;
+               break;
+           }
+       }
+       xSemaphoreGive(ws_mutex);
+       return ESP_OK;
+   }
 
-    httpd_ws_frame_t frame = {
-        .final = true,
-        .fragmented = false,
-        .type = HTTPD_WS_TYPE_TEXT
-    };
+   httpd_ws_frame_t frame = {
+       .final = true,
+       .fragmented = false,
+       .type = HTTPD_WS_TYPE_TEXT
+   };
 
-    esp_err_t ret = httpd_ws_recv_frame(req, &frame, 0);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to get frame length: %s", esp_err_to_name(ret));
-        return ret;
-    }
+   esp_err_t ret = httpd_ws_recv_frame(req, &frame, 0);
+   if (ret != ESP_OK) {
+       ESP_LOGE(TAG, "Failed to get frame length: %s", esp_err_to_name(ret));
+       return ret;
+   }
 
-    frame.payload = malloc(frame.len + 1);
-    if (!frame.payload) {
-        return ESP_ERR_NO_MEM;
-    }
+   frame.payload = malloc(frame.len + 1);
+   if (!frame.payload) {
+       return ESP_ERR_NO_MEM;
+   }
 
-    ret = httpd_ws_recv_frame(req, &frame, frame.len);
-    if (ret != ESP_OK) {
-        free(frame.payload);
-        return ret;
-    }
+   ret = httpd_ws_recv_frame(req, &frame, frame.len);
+   if (ret != ESP_OK) {
+       free(frame.payload);
+       return ret;
+   }
 
-    ((char *)frame.payload)[frame.len] = 0;
-    ESP_LOGI(TAG, "Received message: %s", (char *)frame.payload);
-    free(frame.payload);
-    return ESP_OK;
+   ((char *)frame.payload)[frame.len] = 0;
+   ESP_LOGI(TAG, "Received message: %s", (char *)frame.payload);
+   free(frame.payload);
+   return ESP_OK;
 }
 
 
 
+// 
+// 
+//--------------- Del 6: Filsystem og testing ---------------- 
+// 
+//
 
-//
-//
-// Del 6: Filsystem og testing
-//
-//
 esp_err_t debug_handler(httpd_req_t *req) {
-    ESP_LOGI(TAG, "DEBUG handler called");
-    
-    httpd_resp_set_type(req, "text/plain");
-    
-    // Start med å sende en header
-    httpd_resp_sendstr_chunk(req, "SPIFFS Filesystem Debug Info:\n\n");
-    
-    // Sjekk /www-mappen - send resultater i små deler
-    DIR *dir = opendir("/www");
-    if (dir) {
-        httpd_resp_sendstr_chunk(req, "Files in /www directory:\n");
-        struct dirent *entry;
-        while ((entry = readdir(dir)) != NULL) {
-            struct stat st;
-            char path[FILE_PATH_MAX];
-            snprintf(path, sizeof(path), "/www/%s", entry->d_name);
-            
-            if (stat(path, &st) == 0) {
-                // Send hvert filnavn som en separat chunk
-                char file_info[64]; // Mindre buffer for hver fil
-                
-                // Begrens filnavnlengden for sikkerhets skyld
-                char safe_name[32];
-                strlcpy(safe_name, entry->d_name, sizeof(safe_name));
-                
-                snprintf(file_info, sizeof(file_info), "  %s (%ld bytes)\n", safe_name, st.st_size);
-                httpd_resp_sendstr_chunk(req, file_info);
-            }
-        }
-        closedir(dir);
-        httpd_resp_sendstr_chunk(req, "\n");
-    } else {
-        httpd_resp_sendstr_chunk(req, "Failed to open /www directory\n\n");
-    }
-    
-    // Sjekk /www/assets-mappen
-    dir = opendir("/www/assets");
-    if (dir) {
-        httpd_resp_sendstr_chunk(req, "Files in /www/assets directory:\n");
-        struct dirent *entry;
-        while ((entry = readdir(dir)) != NULL) {
-            struct stat st;
-            char path[FILE_PATH_MAX];
-            snprintf(path, sizeof(path), "/www/assets/%s", entry->d_name);
-            
-            if (stat(path, &st) == 0) {
-                // Send hvert filnavn som en separat chunk
-                char file_info[64];
-                
-                // Begrens filnavnlengden
-                char safe_name[32];
-                strlcpy(safe_name, entry->d_name, sizeof(safe_name));
-                
-                snprintf(file_info, sizeof(file_info), "  %s (%ld bytes)\n", safe_name, st.st_size);
-                httpd_resp_sendstr_chunk(req, file_info);
-            }
-        }
-        closedir(dir);
-        httpd_resp_sendstr_chunk(req, "\n");
-    } else {
-        httpd_resp_sendstr_chunk(req, "Failed to open /www/assets directory\n");
-    }
-    
-    // Sjekk TCP-forbindelser
-    httpd_resp_sendstr_chunk(req, "\nTCP Connection Status:\n");
-    
-    xSemaphoreTake(tcp_poles_mutex, portMAX_DELAY);
-    for (int i = 0; i < MAX_TCP_POLES; i++) {
-        char pole_info[100];
-        if (tcp_poles[i].connected) {
-            snprintf(pole_info, sizeof(pole_info), "  Pole %d: Connected, Socket: %d, MAC: %s\n", 
-                     i, tcp_poles[i].sock, tcp_poles[i].mac[0] ? tcp_poles[i].mac : "Unknown");
-        } else {
-            snprintf(pole_info, sizeof(pole_info), "  Pole %d: Not connected\n", i);
-        }
-        httpd_resp_sendstr_chunk(req, pole_info);
-    }
-    xSemaphoreGive(tcp_poles_mutex);
-    
-    // Avslutt responsen med en tom chunk
-    httpd_resp_sendstr_chunk(req, NULL);
-    return ESP_OK;
+   ESP_LOGI(TAG, "DEBUG handler called");
+   
+   httpd_resp_set_type(req, "text/plain");
+   
+   // Start med å sende en header
+   httpd_resp_sendstr_chunk(req, "SPIFFS Filesystem Debug Info:\n\n");
+   
+   // Sjekk /www-mappen - send resultater i små deler
+   DIR *dir = opendir("/www");
+   if (dir) {
+       httpd_resp_sendstr_chunk(req, "Files in /www directory:\n");
+       struct dirent *entry;
+       while ((entry = readdir(dir)) != NULL) {
+           struct stat st;
+           char path[FILE_PATH_MAX];
+           snprintf(path, sizeof(path), "/www/%s", entry->d_name);
+           
+           if (stat(path, &st) == 0) {
+               // Send hvert filnavn som en separat chunk
+               char file_info[64]; // Mindre buffer for hver fil
+               
+               // Begrens filnavnlengden for sikkerhets skyld
+               char safe_name[32];
+               strlcpy(safe_name, entry->d_name, sizeof(safe_name));
+               
+               snprintf(file_info, sizeof(file_info), "  %s (%ld bytes)\n", safe_name, st.st_size);
+               httpd_resp_sendstr_chunk(req, file_info);
+           }
+       }
+       closedir(dir);
+       httpd_resp_sendstr_chunk(req, "\n");
+   } else {
+       httpd_resp_sendstr_chunk(req, "Failed to open /www directory\n\n");
+   }
+   
+   // Sjekk /www/assets-mappen
+   dir = opendir("/www/assets");
+   if (dir) {
+       httpd_resp_sendstr_chunk(req, "Files in /www/assets directory:\n");
+       struct dirent *entry;
+       while ((entry = readdir(dir)) != NULL) {
+           struct stat st;
+           char path[FILE_PATH_MAX];
+           snprintf(path, sizeof(path), "/www/assets/%s", entry->d_name);
+           
+           if (stat(path, &st) == 0) {
+               // Send hvert filnavn som en separat chunk
+               char file_info[64];
+               
+               // Begrens filnavnlengden
+               char safe_name[32];
+               strlcpy(safe_name, entry->d_name, sizeof(safe_name));
+               
+               snprintf(file_info, sizeof(file_info), "  %s (%ld bytes)\n", safe_name, st.st_size);
+               httpd_resp_sendstr_chunk(req, file_info);
+           }
+       }
+       closedir(dir);
+       httpd_resp_sendstr_chunk(req, "\n");
+   } else {
+       httpd_resp_sendstr_chunk(req, "Failed to open /www/assets directory\n");
+   }
+   
+   // Sjekk TCP-forbindelser
+   httpd_resp_sendstr_chunk(req, "\nTCP Connection Status:\n");
+   
+   xSemaphoreTake(tcp_poles_mutex, portMAX_DELAY);
+   for (int i = 0; i < MAX_TCP_POLES; i++) {
+       char pole_info[100];
+       if (tcp_poles[i].connected) {
+           snprintf(pole_info, sizeof(pole_info), "  Pole %d: Connected, Socket: %d, MAC: %s\n", 
+                    i, tcp_poles[i].sock, tcp_poles[i].mac[0] ? tcp_poles[i].mac : "Unknown");
+       } else {
+           snprintf(pole_info, sizeof(pole_info), "  Pole %d: Not connected\n", i);
+       }
+       httpd_resp_sendstr_chunk(req, pole_info);
+   }
+   xSemaphoreGive(tcp_poles_mutex);
+   
+   // Avslutt responsen med en tom chunk
+   httpd_resp_sendstr_chunk(req, NULL);
+   return ESP_OK;
 }
 
 esp_err_t spiffs_get_handler(httpd_req_t *req) {
-    char filepath[FILE_PATH_MAX];
-    FILE *fd = NULL;
-    struct stat file_stat;
-    
-    const char *base_path = (const char*) req->user_ctx;
-    const char *uri_path = req->uri;
+   char filepath[FILE_PATH_MAX];
+   FILE *fd = NULL;
+   struct stat file_stat;
+   
+   const char *base_path = (const char*) req->user_ctx;
+   const char *uri_path = req->uri;
 
-    ESP_LOGI(TAG, "Requested URI: %s", uri_path);
-    
-    // Hvis URI-en er /, bruk /index.html
-    if (strcmp(uri_path, "/") == 0) {
-        uri_path = "/index.html";
-        ESP_LOGI(TAG, "Root URI requested, using %s", uri_path);
-    }
-    
-    // Spesialbehandling for assets
-    bool is_asset = strstr(uri_path, "/assets/") == uri_path;
-    if (is_asset) {
-        ESP_LOGI(TAG, "Asset request detected: %s", uri_path);
-    }
-    
-    // Konstruer filsti
-    size_t base_len = strlen(base_path);
-    size_t uri_len = strlen(uri_path);
-    size_t total_len = base_len + uri_len + 1;
-    
-    if (total_len > FILE_PATH_MAX) {
-        ESP_LOGE(TAG, "File path too long: %d > %d", (int)total_len, FILE_PATH_MAX);
-        httpd_resp_send_500(req);
-        return ESP_FAIL;
-    }
-    
-    strlcpy(filepath, base_path, FILE_PATH_MAX);
-    strlcat(filepath, uri_path, FILE_PATH_MAX);
+   ESP_LOGI(TAG, "Requested URI: %s", uri_path);
+   
+   // Hvis URI-en er /, bruk /index.html
+   if (strcmp(uri_path, "/") == 0) {
+       uri_path = "/index.html";
+       ESP_LOGI(TAG, "Root URI requested, using %s", uri_path);
+   }
+   
+   // Spesialbehandling for assets
+   bool is_asset = strstr(uri_path, "/assets/") == uri_path;
+   if (is_asset) {
+       ESP_LOGI(TAG, "Asset request detected: %s", uri_path);
+   }
+   
+   // Konstruer filsti
+   size_t base_len = strlen(base_path);
+   size_t uri_len = strlen(uri_path);
+   size_t total_len = base_len + uri_len + 1;
+   
+   if (total_len > FILE_PATH_MAX) {
+       ESP_LOGE(TAG, "File path too long: %d > %d", (int)total_len, FILE_PATH_MAX);
+       httpd_resp_send_500(req);
+       return ESP_FAIL;
+   }
+   
+   strlcpy(filepath, base_path, FILE_PATH_MAX);
+   strlcat(filepath, uri_path, FILE_PATH_MAX);
 
-    ESP_LOGI(TAG, "Full filepath: %s", filepath);
+   ESP_LOGI(TAG, "Full filepath: %s", filepath);
 
-    // Sjekk om filen eksisterer
-    if (stat(filepath, &file_stat) == -1) {
-        ESP_LOGE(TAG, "Failed to stat file: %s (errno: %d)", filepath, errno);
-        
-        // Prøv flere alternative baner for assets
-        if (is_asset) {
-            // Prøv med direkte filnavn for kjente assets
-            char test_path[FILE_PATH_MAX];
-            bool found = false;
-            
-            if (strstr(uri_path, ".js")) {
-                strlcpy(test_path, "/www/assets/index.js", FILE_PATH_MAX);
-                ESP_LOGI(TAG, "Trying JS fallback path: %s", test_path);
-                if (stat(test_path, &file_stat) != -1) {
-                    strlcpy(filepath, test_path, FILE_PATH_MAX);
-                    found = true;
-                    ESP_LOGI(TAG, "Found JS file with fallback path: %s", filepath);
-                }
-            }
-            else if (strstr(uri_path, ".css")) {
-                strlcpy(test_path, "/www/assets/index.css", FILE_PATH_MAX);
-                ESP_LOGI(TAG, "Trying CSS fallback path: %s", test_path);
-                if (stat(test_path, &file_stat) != -1) {
-                    strlcpy(filepath, test_path, FILE_PATH_MAX);
-                    found = true;
-                    ESP_LOGI(TAG, "Found CSS file with fallback path: %s", filepath);
-                }
-            }
-            
-            if (!found) {
-                ESP_LOGE(TAG, "All fallback paths failed for asset: %s", uri_path);
-                httpd_resp_send_404(req);
-                return ESP_FAIL;
-            }
-        } else {
-            httpd_resp_send_404(req);
-            return ESP_FAIL;
-        }
-    }
+   // Sjekk om filen eksisterer
+   if (stat(filepath, &file_stat) == -1) {
+       ESP_LOGE(TAG, "Failed to stat file: %s (errno: %d)", filepath, errno);
+       
+       // Prøv flere alternative baner for assets
+       if (is_asset) {
+           // Prøv med direkte filnavn for kjente assets
+           char test_path[FILE_PATH_MAX];
+           bool found = false;
+           
+           if (strstr(uri_path, ".js")) {
+               strlcpy(test_path, "/www/assets/index.js", FILE_PATH_MAX);
+               ESP_LOGI(TAG, "Trying JS fallback path: %s", test_path);
+               if (stat(test_path, &file_stat) != -1) {
+                   strlcpy(filepath, test_path, FILE_PATH_MAX);
+                   found = true;
+                   ESP_LOGI(TAG, "Found JS file with fallback path: %s", filepath);
+               }
+           }
+           else if (strstr(uri_path, ".css")) {
+               strlcpy(test_path, "/www/assets/index.css", FILE_PATH_MAX);
+               ESP_LOGI(TAG, "Trying CSS fallback path: %s", test_path);
+               if (stat(test_path, &file_stat) != -1) {
+                   strlcpy(filepath, test_path, FILE_PATH_MAX);
+                   found = true;
+                   ESP_LOGI(TAG, "Found CSS file with fallback path: %s", filepath);
+               }
+           }
+           
+           if (!found) {
+               ESP_LOGE(TAG, "All fallback paths failed for asset: %s", uri_path);
+               httpd_resp_send_404(req);
+               return ESP_FAIL;
+           }
+       } else {
+           httpd_resp_send_404(req);
+           return ESP_FAIL;
+       }
+   }
 
-    fd = fopen(filepath, "r");
-    if (!fd) {
-        ESP_LOGE(TAG, "Failed to open file: %s (errno: %d)", filepath, errno);
-        httpd_resp_send_404(req);
-        return ESP_FAIL;
-    }
+   fd = fopen(filepath, "r");
+   if (!fd) {
+       ESP_LOGE(TAG, "Failed to open file: %s (errno: %d)", filepath, errno);
+       httpd_resp_send_404(req);
+       return ESP_FAIL;
+   }
 
-    // Sett riktig content-type
-    const char *dot = strrchr(filepath, '.');
-    if (dot && !strcmp(dot, ".html")) {
-        httpd_resp_set_type(req, "text/html");
-    } else if (dot && !strcmp(dot, ".js")) {
-        httpd_resp_set_type(req, "application/javascript");
-        ESP_LOGI(TAG, "Setting content-type: application/javascript for %s", filepath);
-    } else if (dot && !strcmp(dot, ".css")) {
-        httpd_resp_set_type(req, "text/css");
-        ESP_LOGI(TAG, "Setting content-type: text/css for %s", filepath);
-    } else if (dot && !strcmp(dot, ".png")) {
-        httpd_resp_set_type(req, "image/png");
-    } else if (dot && !strcmp(dot, ".ico")) {
-        httpd_resp_set_type(req, "image/x-icon");
-    } else if (dot && !strcmp(dot, ".svg")) {
-        httpd_resp_set_type(req, "image/svg+xml");
-    } else {
-        httpd_resp_set_type(req, "application/octet-stream");
-    }
+   // Sett riktig content-type
+   const char *dot = strrchr(filepath, '.');
+   if (dot && !strcmp(dot, ".html")) {
+       httpd_resp_set_type(req, "text/html");
+   } else if (dot && !strcmp(dot, ".js")) {
+       httpd_resp_set_type(req, "application/javascript");
+       ESP_LOGI(TAG, "Setting content-type: application/javascript for %s", filepath);
+   } else if (dot && !strcmp(dot, ".css")) {
+       httpd_resp_set_type(req, "text/css");
+       ESP_LOGI(TAG, "Setting content-type: text/css for %s", filepath);
+   } else if (dot && !strcmp(dot, ".png")) {
+       httpd_resp_set_type(req, "image/png");
+   } else if (dot && !strcmp(dot, ".ico")) {
+       httpd_resp_set_type(req, "image/x-icon");
+   } else if (dot && !strcmp(dot, ".svg")) {
+       httpd_resp_set_type(req, "image/svg+xml");
+   } else {
+       httpd_resp_set_type(req, "application/octet-stream");
+   }
 
-    // Sett caching-headers for bedre ytelse
-    if (is_asset) {
-        httpd_resp_set_hdr(req, "Cache-Control", "max-age=86400");
-    }
+   // Sett caching-headers for bedre ytelse
+   if (is_asset) {
+       httpd_resp_set_hdr(req, "Cache-Control", "max-age=86400");
+   }
 
-    // Send fil-innholdet
-    char *buffer = malloc(SPIFFS_READ_SIZE);
-    if (!buffer) {
-        fclose(fd);
-        ESP_LOGE(TAG, "Failed to allocate memory for file reading");
-        httpd_resp_send_500(req);
-        return ESP_FAIL;
-    }
-    
-    size_t read_bytes;
-    size_t total_sent = 0;
-    ESP_LOGI(TAG, "Beginning file send: %s", filepath);
-    
-    do {
-        read_bytes = fread(buffer, 1, SPIFFS_READ_SIZE, fd);
-        if (read_bytes > 0) {
-            esp_err_t res = httpd_resp_send_chunk(req, buffer, read_bytes);
-            if (res != ESP_OK) {
-                fclose(fd);
-                free(buffer);
-                ESP_LOGE(TAG, "File sending failed! Error: %s", esp_err_to_name(res));
-                httpd_resp_sendstr_chunk(req, NULL);
-                httpd_resp_send_500(req);
-                return ESP_FAIL;
-            }
-            total_sent += read_bytes;
-        }
-    } while (read_bytes > 0);
-    
-    free(buffer);
-    fclose(fd);
-    ESP_LOGI(TAG, "File sent successfully: %s (Total bytes: %d)", filepath, total_sent);
-    httpd_resp_send_chunk(req, NULL, 0);
-    return ESP_OK;
+   // Send fil-innholdet
+   char *buffer = malloc(SPIFFS_READ_SIZE);
+   if (!buffer) {
+       fclose(fd);
+       ESP_LOGE(TAG, "Failed to allocate memory for file reading");
+       httpd_resp_send_500(req);
+       return ESP_FAIL;
+   }
+   
+   size_t read_bytes;
+   size_t total_sent = 0;
+   ESP_LOGI(TAG, "Beginning file send: %s", filepath);
+   
+   do {
+       read_bytes = fread(buffer, 1, SPIFFS_READ_SIZE, fd);
+       if (read_bytes > 0) {
+           esp_err_t res = httpd_resp_send_chunk(req, buffer, read_bytes);
+           if (res != ESP_OK) {
+               fclose(fd);
+               free(buffer);
+               ESP_LOGE(TAG, "File sending failed! Error: %s", esp_err_to_name(res));
+               httpd_resp_sendstr_chunk(req, NULL);
+               httpd_resp_send_500(req);
+               return ESP_FAIL;
+           }
+           total_sent += read_bytes;
+       }
+   } while (read_bytes > 0);
+   
+   free(buffer);
+   fclose(fd);
+   ESP_LOGI(TAG, "File sent successfully: %s (Total bytes: %d)", filepath, total_sent);
+   httpd_resp_send_chunk(req, NULL, 0);
+   return ESP_OK;
 }
 
 
+
+// 
+// 
+//--------------- Del 7: ESP-NOW og Test-funksjoner ---------------- 
+// 
 //
-//
-// Del 7: ESP-NOW og Test-funksjoner
-//
-//
+
 // ESP-NOW mottaker callback
 void esp_now_recv_cb(const esp_now_recv_info_t *recv_info, const uint8_t *data, int len) {
-    // Hent MAC-adressen fra recv_info
-    const uint8_t *mac_addr = recv_info->src_addr;
-    
-    ESP_LOGI(TAG, "ESP-NOW data mottatt fra %02x:%02x:%02x:%02x:%02x:%02x, len=%d", 
-             mac_addr[0], mac_addr[1], mac_addr[2], mac_addr[3], mac_addr[4], mac_addr[5], len);
-    
-    // Sjekk at lengden er riktig for vår struktur
-    if (len < 10) {
-        ESP_LOGE(TAG, "Mottok data med feil lengde: %d (forventet minst 10 bytes)", len);
-        return;
-    }
-    
-    // Logg raw data for debugging
-    ESP_LOGI(TAG, "Data header: k=%d, t=%02x%02x%02x%02x, u=%02x%02x%02x%02x", 
-             data[0], 
-             data[1], data[2], data[3], data[4],
-             data[5], data[6], data[7], data[8]);
-    
-    xSemaphoreTake(pole_data_mutex, portMAX_DELAY);
-    
-    // Finn pole i vår liste eller legg til en ny
-    int pole_idx = -1;
-    for (int i = 0; i < pole_count; i++) {
-        if (memcmp(pole_data[i].mac, mac_addr, ESP_NOW_ETH_ALEN) == 0) {
-            pole_idx = i;
-            break;
-        }
-    }
-    
-    if (pole_idx < 0 && pole_count < MAX_POLES) {
-        pole_idx = pole_count++;
-        memcpy(pole_data[pole_idx].mac, mac_addr, ESP_NOW_ETH_ALEN);
-        ESP_LOGI(TAG, "Ny målestolpe lagt til, indeks=%d, totalt: %d", pole_idx, pole_count);
-    } else if (pole_idx < 0) {
-        ESP_LOGW(TAG, "Maks antall målestolper nådd (%d), ignorerer ny tilkobling", MAX_POLES);
-        xSemaphoreGive(pole_data_mutex);
-        return;
-    }
-    
-    // Parse data
-    uint8_t k = data[0];
-    pole_data[pole_idx].k = k;
-    
-    // Les timestamp
-    memcpy(&pole_data[pole_idx].t, &data[1], sizeof(uint32_t));
-    memcpy(&pole_data[pole_idx].u, &data[5], sizeof(uint32_t));
-    
-    ESP_LOGI(TAG, "Mottok data type %d fra målestolpe %d, timestamp=%u.%06u", 
-            k, pole_idx, pole_data[pole_idx].t, pole_data[pole_idx].u);
-    
-    // Les ADC verdier eller andre data basert på type melding
-    if (k == 0 && len >= 9 + sizeof(int32_t) * 14) {  // ADC verdier
-        memcpy(pole_data[pole_idx].v, &data[9], sizeof(int32_t) * 7);
-        memcpy(pole_data[pole_idx].b, &data[9 + sizeof(int32_t) * 7], sizeof(int32_t) * 7);
-        
-        ESP_LOGI(TAG, "ADC verdier: [%" PRId32 ", %" PRId32 ", %" PRId32 ", %" PRId32 ", %" PRId32 ", %" PRId32 ", %" PRId32 "]", 
-                pole_data[pole_idx].v[0], pole_data[pole_idx].v[1], pole_data[pole_idx].v[2],
-                pole_data[pole_idx].v[3], pole_data[pole_idx].v[4], pole_data[pole_idx].v[5],
-                pole_data[pole_idx].v[6]);
-        ESP_LOGI(TAG, "Broken status: [%" PRId32 ", %" PRId32 ", %" PRId32 ", %" PRId32 ", %" PRId32 ", %" PRId32 ", %" PRId32 "]", 
-                pole_data[pole_idx].b[0], pole_data[pole_idx].b[1], pole_data[pole_idx].b[2],
-                pole_data[pole_idx].b[3], pole_data[pole_idx].b[4], pole_data[pole_idx].b[5],
-                pole_data[pole_idx].b[6]);
-    } else if (k == 1) {  // Break event
-        // Antar at en enkelt break-verdi fins i data[9]
-        int32_t break_value;
-        memcpy(&break_value, &data[9], sizeof(int32_t));
-        ESP_LOGI(TAG, "Break event mottatt: verdi=%" PRId32, break_value);
-    } else if (k == 2 && len >= 9 + sizeof(int32_t) * 21) {  // Settings
-        memcpy(pole_data[pole_idx].e, &data[9], sizeof(int32_t) * 7);
-        memcpy(pole_data[pole_idx].o, &data[9 + sizeof(int32_t) * 7], sizeof(int32_t) * 7);
-        memcpy(pole_data[pole_idx].b, &data[9 + sizeof(int32_t) * 14], sizeof(int32_t) * 7);
-        
-        ESP_LOGI(TAG, "Settings mottatt for målestolpe %d:", pole_idx);
-        ESP_LOGI(TAG, "  Enabled: [%" PRId32 ", %" PRId32 ", %" PRId32 ", %" PRId32 ", %" PRId32 ", %" PRId32 ", %" PRId32 "]", 
-                pole_data[pole_idx].e[0], pole_data[pole_idx].e[1], pole_data[pole_idx].e[2],
-                pole_data[pole_idx].e[3], pole_data[pole_idx].e[4], pole_data[pole_idx].e[5],
-                pole_data[pole_idx].e[6]);
-    } else {
-        ESP_LOGW(TAG, "Ukjent melding eller ugyldig lengde: k=%d, len=%d", k, len);
-    }
-    
-    xSemaphoreGive(pole_data_mutex);
+   // Hent MAC-adressen fra recv_info
+   const uint8_t *mac_addr = recv_info->src_addr;
+   
+   ESP_LOGI(TAG, "ESP-NOW data mottatt fra %02x:%02x:%02x:%02x:%02x:%02x, len=%d", 
+            mac_addr[0], mac_addr[1], mac_addr[2], mac_addr[3], mac_addr[4], mac_addr[5], len);
+   
+   // Sjekk at lengden er riktig for vår struktur
+   if (len < 10) {
+       ESP_LOGE(TAG, "Mottok data med feil lengde: %d (forventet minst 10 bytes)", len);
+       return;
+   }
+   
+   // Logg raw data for debugging
+   ESP_LOGI(TAG, "Data header: k=%d, t=%02x%02x%02x%02x, u=%02x%02x%02x%02x", 
+            data[0], 
+            data[1], data[2], data[3], data[4],
+            data[5], data[6], data[7], data[8]);
+   
+   xSemaphoreTake(pole_data_mutex, portMAX_DELAY);
+   
+   // Finn pole i vår liste eller legg til en ny
+   int pole_idx = -1;
+   for (int i = 0; i < pole_count; i++) {
+       if (memcmp(pole_data[i].mac, mac_addr, ESP_NOW_ETH_ALEN) == 0) {
+           pole_idx = i;
+           break;
+       }
+   }
+   
+   if (pole_idx < 0 && pole_count < MAX_POLES) {
+       pole_idx = pole_count++;
+       memcpy(pole_data[pole_idx].mac, mac_addr, ESP_NOW_ETH_ALEN);
+       ESP_LOGI(TAG, "Ny målestolpe lagt til, indeks=%d, totalt: %d", pole_idx, pole_count);
+   } else if (pole_idx < 0) {
+       ESP_LOGW(TAG, "Maks antall målestolper nådd (%d), ignorerer ny tilkobling", MAX_POLES);
+       xSemaphoreGive(pole_data_mutex);
+       return;
+   }
+   
+   // Parse data
+   uint8_t k = data[0];
+   pole_data[pole_idx].k = k;
+   
+   // Les timestamp
+   memcpy(&pole_data[pole_idx].t, &data[1], sizeof(uint32_t));
+   memcpy(&pole_data[pole_idx].u, &data[5], sizeof(uint32_t));
+   
+   ESP_LOGI(TAG, "Mottok data type %d fra målestolpe %d, timestamp=%u.%06u", 
+           k, pole_idx, pole_data[pole_idx].t, pole_data[pole_idx].u);
+   
+   // Les ADC verdier eller andre data basert på type melding
+   if (k == 0 && len >= 9 + sizeof(int32_t) * 14) {  // ADC verdier
+       memcpy(pole_data[pole_idx].v, &data[9], sizeof(int32_t) * 7);
+       memcpy(pole_data[pole_idx].b, &data[9 + sizeof(int32_t) * 7], sizeof(int32_t) * 7);
+       
+       ESP_LOGI(TAG, "ADC verdier: [%" PRId32 ", %" PRId32 ", %" PRId32 ", %" PRId32 ", %" PRId32 ", %" PRId32 ", %" PRId32 "]", 
+               pole_data[pole_idx].v[0], pole_data[pole_idx].v[1], pole_data[pole_idx].v[2],
+               pole_data[pole_idx].v[3], pole_data[pole_idx].v[4], pole_data[pole_idx].v[5],
+               pole_data[pole_idx].v[6]);
+       ESP_LOGI(TAG, "Broken status: [%" PRId32 ", %" PRId32 ", %" PRId32 ", %" PRId32 ", %" PRId32 ", %" PRId32 ", %" PRId32 "]", 
+               pole_data[pole_idx].b[0], pole_data[pole_idx].b[1], pole_data[pole_idx].b[2],
+               pole_data[pole_idx].b[3], pole_data[pole_idx].b[4], pole_data[pole_idx].b[5],
+               pole_data[pole_idx].b[6]);
+
+       // Konverter mottatte ESP-NOW data til JSON og send via WebSocket
+       char mac_str[18];
+       sprintf(mac_str, "%02x:%02x:%02x:%02x:%02x:%02x", 
+               mac_addr[0], mac_addr[1], mac_addr[2],
+               mac_addr[3], mac_addr[4], mac_addr[5]);
+       
+       char ws_msg[512];
+       sprintf(ws_msg, 
+               "{\"M\":\"%s\",\"K\":0,\"T\":%" PRIu32 ",\"U\":%" PRIu32 ",\"V\":[%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 "],\"B\":[%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 "]}",
+               mac_str, pole_data[pole_idx].t, pole_data[pole_idx].u,
+               pole_data[pole_idx].v[0], pole_data[pole_idx].v[1], pole_data[pole_idx].v[2], 
+               pole_data[pole_idx].v[3], pole_data[pole_idx].v[4], pole_data[pole_idx].v[5], pole_data[pole_idx].v[6],
+               pole_data[pole_idx].b[0], pole_data[pole_idx].b[1], pole_data[pole_idx].b[2], 
+               pole_data[pole_idx].b[3], pole_data[pole_idx].b[4], pole_data[pole_idx].b[5], pole_data[pole_idx].b[6]);
+       
+       // Send til alle WebSocket klienter
+       httpd_ws_frame_t ws_pkt = {
+           .final = true,
+           .fragmented = false,
+           .type = HTTPD_WS_TYPE_TEXT,
+           .payload = (uint8_t *)ws_msg,
+           .len = strlen(ws_msg)
+       };
+
+       xSemaphoreTake(ws_mutex, portMAX_DELAY);
+       for (int i = 0; i < MAX_WS_CLIENTS; ++i) {
+           if (ws_clients[i] != 0) {
+               httpd_ws_send_frame_async(server, ws_clients[i], &ws_pkt);
+           }
+       }
+       xSemaphoreGive(ws_mutex);
+   } else if (k == 1) {  // Break event
+       // Antar at en enkelt break-verdi fins i data[9]
+       int32_t break_value;
+       memcpy(&break_value, &data[9], sizeof(int32_t));
+       ESP_LOGI(TAG, "Break event mottatt: verdi=%" PRId32, break_value);
+
+       // Send break event som JSON til WebSocket
+       char mac_str[18];
+       sprintf(mac_str, "%02x:%02x:%02x:%02x:%02x:%02x", 
+               mac_addr[0], mac_addr[1], mac_addr[2],
+               mac_addr[3], mac_addr[4], mac_addr[5]);
+       
+       char ws_msg[256];
+       sprintf(ws_msg, 
+               "{\"M\":\"%s\",\"K\":1,\"T\":%" PRIu32 ",\"U\":%" PRIu32 ",\"B\":%" PRId32 "}",
+               mac_str, pole_data[pole_idx].t, pole_data[pole_idx].u, break_value);
+       
+       // Send til alle WebSocket klienter
+       httpd_ws_frame_t ws_pkt = {
+           .final = true,
+           .fragmented = false,
+           .type = HTTPD_WS_TYPE_TEXT,
+           .payload = (uint8_t *)ws_msg,
+           .len = strlen(ws_msg)
+       };
+
+       xSemaphoreTake(ws_mutex, portMAX_DELAY);
+       for (int i = 0; i < MAX_WS_CLIENTS; ++i) {
+           if (ws_clients[i] != 0) {
+               httpd_ws_send_frame_async(server, ws_clients[i], &ws_pkt);
+           }
+       }
+       xSemaphoreGive(ws_mutex);
+   } else if (k == 2 && len >= 9 + sizeof(int32_t) * 21) {  // Settings
+       memcpy(pole_data[pole_idx].e, &data[9], sizeof(int32_t) * 7);
+       memcpy(pole_data[pole_idx].o, &data[9 + sizeof(int32_t) * 7], sizeof(int32_t) * 7);
+       memcpy(pole_data[pole_idx].b, &data[9 + sizeof(int32_t) * 14], sizeof(int32_t) * 7);
+       
+       ESP_LOGI(TAG, "Settings mottatt for målestolpe %d:", pole_idx);
+       ESP_LOGI(TAG, "  Enabled: [%" PRId32 ", %" PRId32 ", %" PRId32 ", %" PRId32 ", %" PRId32 ", %" PRId32 ", %" PRId32 "]", 
+               pole_data[pole_idx].e[0], pole_data[pole_idx].e[1], pole_data[pole_idx].e[2],
+               pole_data[pole_idx].e[3], pole_data[pole_idx].e[4], pole_data[pole_idx].e[5],
+               pole_data[pole_idx].e[6]);
+
+       // Send settings som JSON til WebSocket
+       char mac_str[18];
+       sprintf(mac_str, "%02x:%02x:%02x:%02x:%02x:%02x", 
+               mac_addr[0], mac_addr[1], mac_addr[2],
+               mac_addr[3], mac_addr[4], mac_addr[5]);
+       
+       char ws_msg[512];
+       sprintf(ws_msg, 
+               "{\"M\":\"%s\",\"K\":2,\"E\":[%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 "],\"O\":[%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 "],\"B\":[%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 "]}",
+               mac_str, 
+               pole_data[pole_idx].e[0], pole_data[pole_idx].e[1], pole_data[pole_idx].e[2], 
+               pole_data[pole_idx].e[3], pole_data[pole_idx].e[4], pole_data[pole_idx].e[5], pole_data[pole_idx].e[6],
+               pole_data[pole_idx].o[0], pole_data[pole_idx].o[1], pole_data[pole_idx].o[2], 
+               pole_data[pole_idx].o[3], pole_data[pole_idx].o[4], pole_data[pole_idx].o[5], pole_data[pole_idx].o[6],
+               pole_data[pole_idx].b[0], pole_data[pole_idx].b[1], pole_data[pole_idx].b[2], 
+               pole_data[pole_idx].b[3], pole_data[pole_idx].b[4], pole_data[pole_idx].b[5], pole_data[pole_idx].b[6]);
+       
+       // Send til alle WebSocket klienter
+       httpd_ws_frame_t ws_pkt = {
+           .final = true,
+           .fragmented = false,
+           .type = HTTPD_WS_TYPE_TEXT,
+           .payload = (uint8_t *)ws_msg,
+           .len = strlen(ws_msg)
+       };
+
+       xSemaphoreTake(ws_mutex, portMAX_DELAY);
+       for (int i = 0; i < MAX_WS_CLIENTS; ++i) {
+           if (ws_clients[i] != 0) {
+               httpd_ws_send_frame_async(server, ws_clients[i], &ws_pkt);
+           }
+       }
+       xSemaphoreGive(ws_mutex);
+   } else {
+       ESP_LOGW(TAG, "Ukjent melding eller ugyldig lengde: k=%d, len=%d", k, len);
+   }
+   
+   xSemaphoreGive(pole_data_mutex);
 }
 
 // Funksjon for å initialisere ESP-NOW
 void init_esp_now(void) {
-    ESP_LOGI(TAG, "Initialiserer ESP-NOW");
-    
-    // Initialiser ESP-NOW
-    if (esp_now_init() != ESP_OK) {
-        ESP_LOGE(TAG, "Feil ved initialisering av ESP-NOW");
-        return;
-    }
-    
-    // Registrer callback
-    if (esp_now_register_recv_cb(esp_now_recv_cb) != ESP_OK) {
-        ESP_LOGE(TAG, "Feil ved registrering av ESP-NOW mottaker callback");
-        return;
-    }
-    
-    ESP_LOGI(TAG, "ESP-NOW initialisert, venter på data fra målestolper...");
+   ESP_LOGI(TAG, "Initialiserer ESP-NOW");
+   
+   // Initialiser ESP-NOW
+   if (esp_now_init() != ESP_OK) {
+       ESP_LOGE(TAG, "Feil ved initialisering av ESP-NOW");
+       return;
+   }
+   
+   // Registrer callback
+   if (esp_now_register_recv_cb(esp_now_recv_cb) != ESP_OK) {
+       ESP_LOGE(TAG, "Feil ved registrering av ESP-NOW mottaker callback");
+       return;
+   }
+   
+   ESP_LOGI(TAG, "ESP-NOW initialisert, venter på data fra målestolper...");
 }
 
 // WebSocket test page handler
 esp_err_t websocket_test_page_handler(httpd_req_t *req) {
-    ESP_LOGI(TAG, "WebSocket test page requested");
-    
-    // En enkel HTML-side med JavaScript for WebSocket-testing
-    const char *html = "<!DOCTYPE html>\n"
-        "<html>\n"
-        "<head>\n"
-        "    <title>Timergate WebSocket Test</title>\n"
-        "    <style>\n"
-        "        body { font-family: Arial, sans-serif; margin: 20px; }\n"
-        "        #messages { border: 1px solid #ccc; padding: 10px; height: 300px; overflow-y: auto; margin-bottom: 10px; }\n"
-        "        .time { color: #888; font-size: 0.8em; }\n"
-        "        .error { color: red; }\n"
-        "        .connected { color: green; }\n"
-        "        .json { font-family: monospace; white-space: pre-wrap; }\n"
-        "    </style>\n"
-        "</head>\n"
-        "<body>\n"
-        "    <h1>Timergate WebSocket Test</h1>\n"
-        "    <div>\n"
-        "        <button id='connect'>Koble til</button>\n"
-        "        <button id='disconnect'>Koble fra</button>\n"
-        "        <span id='status'>Ikke tilkoblet</span>\n"
-        "    </div>\n"
-        "    <h2>Meldinger:</h2>\n"
-        "    <div id='messages'></div>\n"
-        "    <script>\n"
-        "        let socket;\n"
-        "        let messageCount = 0;\n"
-        "        let maxMessages = 100;\n"
-        "\n"
-        "        function addMessage(text, className) {\n"
-        "            const messages = document.getElementById('messages');\n"
-        "            const time = new Date().toLocaleTimeString();\n"
-        "            const msg = document.createElement('div');\n"
-        "\n"
-        "            let content = `<span class='time'>${time}</span> `;\n"
-        "            \n"
-        "            if (className === 'json') {\n"
-        "                try {\n"
-        "                    // Formater JSON for bedre lesbarhet\n"
-        "                    const jsonObj = JSON.parse(text);\n"
-        "                    text = JSON.stringify(jsonObj, null, 2);\n"
-        "                } catch (e) {\n"
-        "                    // Hvis ikke JSON, vis som vanlig tekst\n"
-        "                }\n"
-        "            }\n"
-        "            \n"
-        "            content += `<span class='${className}'>${text}</span>`;\n"
-        "            msg.innerHTML = content;\n"
-        "            messages.appendChild(msg);\n"
-        "            messages.scrollTop = messages.scrollHeight;\n"
-        "            \n"
-        "            // Begrens antall meldinger for å unngå minneproblemer\n"
-        "            messageCount++;\n"
-        "            if (messageCount > maxMessages) {\n"
-        "                messages.removeChild(messages.firstChild);\n"
-        "                messageCount--;\n"
-        "            }\n"
-        "        }\n"
-        "\n"
-        "        document.getElementById('connect').addEventListener('click', function() {\n"
-        "            if (socket && socket.readyState <= 1) {\n"
-        "                addMessage('Allerede tilkoblet eller kobler til', 'error');\n"
-        "                return;\n"
-        "            }\n"
-        "\n"
-        "            const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';\n"
-        "            const wsUrl = `${wsProtocol}//${window.location.host}/ws`;\n"
-        "            addMessage(`Kobler til ${wsUrl}`, 'normal');\n"
-        "\n"
-        "            socket = new WebSocket(wsUrl);\n"
-        "\n"
-        "            socket.onopen = function() {\n"
-        "                document.getElementById('status').textContent = 'Tilkoblet';\n"
-        "                document.getElementById('status').style.color = 'green';\n"
-        "                addMessage('WebSocket tilkoblet', 'connected');\n"
-        "            };\n"
-        "\n"
-        "            socket.onmessage = function(event) {\n"
-        "                addMessage(event.data, 'json');\n"
-        "            };\n"
-        "\n"
-        "            socket.onclose = function() {\n"
-        "                document.getElementById('status').textContent = 'Frakoblet';\n"
-        "                document.getElementById('status').style.color = 'red';\n"
-        "                addMessage('WebSocket frakoblet', 'error');\n"
-        "            };\n"
-        "\n"
-        "            socket.onerror = function(error) {\n"
-        "                addMessage('WebSocket feil: ' + error, 'error');\n"
-        "            };\n"
-        "        });\n"
-        "\n"
-        "        document.getElementById('disconnect').addEventListener('click', function() {\n"
-        "            if (socket) {\n"
-        "                socket.close();\n"
-        "                addMessage('WebSocket lukket manuelt', 'normal');\n"
-        "            }\n"
-        "        });\n"
-        "    </script>\n"
-        "</body>\n"
-        "</html>";
-    
-    httpd_resp_set_type(req, "text/html");
-    httpd_resp_send(req, html, strlen(html));
-    
-    return ESP_OK;
+   ESP_LOGI(TAG, "WebSocket test page requested");
+   
+   // En enkel HTML-side med JavaScript for WebSocket-testing
+   const char *html = "<!DOCTYPE html>\n"
+       "<html>\n"
+       "<head>\n"
+       "    <title>Timergate WebSocket Test</title>\n"
+       "    <style>\n"
+       "        body { font-family: Arial, sans-serif; margin: 20px; }\n"
+       "        #messages { border: 1px solid #ccc; padding: 10px; height: 300px; overflow-y: auto; margin-bottom: 10px; }\n"
+       "        .time { color: #888; font-size: 0.8em; }\n"
+       "        .error { color: red; }\n"
+       "        .connected { color: green; }\n"
+       "        .json { font-family: monospace; white-space: pre-wrap; }\n"
+       "    </style>\n"
+       "</head>\n"
+       "<body>\n"
+       "    <h1>Timergate WebSocket Test</h1>\n"
+       "    <div>\n"
+       "        <button id='connect'>Koble til</button>\n"
+       "        <button id='disconnect'>Koble fra</button>\n"
+       "        <span id='status'>Ikke tilkoblet</span>\n"
+       "    </div>\n"
+       "    <h2>Meldinger:</h2>\n"
+       "    <div id='messages'></div>\n"
+       "    <script>\n"
+       "        let socket;\n"
+       "        let messageCount = 0;\n"
+       "        let maxMessages = 100;\n"
+       "\n"
+       "        function addMessage(text, className) {\n"
+       "            const messages = document.getElementById('messages');\n"
+       "            const time = new Date().toLocaleTimeString();\n"
+       "            const msg = document.createElement('div');\n"
+       "\n"
+       "            let content = `<span class='time'>${time}</span> `;\n"
+       "            \n"
+       "            if (className === 'json') {\n"
+       "                try {\n"
+       "                    // Formater JSON for bedre lesbarhet\n"
+       "                    const jsonObj = JSON.parse(text);\n"
+       "                    text = JSON.stringify(jsonObj, null, 2);\n"
+       "                } catch (e) {\n"
+       "                    // Hvis ikke JSON, vis som vanlig tekst\n"
+       "                }\n"
+       "            }\n"
+       "            \n"
+       "            content += `<span class='${className}'>${text}</span>`;\n"
+       "            msg.innerHTML = content;\n"
+       "            messages.appendChild(msg);\n"
+       "            messages.scrollTop = messages.scrollHeight;\n"
+       "            \n"
+       "            // Begrens antall meldinger for å unngå minneproblemer\n"
+       "            messageCount++;\n"
+       "            if (messageCount > maxMessages) {\n"
+       "                messages.removeChild(messages.firstChild);\n"
+       "                messageCount--;\n"
+       "            }\n"
+       "        }\n"
+       "\n"
+       "        document.getElementById('connect').addEventListener('click', function() {\n"
+       "            if (socket && socket.readyState <= 1) {\n"
+       "                addMessage('Allerede tilkoblet eller kobler til', 'error');\n"
+       "                return;\n"
+       "            }\n"
+       "\n"
+       "            const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';\n"
+       "            const wsUrl = `${wsProtocol}//${window.location.host}/ws`;\n"
+       "            addMessage(`Kobler til ${wsUrl}`, 'normal');\n"
+       "\n"
+       "            socket = new WebSocket(wsUrl);\n"
+       "\n"
+       "            socket.onopen = function() {\n"
+       "                document.getElementById('status').textContent = 'Tilkoblet';\n"
+       "                document.getElementById('status').style.color = 'green';\n"
+       "                addMessage('WebSocket tilkoblet', 'connected');\n"
+       "            };\n"
+       "\n"
+       "            socket.onmessage = function(event) {\n"
+       "                addMessage(event.data, 'json');\n"
+       "            };\n"
+       "\n"
+       "            socket.onclose = function() {\n"
+       "                document.getElementById('status').textContent = 'Frakoblet';\n"
+       "                document.getElementById('status').style.color = 'red';\n"
+       "                addMessage('WebSocket frakoblet', 'error');\n"
+       "            };\n"
+       "\n"
+       "            socket.onerror = function(error) {\n"
+       "                addMessage('WebSocket feil: ' + error, 'error');\n"
+       "            };\n"
+       "        });\n"
+       "\n"
+       "        document.getElementById('disconnect').addEventListener('click', function() {\n"
+       "            if (socket) {\n"
+       "                socket.close();\n"
+       "                addMessage('WebSocket lukket manuelt', 'normal');\n"
+       "            }\n"
+       "        });\n"
+       "    </script>\n"
+       "</body>\n"
+       "</html>";
+   
+   httpd_resp_set_type(req, "text/html");
+   httpd_resp_send(req, html, strlen(html));
+   
+   return ESP_OK;
 }
 
 // Funksjon for å simulere data for testing
 esp_err_t simulate_pole_data_handler(httpd_req_t *req) {
-    ESP_LOGI(TAG, "Simulate pole data handler called");
-    
-    // Opprett en simulert målestolpe hvis det ikke finnes noen
-    xSemaphoreTake(pole_data_mutex, portMAX_DELAY);
-    
-    if (pole_count == 0) {
-        // Lag en simulert stolpe med MAC-adresse aa:bb:cc:dd:ee:ff
-        uint8_t mac[ESP_NOW_ETH_ALEN] = {0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff};
-        memcpy(pole_data[0].mac, mac, ESP_NOW_ETH_ALEN);
-        pole_count = 1;
-        ESP_LOGI(TAG, "Opprettet simulert målestolpe med MAC aa:bb:cc:dd:ee:ff");
-    }
-    
-    // Fyll inn simulerte ADC-verdier
-    pole_data[0].k = 0; // ADC-verdier
-    pole_data[0].t = time(NULL);
-    pole_data[0].u = 0;
-    
-    // Simulerte ADC-verdier i et mønster som vil være synlig i GUI
-    for (int i = 0; i < 7; i++) {
-        pole_data[0].v[i] = 2000 + (i * 300);  // Økende verdier
-        pole_data[0].b[i] = (i % 2);  // Veksler mellom 0 og 1
-    }
-    
-    // Simulerte innstillinger hvis de ikke er satt
-    if (pole_data[0].e[0] == 0 && pole_data[0].o[0] == 0 && pole_data[0].b[0] == 0) {
-        for (int i = 0; i < 7; i++) {
-            pole_data[0].e[i] = 1;  // Alt er aktivert
-            pole_data[0].o[i] = 4000;  // Standard offset
-            pole_data[0].b[i] = 1000;  // Standard break-verdi
-        }
-        
-        // Send også en innstillingsmelding
-        pole_data[0].k = 2;
-        ESP_LOGI(TAG, "Opprettet simulerte innstillinger for målestolpe");
-    }
-    
-    ESP_LOGI(TAG, "Simulerte ADC-verdier opprettet: [%d, %d, %d, %d, %d, %d, %d]",
-            pole_data[0].v[0], pole_data[0].v[1], pole_data[0].v[2],
-            pole_data[0].v[3], pole_data[0].v[4], pole_data[0].v[5],
-            pole_data[0].v[6]);
-    
-    xSemaphoreGive(pole_data_mutex);
-    
-    // Simuler et break event (k=1) etter et kort intervall
-    vTaskDelay(pdMS_TO_TICKS(1000));
-    
-    xSemaphoreTake(pole_data_mutex, portMAX_DELAY);
-    pole_data[0].k = 1;  // Break event
-    pole_data[0].t = time(NULL);
-    pole_data[0].u = 500000;  // 500 ms
-    ESP_LOGI(TAG, "Simulert break event opprettet: timestamp=%u.%06u", 
-             pole_data[0].t, pole_data[0].u);
-    xSemaphoreGive(pole_data_mutex);
-    
-    // Send respons til klienten
-    httpd_resp_set_type(req, "application/json");
-    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
-    httpd_resp_sendstr(req, "{\"status\":\"success\",\"message\":\"Simulerte data opprettet\"}");
-    
-    return ESP_OK;
+   ESP_LOGI(TAG, "Simulate pole data handler called");
+   
+   // Opprett en simulert målestolpe hvis det ikke finnes noen
+   xSemaphoreTake(pole_data_mutex, portMAX_DELAY);
+   
+   if (pole_count == 0) {
+       // Lag en simulert stolpe med MAC-adresse aa:bb:cc:dd:ee:ff
+       uint8_t mac[ESP_NOW_ETH_ALEN] = {0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff};
+       memcpy(pole_data[0].mac, mac, ESP_NOW_ETH_ALEN);
+       pole_count = 1;
+       ESP_LOGI(TAG, "Opprettet simulert målestolpe med MAC aa:bb:cc:dd:ee:ff");
+   }
+   
+   // Fyll inn simulerte ADC-verdier
+   pole_data[0].k = 0; // ADC-verdier
+   pole_data[0].t = time(NULL);
+   pole_data[0].u = 0;
+   
+   // Simulerte ADC-verdier i et mønster som vil være synlig i GUI
+   for (int i = 0; i < 7; i++) {
+       pole_data[0].v[i] = 2000 + (i * 300);  // Økende verdier
+       pole_data[0].b[i] = (i % 2);  // Veksler mellom 0 og 1
+   }
+   
+   // Simulerte innstillinger hvis de ikke er satt
+   for (int i = 0; i < 7; i++) {
+       pole_data[0].e[i] = 1;  // Alt er aktivert
+       pole_data[0].o[i] = 4000;  // Standard offset
+   }
+   
+   ESP_LOGI(TAG, "Simulerte ADC-verdier opprettet: [%d, %d, %d, %d, %d, %d, %d]",
+           pole_data[0].v[0], pole_data[0].v[1], pole_data[0].v[2],
+           pole_data[0].v[3], pole_data[0].v[4], pole_data[0].v[5],
+           pole_data[0].v[6]);
+   
+   // Send simulerte ADC-verdier via WebSocket
+   char mac_str[18];
+   sprintf(mac_str, "%02x:%02x:%02x:%02x:%02x:%02x",
+           pole_data[0].mac[0], pole_data[0].mac[1], pole_data[0].mac[2],
+           pole_data[0].mac[3], pole_data[0].mac[4], pole_data[0].mac[5]);
+   
+   char ws_msg[512];
+   sprintf(ws_msg, 
+           "{\"M\":\"%s\",\"K\":0,\"T\":%" PRIu32 ",\"U\":%" PRIu32 ",\"V\":[%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 "],\"B\":[%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 "]}",
+           mac_str, pole_data[0].t, pole_data[0].u,
+           pole_data[0].v[0], pole_data[0].v[1], pole_data[0].v[2], 
+           pole_data[0].v[3], pole_data[0].v[4], pole_data[0].v[5], pole_data[0].v[6],
+           pole_data[0].b[0], pole_data[0].b[1], pole_data[0].b[2], 
+           pole_data[0].b[3], pole_data[0].b[4], pole_data[0].b[5], pole_data[0].b[6]);
+   
+   xSemaphoreGive(pole_data_mutex);
+   
+   // Send til WebSocket-klienter
+   httpd_ws_frame_t ws_pkt = {
+       .final = true,
+       .fragmented = false,
+       .type = HTTPD_WS_TYPE_TEXT,
+       .payload = (uint8_t *)ws_msg,
+       .len = strlen(ws_msg)
+   };
+
+   xSemaphoreTake(ws_mutex, portMAX_DELAY);
+   for (int i = 0; i < MAX_WS_CLIENTS; ++i) {
+       if (ws_clients[i] != 0) {
+           httpd_ws_send_frame_async(server, ws_clients[i], &ws_pkt);
+       }
+   }
+   xSemaphoreGive(ws_mutex);
+   
+   // Simuler et break event (k=1) etter et kort intervall
+   vTaskDelay(pdMS_TO_TICKS(1000));
+   
+   xSemaphoreTake(pole_data_mutex, portMAX_DELAY);
+   pole_data[0].k = 1;  // Break event
+   pole_data[0].t = time(NULL);
+   pole_data[0].u = 500000;  // 500 ms
+   
+   // Send et simulert break event via WebSocket
+   char break_msg[256];
+   sprintf(break_msg, 
+           "{\"M\":\"%s\",\"K\":1,\"T\":%" PRIu32 ",\"U\":%" PRIu32 ",\"B\":1}",
+           mac_str, pole_data[0].t, pole_data[0].u);
+   
+   xSemaphoreGive(pole_data_mutex);
+   
+   ws_pkt.payload = (uint8_t *)break_msg;
+   ws_pkt.len = strlen(break_msg);
+   
+   xSemaphoreTake(ws_mutex, portMAX_DELAY);
+   for (int i = 0; i < MAX_WS_CLIENTS; ++i) {
+       if (ws_clients[i] != 0) {
+           httpd_ws_send_frame_async(server, ws_clients[i], &ws_pkt);
+       }
+   }
+   xSemaphoreGive(ws_mutex);
+   
+   ESP_LOGI(TAG, "Simulert break event sendt: %s", break_msg);
+   
+   // Send respons til klienten
+   httpd_resp_set_type(req, "application/json");
+   httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+   httpd_resp_sendstr(req, "{\"status\":\"success\",\"message\":\"Simulerte data opprettet\"}");
+   
+   return ESP_OK;
 }
 
 
+
+// 
+// 
+//--------------- Del 8: Server og Registrering av URL-handlers ---------------- 
+// 
 //
-//
-// Del 8: Server og Registrering av URL-handlers
-//
-//
+
 httpd_handle_t start_webserver(void) {
-    httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-    config.uri_match_fn = httpd_uri_match_wildcard; //Important when when gui-files is hashed
+   httpd_config_t config = HTTPD_DEFAULT_CONFIG();
+   config.uri_match_fn = httpd_uri_match_wildcard; //Important when when gui-files is hashed
 
-    // Øk maks URI-handlere
-    config.max_uri_handlers = 20; // Økt fra 6 til 12 for å ha plass til flere handlere
-    // Øk recv/send-bufferstørrelse og timeouts
-    config.recv_wait_timeout = 10;
-    config.send_wait_timeout = 10;
-    
-    httpd_handle_t server_handle = NULL;
+   // Øk maks URI-handlere
+   config.max_uri_handlers = 20; // Økt fra 6 til 12 for å ha plass til flere handlere
+   // Øk recv/send-bufferstørrelse og timeouts
+   config.recv_wait_timeout = 10;
+   config.send_wait_timeout = 10;
+   
+   httpd_handle_t server_handle = NULL;
 
-    ESP_LOGI(TAG, "Starting HTTP server");
-    
-    if (httpd_start(&server_handle, &config) == ESP_OK) {
-        // WebSocket handler
-        httpd_uri_t ws = {
-            .uri = "/ws",
-            .method = HTTP_GET,
-            .handler = ws_handler,
-            .user_ctx = NULL,
-            .is_websocket = true
-        };
-        httpd_register_uri_handler(server_handle, &ws);
-        
-        // Debug handler for diagnostikk
-        httpd_uri_t debug = {
-            .uri = "/debug",
-            .method = HTTP_GET,
-            .handler = debug_handler,
-            .user_ctx = "/www"
-        };
-        httpd_register_uri_handler(server_handle, &debug);
-        
-        // Spesifikk handler for JS-filer
-        httpd_uri_t js_files = {
-            .uri = "/assets/*.js",  //when config.uri_match_fn is set
-            .method = HTTP_GET,
-            .handler = spiffs_get_handler,
-            .user_ctx = "/www"
-        };
-        httpd_register_uri_handler(server_handle, &js_files);
-        
-        // Spesifikk handler for CSS-filer
-        httpd_uri_t css_files = {
-            .uri = "/assets/*.css", //when config.uri_match_fn is set
-            .method = HTTP_GET,
-            .handler = spiffs_get_handler,
-            .user_ctx = "/www"
-        };
-        httpd_register_uri_handler(server_handle, &css_files);
-        
-        // Root URI handler
-        httpd_uri_t root = {
-            .uri = "/",
-            .method = HTTP_GET,
-            .handler = spiffs_get_handler,
-            .user_ctx = "/www"
-        };
-        httpd_register_uri_handler(server_handle, &root);
-        
-        // API handlere
-        // Time sync API
-        httpd_uri_t time_sync = {
-            .uri = "/api/v1/time/sync",
-            .method = HTTP_POST,
-            .handler = time_sync_handler,
-            .user_ctx = NULL
-        };
-        httpd_register_uri_handler(server_handle, &time_sync);
-        
-        // Time check API
-        httpd_uri_t time_check = {
-            .uri = "/api/v1/time/check",
-            .method = HTTP_POST,
-            .handler = time_check_handler,
-            .user_ctx = NULL
-        };
-        httpd_register_uri_handler(server_handle, &time_check);
-        
-        // Highpoint search API
-        httpd_uri_t time_hsearch = {
-            .uri = "/api/v1/time/hsearch",
-            .method = HTTP_POST,
-            .handler = time_hsearch_handler,
-            .user_ctx = NULL
-        };
-        httpd_register_uri_handler(server_handle, &time_hsearch);
-        
-        // Pole break configuration API
-        httpd_uri_t pole_break = {
-            .uri = "/api/v1/pole/break",
-            .method = HTTP_POST,
-            .handler = pole_break_handler,
-            .user_ctx = NULL
-        };
-        httpd_register_uri_handler(server_handle, &pole_break);
-        
-        // Pole enabled configuration API
-        httpd_uri_t pole_enabled = {
-            .uri = "/api/v1/pole/enabled",
-            .method = HTTP_POST,
-            .handler = pole_enabled_handler,
-            .user_ctx = NULL
-        };
-        httpd_register_uri_handler(server_handle, &pole_enabled);
-        
-        // OPTIONS handler for CORS
-        httpd_uri_t options = {
-            .uri = "/api/*",
-            .method = HTTP_OPTIONS,
-            .handler = options_handler,
-            .user_ctx = NULL
-        };
-        httpd_register_uri_handler(server_handle, &options);
-        
-        // Simulere polling data API
-        httpd_uri_t simulate_pole = {
-            .uri = "/api/v1/debug/simulate",
-            .method = HTTP_GET,
-            .handler = simulate_pole_data_handler,
-            .user_ctx = NULL
-        };
-        httpd_register_uri_handler(server_handle, &simulate_pole);
+   ESP_LOGI(TAG, "Starting HTTP server");
+   
+   if (httpd_start(&server_handle, &config) == ESP_OK) {
+       // WebSocket handler
+       httpd_uri_t ws = {
+           .uri = "/ws",
+           .method = HTTP_GET,
+           .handler = ws_handler,
+           .user_ctx = NULL,
+           .is_websocket = true
+       };
+       httpd_register_uri_handler(server_handle, &ws);
+       
+       // Debug handler for diagnostikk
+       httpd_uri_t debug = {
+           .uri = "/debug",
+           .method = HTTP_GET,
+           .handler = debug_handler,
+           .user_ctx = "/www"
+       };
+       httpd_register_uri_handler(server_handle, &debug);
+       
+       // Spesifikk handler for JS-filer
+       httpd_uri_t js_files = {
+           .uri = "/assets/*.js",  //when config.uri_match_fn is set
+           .method = HTTP_GET,
+           .handler = spiffs_get_handler,
+           .user_ctx = "/www"
+       };
+       httpd_register_uri_handler(server_handle, &js_files);
+       
+       // Spesifikk handler for CSS-filer
+       httpd_uri_t css_files = {
+           .uri = "/assets/*.css", //when config.uri_match_fn is set
+           .method = HTTP_GET,
+           .handler = spiffs_get_handler,
+           .user_ctx = "/www"
+       };
+       httpd_register_uri_handler(server_handle, &css_files);
+       
+       // Root URI handler
+       httpd_uri_t root = {
+           .uri = "/",
+           .method = HTTP_GET,
+           .handler = spiffs_get_handler,
+           .user_ctx = "/www"
+       };
+       httpd_register_uri_handler(server_handle, &root);
+       
+       // API handlere
+       // Time sync API
+       httpd_uri_t time_sync = {
+           .uri = "/api/v1/time/sync",
+           .method = HTTP_POST,
+           .handler = time_sync_handler,
+           .user_ctx = NULL
+       };
+       httpd_register_uri_handler(server_handle, &time_sync);
+       
+       // Time check API
+       httpd_uri_t time_check = {
+           .uri = "/api/v1/time/check",
+           .method = HTTP_POST,
+           .handler = time_check_handler,
+           .user_ctx = NULL
+       };
+       httpd_register_uri_handler(server_handle, &time_check);
+       
+       // Highpoint search API
+       httpd_uri_t time_hsearch = {
+           .uri = "/api/v1/time/hsearch",
+           .method = HTTP_POST,
+           .handler = time_hsearch_handler,
+           .user_ctx = NULL
+       };
+       httpd_register_uri_handler(server_handle, &time_hsearch);
+       
+       // Pole break configuration API
+       httpd_uri_t pole_break = {
+           .uri = "/api/v1/pole/break",
+           .method = HTTP_POST,
+           .handler = pole_break_handler,
+           .user_ctx = NULL
+       };
+       httpd_register_uri_handler(server_handle, &pole_break);
+       
+       // Pole enabled configuration API
+       httpd_uri_t pole_enabled = {
+           .uri = "/api/v1/pole/enabled",
+           .method = HTTP_POST,
+           .handler = pole_enabled_handler,
+           .user_ctx = NULL
+       };
+       httpd_register_uri_handler(server_handle, &pole_enabled);
+       
+       // OPTIONS handler for CORS
+       httpd_uri_t options = {
+           .uri = "/api/*",
+           .method = HTTP_OPTIONS,
+           .handler = options_handler,
+           .user_ctx = NULL
+       };
+       httpd_register_uri_handler(server_handle, &options);
+       
+       // Simulere polling data API
+       httpd_uri_t simulate_pole = {
+           .uri = "/api/v1/debug/simulate",
+           .method = HTTP_GET,
+           .handler = simulate_pole_data_handler,
+           .user_ctx = NULL
+       };
+       httpd_register_uri_handler(server_handle, &simulate_pole);
 
-        // WebSocket test page
-        httpd_uri_t ws_test = {
-            .uri = "/ws_test",
-            .method = HTTP_GET,
-            .handler = websocket_test_page_handler,
-            .user_ctx = NULL
-        };
-        httpd_register_uri_handler(server_handle, &ws_test);
-        
-        // All other URIs
-        httpd_uri_t common = {
-            .uri = "/*",
-            .method = HTTP_GET,
-            .handler = spiffs_get_handler,
-            .user_ctx = "/www"
-        };
-        httpd_register_uri_handler(server_handle, &common);
+       // WebSocket test page
+       httpd_uri_t ws_test = {
+           .uri = "/ws_test",
+           .method = HTTP_GET,
+           .handler = websocket_test_page_handler,
+           .user_ctx = NULL
+       };
+       httpd_register_uri_handler(server_handle, &ws_test);
+       
+       // All other URIs
+       httpd_uri_t common = {
+           .uri = "/*",
+           .method = HTTP_GET,
+           .handler = spiffs_get_handler,
+           .user_ctx = "/www"
+       };
+       httpd_register_uri_handler(server_handle, &common);
 
-        ESP_LOGI(TAG, "Web server started");
-    } else {
-        ESP_LOGE(TAG, "Failed to start web server!");
-    }
+       ESP_LOGI(TAG, "Web server started");
+   } else {
+       ESP_LOGE(TAG, "Failed to start web server!");
+   }
 
-    return server_handle;
+   return server_handle;
 }
 
 
 
-//
-//
-// Del 9: Main-funksjon
-//
-//
+
+// 
+// 
+//--------------- Del 9: Main-funksjon ---------------- 
+// 
+// 
+
 
 void app_main(void) {
     esp_err_t ret = nvs_flash_init();
@@ -1684,7 +1665,6 @@ void app_main(void) {
     // Initialiser ESP-NOW
     init_esp_now();
 
-    // Start webserveren og WebSocket-bro
+    // Start webserveren
     server = start_webserver();
-    xTaskCreate(ws_broadcast_task, "ws_broadcast_task", 4096, NULL, 5, NULL);
 }
