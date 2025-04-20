@@ -46,8 +46,11 @@
 typedef struct {
     int sock;
     bool connected;
-    char mac[18]; // MAC-adresse format: "xx:xx:xx:xx:xx:xx"
+    char mac[18];            // MAC-adresse format: "xx:xx:xx:xx:xx:xx"
+    char nominal_mac[18];    // "Nominell" MAC-adresse som brukes i GUI
 } tcp_pole_t;
+
+
 
 // Datastruktur for å lagre informasjon fra målestolpene
 typedef struct {
@@ -126,15 +129,19 @@ bool send_command_to_pole_by_mac(const char *mac, const char *command) {
     bool sent = false;
     xSemaphoreTake(tcp_poles_mutex, portMAX_DELAY);
     
+    // Sjekk først for eksakt match på MAC-adresse eller nominell MAC
     for (int i = 0; i < MAX_TCP_POLES; i++) {
-        if (tcp_poles[i].connected && strcmp(tcp_poles[i].mac, mac) == 0) {
-            // Funnet matchende målestolpe, send kommando
+        if (tcp_poles[i].connected && 
+           (strcmp(tcp_poles[i].mac, mac) == 0 || 
+            (strlen(tcp_poles[i].nominal_mac) > 0 && strcmp(tcp_poles[i].nominal_mac, mac) == 0))) {
+            
             int sock = tcp_poles[i].sock;
             int to_write = strlen(command);
             int res = send(sock, command, to_write, 0);
             
             if (res == to_write) {
-                ESP_LOGI(TAG, "Kommando sendt til målestolpe %d (MAC: %s): %s", i, mac, command);
+                ESP_LOGI(TAG, "Kommando sendt til målestolpe %d (MAC: %s): %s", 
+                          i, tcp_poles[i].nominal_mac[0] ? tcp_poles[i].nominal_mac : mac, command);
                 sent = true;
             } else {
                 ESP_LOGE(TAG, "Feil ved sending av kommando: %d (errno: %d)", res, errno);
@@ -143,14 +150,69 @@ bool send_command_to_pole_by_mac(const char *mac, const char *command) {
         }
     }
     
+    // Hvis ingen match, og dette er første gang vi ser denne MAC-adressen,
+    // tildel den til første ledige målestolpe uten nominal_mac
+    if (!sent) {
+        for (int i = 0; i < MAX_TCP_POLES; i++) {
+            if (tcp_poles[i].connected && strlen(tcp_poles[i].nominal_mac) == 0) {
+                // Lagre den nominelle MAC-adressen
+                strncpy(tcp_poles[i].nominal_mac, mac, sizeof(tcp_poles[i].nominal_mac) - 1);
+                tcp_poles[i].nominal_mac[sizeof(tcp_poles[i].nominal_mac) - 1] = '\0'; // Sikre null-terminering
+                
+                ESP_LOGI(TAG, "Tildelt nominell MAC: %s til målestolpe %d", mac, i);
+                
+                int sock = tcp_poles[i].sock;
+                int to_write = strlen(command);
+                int res = send(sock, command, to_write, 0);
+                
+                if (res == to_write) {
+                    ESP_LOGI(TAG, "Kommando sendt til målestolpe %d med nylig tildelt nominell MAC: %s: %s", 
+                             i, mac, command);
+                    sent = true;
+                } else {
+                    ESP_LOGE(TAG, "Feil ved sending av kommando: %d (errno: %d)", res, errno);
+                }
+                break;
+            }
+        }
+    }
+    
+    // Siste utvei: Send til første tilkoblede målestolpe hvis ingen har fått tildelt MAC
+    if (!sent) {
+        for (int i = 0; i < MAX_TCP_POLES; i++) {
+            if (tcp_poles[i].connected) {
+                int sock = tcp_poles[i].sock;
+                int to_write = strlen(command);
+                int res = send(sock, command, to_write, 0);
+                
+                if (res == to_write) {
+                    ESP_LOGI(TAG, "Siste utvei: Kommando sendt til første tilkoblede målestolpe %d (søkt MAC: %s): %s", 
+                             i, mac, command);
+                    
+                    // Tildel MAC-adressen til denne målestolpen for fremtidige kall
+                    strncpy(tcp_poles[i].nominal_mac, mac, sizeof(tcp_poles[i].nominal_mac) - 1);
+                    tcp_poles[i].nominal_mac[sizeof(tcp_poles[i].nominal_mac) - 1] = '\0'; // Sikre null-terminering
+                    
+                    ESP_LOGI(TAG, "Tildelt nominell MAC: %s til målestolpe %d", mac, i);
+                    
+                    sent = true;
+                } else {
+                    ESP_LOGE(TAG, "Feil ved sending av kommando: %d (errno: %d)", res, errno);
+                }
+                break;
+            }
+        }
+    }
+    
     xSemaphoreGive(tcp_poles_mutex);
     
     if (!sent) {
-        ESP_LOGW(TAG, "Fant ingen tilkoblet målestolpe med MAC: %s", mac);
+        ESP_LOGW(TAG, "Fant ingen tilkoblet målestolpe å sende til med MAC: %s", mac);
     }
     
     return sent;
 }
+
 
 esp_err_t init_fs(void) {
     ESP_LOGI(TAG, "Mounting SPIFFS with base_path=/www, partition_label=www");
@@ -211,11 +273,31 @@ void tcp_client_handler(void *arg) {
         if (!tcp_poles[i].connected) {
             tcp_poles[i].connected = true;
             tcp_poles[i].sock = sock;
+            // Initialiser nominal_mac til tom streng
+            tcp_poles[i].nominal_mac[0] = '\0';
+            
+            // Forsøk å hente IP-adressen til den tilkoblede klienten
+            struct sockaddr_storage source_addr;
+            socklen_t addr_len = sizeof(source_addr);
+            if (getpeername(sock, (struct sockaddr *)&source_addr, &addr_len) == 0) {
+                char ip_str[INET_ADDRSTRLEN];
+                struct sockaddr_in *source = (struct sockaddr_in *)&source_addr;
+                inet_ntop(AF_INET, &(source->sin_addr), ip_str, INET_ADDRSTRLEN);
+                
+                ESP_LOGI(TAG, "Målestolpe på indeks %d har IP: %s", i, ip_str);
+            }
+            
             pole_idx = i;
             break;
         }
     }
     xSemaphoreGive(tcp_poles_mutex);
+
+
+
+
+
+
 
     if (pole_idx == -1) {
         ESP_LOGE(TAG, "Ingen ledige plasser for målestolper, avviser forbindelse");
@@ -301,11 +383,22 @@ void tcp_client_handler(void *arg) {
     // Lukk forbindelsen når løkken avsluttes
     xSemaphoreTake(tcp_poles_mutex, portMAX_DELAY);
     tcp_poles[pole_idx].connected = false;
+    
+    // Logg MAC-adressen som ble frakoblet, men behold den for debugging
+    if (strlen(tcp_poles[pole_idx].nominal_mac) > 0) {
+        ESP_LOGI(TAG, "Målestolpe %d med nominell MAC: %s koblet fra", 
+                 pole_idx, tcp_poles[pole_idx].nominal_mac);
+    }
+    
+    // Behold nominal_mac for debugging, men sett mac til tom
+    tcp_poles[pole_idx].mac[0] = '\0';
     xSemaphoreGive(tcp_poles_mutex);
     
     close(sock);
     ESP_LOGI(TAG, "Målestolpe %d koblet fra, frigjort", pole_idx);
     vTaskDelete(NULL);
+
+
 }
 
 // TCP-server som lytter etter innkommende forbindelser
@@ -852,16 +945,24 @@ esp_err_t debug_handler(httpd_req_t *req) {
    
    xSemaphoreTake(tcp_poles_mutex, portMAX_DELAY);
    for (int i = 0; i < MAX_TCP_POLES; i++) {
-       char pole_info[100];
+       char pole_info[150];
        if (tcp_poles[i].connected) {
-           snprintf(pole_info, sizeof(pole_info), "  Pole %d: Connected, Socket: %d, MAC: %s\n", 
-                    i, tcp_poles[i].sock, tcp_poles[i].mac[0] ? tcp_poles[i].mac : "Unknown");
+           snprintf(pole_info, sizeof(pole_info), "  Pole %d: Connected, Socket: %d, MAC: %s, Nominal MAC: %s\n", 
+                    i, tcp_poles[i].sock, 
+                    tcp_poles[i].mac[0] ? tcp_poles[i].mac : "Unknown",
+                    tcp_poles[i].nominal_mac[0] ? tcp_poles[i].nominal_mac : "Not assigned");
        } else {
-           snprintf(pole_info, sizeof(pole_info), "  Pole %d: Not connected\n", i);
+           snprintf(pole_info, sizeof(pole_info), "  Pole %d: Not connected (Last nominal MAC: %s)\n", 
+                    i, tcp_poles[i].nominal_mac[0] ? tcp_poles[i].nominal_mac : "None");
        }
        httpd_resp_sendstr_chunk(req, pole_info);
    }
    xSemaphoreGive(tcp_poles_mutex);
+
+
+
+
+
    
    // Avslutt responsen med en tom chunk
    httpd_resp_sendstr_chunk(req, NULL);
@@ -1655,6 +1756,10 @@ void app_main(void) {
     memset(ws_clients, 0, sizeof(ws_clients));
     memset(pole_data, 0, sizeof(pole_data));
     memset(tcp_poles, 0, sizeof(tcp_poles));
+    // Sikre at alle nominal_mac-felt er initialisert
+    for (int i = 0; i < MAX_TCP_POLES; i++) {
+        tcp_poles[i].nominal_mac[0] = '\0';
+    }
 
     // Initialiser filsystemet
     ESP_ERROR_CHECK(init_fs());
