@@ -1504,7 +1504,8 @@ httpd_handle_t start_webserver(void) {
         
         // Spesifikk handler for JS-filer
         httpd_uri_t js_files = {
-            .uri = "/assets/*.js",
+            //.uri = "/assets/*.js",
+            .uri = "/assets/index-BdKXx-9K.js",
             .method = HTTP_GET,
             .handler = spiffs_get_handler,
             .user_ctx = "/www"
@@ -1513,7 +1514,8 @@ httpd_handle_t start_webserver(void) {
         
         // Spesifikk handler for CSS-filer
         httpd_uri_t css_files = {
-            .uri = "/assets/*.css",
+            //.uri = "/assets/*.css",
+            .uri = "/assets/index-TLBSqdy1.css",
             .method = HTTP_GET,
             .handler = spiffs_get_handler,
             .user_ctx = "/www"
