@@ -76,6 +76,24 @@ Systemet består av følgende hovedkomponenter:
 3. **WebSockets**: Brukes for sanntidsoppdateringer fra AP til webklienten
 4. **TCP Socket**: Brukes for direkte kommunikasjon mellom AP og målestolpene
 
+
+
+
+## MAC-adressehåndtering og målestolpe-identifikasjon
+
+Timergate-systemet bruker en sofistikert mekanisme for å koble målestolper til riktige identifikatorer i brukergrensesnittet:
+
+1. **Nominell MAC-adresse**: Dette er MAC-adressen som brukes av GUI-en og API-kallene. Den representerer en "logisk" identifikator for målestolpen som forblir konsistent selv om den fysiske tilkoblingen endres.
+
+2. **Fysisk MAC-adresse**: Dette er den faktiske MAC-adressen til målestolpen som observeres i TCP-forbindelsen.
+
+Når en målestolpe kobler seg til via TCP, tildeler systemet en kobling mellom den fysiske MAC-adressen (som sendes av målestolpen med "ID:" kommandoen) og en nominell MAC-adresse (som brukes i API-kall fra GUI). Dette gjør at systemet kan gjenopprette tilkoblinger selv etter nettverksproblemer eller omstart av enheter.
+
+Systemet støtter både ESP-NOW og TCP for kommunikasjon med målestolper, noe som gir redundans og fleksibilitet i ulike anvendelsesscenarioer.
+
+
+
+
 ## Blokkdiagram av systemet
 
 ```

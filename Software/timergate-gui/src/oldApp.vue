@@ -1,13 +1,11 @@
 <script>
 import BreakItem from "./components/BreakItem.vue";
 import Pole from "./components/Pole.vue";
-import MainLayout from "./layouts/MainLayout.vue";
 
 export default {
   components: {
     BreakItem,
     Pole,
-    MainLayout
   },
   data() {
     return {
@@ -22,9 +20,6 @@ export default {
       interval: null,
       time: null,
       show_advanced: false,
-      
-      // Ny status for å veksle mellom grensesnitt
-      useNewInterface: false
     };
   },
   methods: {
@@ -76,6 +71,7 @@ export default {
         }),
       });
     },
+
     onSocketOpen(evt) {
       this.socket_ready = true;
     },
@@ -122,11 +118,6 @@ export default {
       this.socket_ready = false;
       console.log("On Error");
     },
-    
-    // Ny metode for å veksle mellom grensesnitt
-    toggleInterface() {
-      this.useNewInterface = !this.useNewInterface;
-    }
   },
   mounted() {
     this.init();
@@ -147,122 +138,45 @@ export default {
 </script>
 
 <template>
-  <div class="app-wrapper">
-    <!-- Vekslerknapp -->
-    <button @click="toggleInterface" class="interface-toggle">
-      {{ useNewInterface ? "Bytt til utviklingsvisning" : "Bytt til nytt grensesnitt" }}
-    </button>
-    
-    <!-- Nytt grensesnitt -->
-    <main-layout 
-      v-if="useNewInterface" 
-      :time="time" 
-      :poles="poles" 
-      :breaks="breaks"
-      :hostname="hostname"
-      :sync-time="syncTime"
-      :clear-times="clearTimes"
-      :h-search="hSearch"
-      :check-time="checkTime"
-    />
-    
-    <!-- Eksisterende grensesnitt -->
-    <main v-else>
-      <h1>Timergate</h1>
-      <h3>Current time: {{ time }}</h3>
-      <button @click="syncTime()">Sync Time</button>
-      <button @click="clearTimes()">Clear Breaks</button>
-      <button @click="show_advanced = !show_advanced">Advanced</button>
-      <div class="advanced" v-if="show_advanced">
-        <h3>Advanced settings</h3>
-        <button @click="checkTime()">Check Time Diff</button>
-        <button @click="hSearch()">Highpoint search</button>
-      </div>
-      <div style="width: 100%; height: 250px">
-        <Pole
-          v-for="pole in poles"
-          :key="pole.id"
-          :name="pole.name"
-          :mac="pole.mac"
-          :values="pole.values"
-          :broken="pole.broken"
-          :offsets="pole.offsets"
-          :br_limit="pole.br_limit"
-          :show_advanced="show_advanced"
-        />
-      </div>
-      <div>
-        <h1>Breaks</h1>
-      </div>
-      <div
-        v-for="(brs, key) in breaks"
-        :key="key"
-        style="width: 500px; height: 500px; float: left"
-      >
-        <ul v-for="br in brs.slice().reverse()" :key="br.id">
-          <BreakItem
-            :id="br.mac"
-            :breakTime="br.time"
-            :value="br.value"
-          ></BreakItem>
-        </ul>
-      </div>
-    </main>
-  </div>
+  <main>
+    <h1>Timergate</h1>
+    <h3>Current time: {{ time }}</h3>
+    <button @click="syncTime()">Sync Time</button>
+    <button @click="clearTimes()">Clear Breaks</button>
+    <button @click="show_advanced = !show_advanced">Advanced</button>
+    <div class="advanced" v-if="show_advanced">
+      <h3>Advanced settings</h3>
+      <button @click="checkTime()">Check Time Diff</button>
+      <button @click="hSearch()">Highpoint search</button>
+    </div>
+    <div style="width: 100%; height: 250px">
+      <Pole
+        v-for="pole in poles"
+        :key="pole.Id"
+        :name="pole.name"
+        :mac="pole.mac"
+        :values="pole.values"
+        :broken="pole.broken"
+        :offsets="pole.offsets"
+        :br_limit="pole.br_limit"
+        :show_advanced="show_advanced"
+      />
+    </div>
+    <div>
+      <h1>Breaks</h1>
+    </div>
+    <div
+      v-for="(brs, key) in breaks"
+      :key="key"
+      style="width: 500px; height: 500px; float: left"
+    >
+      <ul v-for="br in brs.slice().reverse()" :key="br.id">
+        <BreakItem
+          :id="br.mac"
+          :breakTime="br.time"
+          :value="br.value"
+        ></BreakItem>
+      </ul>
+    </div>
+  </main>
 </template>
-
-<style>
-.app-wrapper {
-  font-family: Arial, sans-serif;
-  color: #333;
-  max-width: 100%;
-  margin: 0;
-  padding: 0;
-  position: relative;
-}
-
-.interface-toggle {
-  position: fixed;
-  top: 10px;
-  right: 10px;
-  z-index: 1000;
-  padding: 8px 12px;
-  background: #0078D7;
-  color: white;
-  border: none;
-  border-radius: 4px;
-  cursor: pointer;
-  font-weight: bold;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-}
-
-.interface-toggle:hover {
-  background: #0063b1;
-}
-
-h1 {
-  color: #333;
-}
-
-button {
-  padding: 8px 16px;
-  margin-right: 10px;
-  border: none;
-  background-color: #0078D7;
-  color: white;
-  border-radius: 4px;
-  cursor: pointer;
-}
-
-button:hover {
-  background-color: #0063b1;
-}
-
-.advanced {
-  margin-top: 15px;
-  padding: 15px;
-  border: 1px solid #ddd;
-  background-color: #f9f9f9;
-  border-radius: 4px;
-}
-</style>

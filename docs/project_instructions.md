@@ -30,3 +30,17 @@
 
 ## Oppstart av nye samtaler
 Ved oppstart av nye samtaler, referer til disse instruksjonene for å raskt komme i gang med produktivt arbeid.
+
+
+## Diagnostikk og feilsøking
+
+Timergate-systemet har innebygde verktøy for diagnostikk og feilsøking:
+
+- **/debug** endepunkt: Viser informasjon om filsystemet og tilkoblede målestolper
+- **/ws_test** endepunkt: Gir et enkelt testgrensesnitt for WebSocket-kommunikasjon
+- **/api/v1/debug/simulate** endepunkt: Genererer simulerte data fra en virtuell målestolpe, nyttig for testing uten fysisk hardware
+
+Ved feilsøking av MAC-adressehåndtering, sjekk følgende:
+1. Hvilke nominelle MAC-adresser er registrert i systemet (/debug)
+2. Om kommandoer sendes til riktig målestolpe (via monitor-outputen)
+3. Om WebSocket-data inneholder forventede MAC-adresser (via /ws_test)
