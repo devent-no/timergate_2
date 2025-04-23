@@ -25,6 +25,10 @@ export default {
     breaks: {
       type: Object,
       default: () => ({})
+    },
+    passages: {
+      type: Array,
+      default: () => []
     }
   },
   data() {
@@ -94,7 +98,7 @@ export default {
       <timer-view v-else-if="currentView === 'timer'" :time="time" :poles="poles" :breaks="breaks" />
       <devices-view v-else-if="currentView === 'devices'" :poles="poles" />
       <config-view v-else-if="currentView === 'config'" />
-      <log-view v-else-if="currentView === 'log'" :breaks="breaks" />
+      <log-view v-else-if="currentView === 'log'" :breaks="breaks" :passages="passages" />
     </main>
   </div>
 </template>

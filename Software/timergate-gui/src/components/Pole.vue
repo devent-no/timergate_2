@@ -81,7 +81,28 @@ export default {
       required: true,
     }
   },
+    // I Pole.vue, legg til i script-delen:
+    mounted() {
+      console.log("Pole-komponent montert med data:", {
+        name: this.name,
+        mac: this.mac,
+        values: this.values,
+        broken: this.broken
+      });
+    },
+    watch: {
+      values: {
+        handler(newValues) {
+          console.log("Pole-verdier oppdatert:", newValues);
+        },
+        deep: true
+      }
+    }
+
 };
+
+
+
 </script>
 
 <template>

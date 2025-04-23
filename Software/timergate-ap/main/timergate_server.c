@@ -84,6 +84,34 @@ typedef struct {
     int32_t e[7];                   // Enabled status
 } pole_data_t;
 
+
+
+// Struktur for å spore passeringsdeteksjon
+typedef struct {
+    uint8_t mac[ESP_NOW_ETH_ALEN];       // MAC-adresse til målestolpen
+    bool sensor_triggered[MAX_SENSORS_PER_POLE]; // Status for hver sensor
+    int unique_sensors_count;            // Antall unike sensorer utløst i sekvensen
+    uint32_t first_break_time;           // Tidspunkt for første brudd i sekvensen (sekunder)
+    uint32_t first_break_micros;         // Mikrosekunder del av tidspunkt for første brudd
+    uint32_t sequence_start_time;        // Starttidspunkt for gjeldende sekvens
+    uint32_t last_passage_time;          // Tidspunkt for siste passering (for debouncing)
+    uint32_t last_passage_micros;        // Mikrosekunder del av tidspunkt for siste passering
+} passage_detection_t;
+
+// Array for å holde passeringsdeteksjonsstatus per målestolpe
+#define MAX_PASSAGE_DETECTORS MAX_POLES
+static passage_detection_t passage_detectors[MAX_PASSAGE_DETECTORS];
+static int passage_detector_count = 0;
+static SemaphoreHandle_t passage_mutex;
+
+// Konfigurasjon for passeringsdeteksjon
+static int passage_debounce_ms = 1000;   // Standard debounce-tid: 1 sekund
+static int min_sensors_for_passage = 2;  // Standard minimum antall sensorer
+static int sequence_timeout_ms = 5000;   // Timeout for sekvens: 5 sekunder
+
+
+
+
 // Globale variabler for å lagre data fra målestolpene
 static pole_data_t pole_data[MAX_POLES];
 static int pole_count = 0;
@@ -102,7 +130,7 @@ esp_err_t websocket_test_page_handler(httpd_req_t *req);
 // Nye funksjonsdeklarasjoner for debounce-håndtering
 bool should_ignore_break(const uint8_t *mac, int32_t sensor_id, uint32_t time_sec, uint32_t time_micros);
 void send_break_to_websocket(const uint8_t *mac_addr, uint32_t time_sec, uint32_t time_micros, int32_t sensor_id, bool filtered);
-
+bool process_break_for_passage_detection(const uint8_t *mac_addr, int32_t sensor_id, uint32_t time_sec, uint32_t time_micros);
 
 
 
@@ -351,7 +379,6 @@ void tcp_client_handler(void *arg) {
                 if (rx_buffer[i] == '\n') {
                     command[cmd_index] = 0; // Null-terminer kommandostrengen
                     
-                    // NY KODE BEGYNNER HER
                     // Sjekk om dette er et break-event
                     if (strncmp(command, "break:", 6) == 0) {
                         // Parse sensor_id og break_value
@@ -375,13 +402,10 @@ void tcp_client_handler(void *arg) {
                             
                             send_break_to_websocket(mac_bytes, tv.tv_sec, tv.tv_usec, break_value, false);
                             
-                            // Sjekk om dette bruddet skal inkluderes i filtrert strøm
-                            if (!should_ignore_break(mac_bytes, sensor_id, tv.tv_sec, tv.tv_usec)) {
-                                send_break_to_websocket(mac_bytes, tv.tv_sec, tv.tv_usec, break_value, true);
-                            }
+                            // Behandle brudd for passeringsdeteksjon
+                            process_break_for_passage_detection(mac_bytes, sensor_id, tv.tv_sec, tv.tv_usec);
                         }
                     }
-                    // NY KODE SLUTTER HER
                     
                     // Logg mottatt kommando
                     //ESP_LOGI(TAG, "Mottatt kommando fra målestolpe %d: %s", pole_idx, command);
@@ -796,6 +820,104 @@ esp_err_t pole_break_handler(httpd_req_t *req) {
 // 
 // 
 
+
+// Handler for å sette konfigurasjon for passerings-deteksjon
+esp_err_t set_passage_config_handler(httpd_req_t *req) {
+    char buf[100];
+    int ret, remaining = req->content_len;
+    
+    ESP_LOGI(TAG, "set_passage_config_handler called, content_len: %d", remaining);
+    
+    if (remaining > sizeof(buf)) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Request too large");
+        return ESP_FAIL;
+    }
+    
+    if ((ret = httpd_req_recv(req, buf, MIN(remaining, sizeof(buf)))) <= 0) {
+        if (ret == HTTPD_SOCK_ERR_TIMEOUT) {
+            httpd_resp_send_408(req);
+        }
+        return ESP_FAIL;
+    }
+    
+    buf[ret] = '\0';
+    ESP_LOGI(TAG, "Mottok data: %s", buf);
+    
+    // Parse JSON data
+    int debounce_ms = -1;
+    int min_sensors = -1;
+    int timeout_ms = -1;
+    
+    // Sjekk debounce_ms
+    char *debounce_start = strstr(buf, "\"debounce_ms\":");
+    if (debounce_start) {
+        debounce_start += 14; // Hopp over "debounce_ms":
+        debounce_ms = atoi(debounce_start);
+    }
+    
+    // Sjekk min_sensors
+    char *min_sensors_start = strstr(buf, "\"min_sensors\":");
+    if (min_sensors_start) {
+        min_sensors_start += 14; // Hopp over "min_sensors":
+        min_sensors = atoi(min_sensors_start);
+    }
+    
+    // Sjekk timeout_ms
+    char *timeout_start = strstr(buf, "\"timeout_ms\":");
+    if (timeout_start) {
+        timeout_start += 13; // Hopp over "timeout_ms":
+        timeout_ms = atoi(timeout_start);
+    }
+    
+    // Oppdater konfigurasjon
+    if (debounce_ms >= 0 && debounce_ms <= 10000) { // Maks 10 sekunder
+        passage_debounce_ms = debounce_ms;
+        ESP_LOGI(TAG, "Passering debounce-tid satt til %d ms", passage_debounce_ms);
+    }
+    
+    if (min_sensors > 0 && min_sensors <= MAX_SENSORS_PER_POLE) {
+        min_sensors_for_passage = min_sensors;
+        ESP_LOGI(TAG, "Minimum sensorer for passering satt til %d", min_sensors_for_passage);
+    }
+    
+    if (timeout_ms >= 1000 && timeout_ms <= 30000) { // Mellom 1 og 30 sekunder
+        sequence_timeout_ms = timeout_ms;
+        ESP_LOGI(TAG, "Timeout for sekvens satt til %d ms", sequence_timeout_ms);
+    }
+    
+    // Send respons
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    
+    char response[256];
+    sprintf(response, "{\"status\":\"success\",\"config\":{\"debounce_ms\":%d,\"min_sensors\":%d,\"timeout_ms\":%d}}",
+            passage_debounce_ms, min_sensors_for_passage, sequence_timeout_ms);
+    
+    httpd_resp_sendstr(req, response);
+    
+    return ESP_OK;
+}
+
+// Handler for å hente nåværende konfigurasjon for passerings-deteksjon
+esp_err_t get_passage_config_handler(httpd_req_t *req) {
+    ESP_LOGI(TAG, "get_passage_config_handler called");
+    
+    // Send gjeldende konfigurasjon
+    char response[256];
+    sprintf(response, "{\"status\":\"success\",\"config\":{\"debounce_ms\":%d,\"min_sensors\":%d,\"timeout_ms\":%d}}",
+            passage_debounce_ms, min_sensors_for_passage, sequence_timeout_ms);
+    
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    httpd_resp_sendstr(req, response);
+    
+    return ESP_OK;
+}
+
+
+
+
+
 // Oppdatert versjon av pole_enabled_handler
 esp_err_t pole_enabled_handler(httpd_req_t *req) {
    char buf[100];
@@ -1182,7 +1304,149 @@ esp_err_t spiffs_get_handler(httpd_req_t *req) {
 // 
 //
 
-
+// Funksjon for å håndtere sensorbrudd og detektere passeringer
+bool process_break_for_passage_detection(const uint8_t *mac_addr, int32_t sensor_id, 
+                                         uint32_t time_sec, uint32_t time_micros) {
+    // Sjekk at sensor_id er gyldig
+    if (sensor_id < 0 || sensor_id >= MAX_SENSORS_PER_POLE) {
+        ESP_LOGW(TAG, "Ugyldig sensor_id for passeringsdeteksjon: %d", sensor_id);
+        return false;
+    }
+    
+    xSemaphoreTake(passage_mutex, portMAX_DELAY);
+    
+    // Søk etter målestolpe i vår liste
+    int detector_idx = -1;
+    for (int i = 0; i < passage_detector_count; i++) {
+        if (memcmp(passage_detectors[i].mac, mac_addr, ESP_NOW_ETH_ALEN) == 0) {
+            detector_idx = i;
+            break;
+        }
+    }
+    
+    // Opprett ny detektor hvis den ikke finnes
+    if (detector_idx < 0) {
+        if (passage_detector_count >= MAX_PASSAGE_DETECTORS) {
+            ESP_LOGW(TAG, "Maks antall passeringsdetektorer nådd (%d)", MAX_PASSAGE_DETECTORS);
+            xSemaphoreGive(passage_mutex);
+            return false;
+        }
+        
+        detector_idx = passage_detector_count++;
+        memcpy(passage_detectors[detector_idx].mac, mac_addr, ESP_NOW_ETH_ALEN);
+        for (int i = 0; i < MAX_SENSORS_PER_POLE; i++) {
+            passage_detectors[detector_idx].sensor_triggered[i] = false;
+        }
+        passage_detectors[detector_idx].unique_sensors_count = 0;
+        passage_detectors[detector_idx].first_break_time = 0;
+        passage_detectors[detector_idx].first_break_micros = 0;
+        passage_detectors[detector_idx].sequence_start_time = 0;
+        passage_detectors[detector_idx].last_passage_time = 0;
+        passage_detectors[detector_idx].last_passage_micros = 0;
+    }
+    
+    // Konverter tidspunkt til millisekunder for enklere sammenligning
+    uint64_t current_time_ms = (uint64_t)time_sec * 1000 + time_micros / 1000;
+    uint64_t last_passage_ms = (uint64_t)passage_detectors[detector_idx].last_passage_time * 1000 + 
+                             passage_detectors[detector_idx].last_passage_micros / 1000;
+    
+    // Sjekk om vi er i debounce-perioden etter en passering
+    if (passage_detectors[detector_idx].last_passage_time > 0) {
+        uint64_t time_since_last_passage_ms = current_time_ms - last_passage_ms;
+        
+        if (time_since_last_passage_ms < passage_debounce_ms) {
+            ESP_LOGI(TAG, "Ignorerer brudd under debounce-perioden (%llu ms siden siste passering)", 
+                    time_since_last_passage_ms);
+            xSemaphoreGive(passage_mutex);
+            return false;
+        }
+    }
+    
+    // Sjekk om vi har en pågående sekvens som har timet ut
+    if (passage_detectors[detector_idx].unique_sensors_count > 0) {
+        uint64_t sequence_start_ms = (uint64_t)passage_detectors[detector_idx].sequence_start_time * 1000;
+        uint64_t time_since_sequence_start_ms = current_time_ms - sequence_start_ms;
+        
+        if (time_since_sequence_start_ms > sequence_timeout_ms) {
+            ESP_LOGI(TAG, "Sekvens timed ut etter %llu ms. Tilbakestiller.", time_since_sequence_start_ms);
+            // Tilbakestill tellere
+            for (int i = 0; i < MAX_SENSORS_PER_POLE; i++) {
+                passage_detectors[detector_idx].sensor_triggered[i] = false;
+            }
+            passage_detectors[detector_idx].unique_sensors_count = 0;
+        }
+    }
+    
+    // Registrer dette bruddet hvis sensoren ikke allerede er registrert i gjeldende sekvens
+    if (!passage_detectors[detector_idx].sensor_triggered[sensor_id]) {
+        passage_detectors[detector_idx].sensor_triggered[sensor_id] = true;
+        passage_detectors[detector_idx].unique_sensors_count++;
+        
+        // Hvis dette er første sensor i sekvensen, lagre starttidspunkt
+        if (passage_detectors[detector_idx].unique_sensors_count == 1) {
+            passage_detectors[detector_idx].first_break_time = time_sec;
+            passage_detectors[detector_idx].first_break_micros = time_micros;
+            passage_detectors[detector_idx].sequence_start_time = time_sec;
+        }
+        
+        ESP_LOGI(TAG, "Sensor %d registrert, nå %d unike sensorer utløst", 
+                sensor_id, passage_detectors[detector_idx].unique_sensors_count);
+        
+        // Sjekk om vi har nådd terskelen for en passering
+        if (passage_detectors[detector_idx].unique_sensors_count >= min_sensors_for_passage) {
+            char mac_str[18];
+            sprintf(mac_str, "%02x:%02x:%02x:%02x:%02x:%02x", 
+                    mac_addr[0], mac_addr[1], mac_addr[2],
+                    mac_addr[3], mac_addr[4], mac_addr[5]);
+            
+            ESP_LOGI(TAG, "Passering detektert! MAC: %s, tidspunkt: %u.%06u, sensorer: %d", 
+                    mac_str, passage_detectors[detector_idx].first_break_time, 
+                    passage_detectors[detector_idx].first_break_micros, 
+                    passage_detectors[detector_idx].unique_sensors_count);
+            
+            // Send passering til WebSocket-klienter
+            char passage_msg[256];
+            sprintf(passage_msg, 
+                    "{\"M\":\"%s\",\"K\":4,\"T\":%" PRIu32 ",\"U\":%" PRIu32 ",\"S\":%d}",
+                    mac_str, passage_detectors[detector_idx].first_break_time, 
+                    passage_detectors[detector_idx].first_break_micros, 
+                    passage_detectors[detector_idx].unique_sensors_count);
+            
+            // Lagre denne passeringens tidspunkt for debouncing
+            passage_detectors[detector_idx].last_passage_time = passage_detectors[detector_idx].first_break_time;
+            passage_detectors[detector_idx].last_passage_micros = passage_detectors[detector_idx].first_break_micros;
+            
+            // Tilbakestill tellere for neste sekvens
+            for (int i = 0; i < MAX_SENSORS_PER_POLE; i++) {
+                passage_detectors[detector_idx].sensor_triggered[i] = false;
+            }
+            passage_detectors[detector_idx].unique_sensors_count = 0;
+            
+            // Send til alle WebSocket-klienter
+            httpd_ws_frame_t ws_pkt = {
+                .final = true,
+                .fragmented = false,
+                .type = HTTPD_WS_TYPE_TEXT,
+                .payload = (uint8_t *)passage_msg,
+                .len = strlen(passage_msg)
+            };
+            
+            xSemaphoreTake(ws_mutex, portMAX_DELAY);
+            for (int i = 0; i < MAX_WS_CLIENTS; ++i) {
+                if (ws_clients[i] != 0) {
+                    httpd_ws_send_frame_async(server, ws_clients[i], &ws_pkt);
+                }
+            }
+            xSemaphoreGive(ws_mutex);
+            
+            xSemaphoreGive(passage_mutex);
+            return true;
+        }
+    }
+    
+    xSemaphoreGive(passage_mutex);
+    return false; // Ingen passering detektert ennå
+}
 
 // Funksjon for å sjekke om et brudd skal ignoreres pga. debouncing
 bool should_ignore_break(const uint8_t *mac, int32_t sensor_id, uint32_t time_sec, uint32_t time_micros) {
@@ -1375,10 +1639,8 @@ void esp_now_recv_cb(const esp_now_recv_info_t *recv_info, const uint8_t *data, 
        // Send alltid rådata (ufiltrert)
        send_break_to_websocket(mac_addr, pole_data[pole_idx].t, pole_data[pole_idx].u, break_value, false);
        
-       // Sjekk om dette bruddet skal inkluderes i den filtrerte strømmen
-       if (!should_ignore_break(mac_addr, sensor_id, pole_data[pole_idx].t, pole_data[pole_idx].u)) {
-           send_break_to_websocket(mac_addr, pole_data[pole_idx].t, pole_data[pole_idx].u, break_value, true);
-       }
+       // Behandle brudd for passeringsdeteksjon
+       process_break_for_passage_detection(mac_addr, sensor_id, pole_data[pole_idx].t, pole_data[pole_idx].u);
    } else if (k == 2 && len >= 9 + sizeof(int32_t) * 21) {  // Settings
        memcpy(pole_data[pole_idx].e, &data[9], sizeof(int32_t) * 7);
        memcpy(pole_data[pole_idx].o, &data[9 + sizeof(int32_t) * 7], sizeof(int32_t) * 7);
@@ -1429,6 +1691,8 @@ void esp_now_recv_cb(const esp_now_recv_info_t *recv_info, const uint8_t *data, 
    
    xSemaphoreGive(pole_data_mutex);
 }
+
+
 
 
 // Funksjon for å initialisere ESP-NOW
@@ -1847,10 +2111,6 @@ httpd_handle_t start_webserver(void) {
 
 
 
-
-
-
-
        // OPTIONS handler for CORS
        httpd_uri_t options = {
            .uri = "/api/*",
@@ -1886,6 +2146,37 @@ httpd_handle_t start_webserver(void) {
            .user_ctx = "/www"
        };
        httpd_register_uri_handler(server_handle, &common);
+
+
+        // Passerings-konfigurasjon API
+        httpd_uri_t set_passage_config = {
+            .uri = "/api/v1/config/passage",
+            .method = HTTP_POST,
+            .handler = set_passage_config_handler,
+            .user_ctx = NULL
+        };
+        httpd_register_uri_handler(server_handle, &set_passage_config);
+
+        httpd_uri_t get_passage_config = {
+            .uri = "/api/v1/config/passage",
+            .method = HTTP_GET,
+            .handler = get_passage_config_handler,
+            .user_ctx = NULL
+        };
+        httpd_register_uri_handler(server_handle, &get_passage_config);
+
+
+
+
+
+
+
+
+
+
+
+
+
 
        ESP_LOGI(TAG, "Web server started");
    } else {
@@ -1945,6 +2236,7 @@ void app_main(void) {
     ws_mutex = xSemaphoreCreateMutex();
     pole_data_mutex = xSemaphoreCreateMutex();
     tcp_poles_mutex = xSemaphoreCreateMutex();
+    passage_mutex = xSemaphoreCreateMutex();
     
     // Initialiser arrays
     memset(ws_clients, 0, sizeof(ws_clients));

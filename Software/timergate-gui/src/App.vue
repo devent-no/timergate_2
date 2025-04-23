@@ -15,6 +15,7 @@ export default {
       poles: [],
       lookup: new Map(),
       breaks: {},
+      passages: [], // Ny array for passeringer
       settings: {},
       socket: null,
       socket_ready: false,
@@ -80,55 +81,74 @@ export default {
       this.socket_ready = true;
     },
     onSocketMessage(evt) {
-      var received = JSON.parse(evt.data);
+  var received = JSON.parse(evt.data);
+  console.log("Mottatt WebSocket-melding:", received); // Debugging-utskrift
+  
+  if (!this.lookup.has(received.M)) {
+    this.lookup.set(received.M, this.poles.length);
+  }
+  const id = this.lookup.get(received.M);
+  if (this.poles[id] === undefined) {
+    this.poles[id] = {
+      name: "Pole " + id,
+      id: id,
+      mac: received.M,
+    };
+  }
 
-      // Sjekk om dette er en filtrert melding
-      const isFiltered = received.F === true;
-
-      // For det nye GUI, bruk kun filtrerte meldinger
-      if (this.useNewInterface && !isFiltered && received.K == 1) {
-        // Ignorer ufiltrerte brudd-meldinger i det nye grensesnittet
-        return;
-      }
-
-
-      if (!this.lookup.has(received.M)) {
-        this.lookup.set(received.M, this.poles.length);
-      }
-      const id = this.lookup.get(received.M);
-      if (this.poles[id] === undefined) {
-        this.poles[id] = {
-          name: "Pole " + id,
-          id: id,
-          mac: received.M,
-        };
-      }
-
-      if (received.K == 0) {
-        // ADC values
-        this.poles[id].values = received.V;
-        this.poles[id].broken = received.B.map((x) =>
-          x == 1 ? "#f87979" : "#087979"
-        );
-      } else if (received.K == 1) {
-        // Sensor breaks
-        if (!(received.M in this.breaks)) {
-          this.breaks[received.M] = [];
-        }
-        const br = {
-          mac: received.M,
-          time: received.T * 1000 + Math.round(received.U / 1000),
-          value: received.B,
-        };
-        this.breaks[received.M].push(br);
-      } else if (received.K == 2) {
-        // Settings. These are sent once, when the pole connects.
-        this.poles[id].enabled = received.E.map((x) => (x == 1 ? true : false));
-        this.poles[id].offsets = received.O;
-        this.poles[id].br_limit = received.B;
-        console.log(this.poles[id].enabled);
-      }
-    },
+  if (received.K == 0) {
+    // ADC values
+    this.poles[id].values = received.V;
+    this.poles[id].broken = received.B.map((x) =>
+      x == 1 ? "#f87979" : "#087979"
+    );
+    console.log("Oppdatert ADC-verdier for stolpe", id, this.poles[id].values);
+  } else if (received.K == 1) {
+    // Sensor breaks
+    if (!(received.M in this.breaks)) {
+      this.breaks[received.M] = [];
+    }
+    const br = {
+      mac: received.M,
+      time: received.T * 1000 + Math.round(received.U / 1000),
+      value: received.B,
+      filtered: !!received.F  // Sjekk om dette er et filtrert brudd
+    };
+    this.breaks[received.M].push(br);
+    console.log("Registrert brudd for stolpe", received.M, br);
+  } else if (received.K == 2) {
+    // Settings. These are sent once, when the pole connects.
+    this.poles[id].enabled = received.E.map((x) => (x == 1 ? true : false));
+    this.poles[id].offsets = received.O;
+    this.poles[id].br_limit = received.B;
+    console.log("Mottatt settings for stolpe", id, this.poles[id].enabled);
+  } else if (received.K == 3) {
+    // Kommando-melding (for logging)
+    console.log("Mottatt kommando:", received.cmd);
+  } else if (received.K == 4) {
+    // Passage detection
+    if (!this.passages) {
+      this.passages = [];
+    }
+    const passage = {
+      mac: received.M,
+      time: received.T * 1000 + Math.round(received.U / 1000),
+      sensors: received.S
+    };
+    
+    // Beregn tidsdifferanse fra forrige passering hvis det finnes
+    if (this.passages.length > 0) {
+      const prevPassage = this.passages[this.passages.length - 1];
+      passage.timeDiff = passage.time - prevPassage.time;
+    } else {
+      passage.timeDiff = null;
+    }
+    
+    this.passages.push(passage);
+    console.log("Passering registrert:", passage);
+  }
+},
+      
     onSockerError(evt) {
       this.socket_ready = false;
       console.log("On Error");
@@ -170,6 +190,7 @@ export default {
       :time="time" 
       :poles="poles" 
       :breaks="breaks"
+      :passages="passages"
       :hostname="hostname"
       :sync-time="syncTime"
       :clear-times="clearTimes"
