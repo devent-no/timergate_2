@@ -81,6 +81,17 @@ export default {
     },
     onSocketMessage(evt) {
       var received = JSON.parse(evt.data);
+
+      // Sjekk om dette er en filtrert melding
+      const isFiltered = received.F === true;
+
+      // For det nye GUI, bruk kun filtrerte meldinger
+      if (this.useNewInterface && !isFiltered && received.K == 1) {
+        // Ignorer ufiltrerte brudd-meldinger i det nye grensesnittet
+        return;
+      }
+
+
       if (!this.lookup.has(received.M)) {
         this.lookup.set(received.M, this.poles.length);
       }

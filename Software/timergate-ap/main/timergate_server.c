@@ -52,6 +52,26 @@ typedef struct {
 
 
 
+// Struktur for å lagre siste brudd for debouncing
+typedef struct {
+    uint8_t mac[ESP_NOW_ETH_ALEN];  // MAC-adresse til målestolpen
+    int32_t sensor_id;              // Sensor-ID (0-6)
+    uint32_t last_break_time;       // Tidspunkt for siste brudd (sekunder)
+    uint32_t last_break_micros;     // Mikrosekunder del
+} last_break_record_t;
+
+// Array for å holde siste brudd per sensor/målestolpe
+#define MAX_SENSORS_PER_POLE 7
+static last_break_record_t last_breaks[MAX_POLES * MAX_SENSORS_PER_POLE];
+static int last_break_count = 0;
+
+// Konfigurerbar debounce-tid i millisekunder
+static int break_debounce_ms = 1000; // Standard: 1 sekund
+
+
+
+
+
 // Datastruktur for å lagre informasjon fra målestolpene
 typedef struct {
     uint8_t mac[ESP_NOW_ETH_ALEN];  // MAC-adresse til målestolpen
@@ -78,6 +98,14 @@ static const char *TAG = "timergate-ap";
 void init_esp_now(void);
 esp_err_t simulate_pole_data_handler(httpd_req_t *req);
 esp_err_t websocket_test_page_handler(httpd_req_t *req);
+
+// Nye funksjonsdeklarasjoner for debounce-håndtering
+bool should_ignore_break(const uint8_t *mac, int32_t sensor_id, uint32_t time_sec, uint32_t time_micros);
+void send_break_to_websocket(const uint8_t *mac_addr, uint32_t time_sec, uint32_t time_micros, int32_t sensor_id, bool filtered);
+
+
+
+
 
 static httpd_handle_t server = NULL;
 static int ws_clients[MAX_WS_CLIENTS];
@@ -258,6 +286,7 @@ esp_err_t init_fs(void) {
 // 
 //
 // Funksjon som håndterer en målestolpes TCP-forbindelse
+// Funksjon som håndterer en målestolpes TCP-forbindelse
 void tcp_client_handler(void *arg) {
     int sock = *(int *)arg;
     free(arg); // Frigjør minneallokeringen fra TCP server task
@@ -293,12 +322,6 @@ void tcp_client_handler(void *arg) {
     }
     xSemaphoreGive(tcp_poles_mutex);
 
-
-
-
-
-
-
     if (pole_idx == -1) {
         ESP_LOGE(TAG, "Ingen ledige plasser for målestolper, avviser forbindelse");
         close(sock);
@@ -327,6 +350,38 @@ void tcp_client_handler(void *arg) {
                 command[cmd_index] = rx_buffer[i];
                 if (rx_buffer[i] == '\n') {
                     command[cmd_index] = 0; // Null-terminer kommandostrengen
+                    
+                    // NY KODE BEGYNNER HER
+                    // Sjekk om dette er et break-event
+                    if (strncmp(command, "break:", 6) == 0) {
+                        // Parse sensor_id og break_value
+                        int sensor_id = 0;
+                        int break_value = 0;
+                        if (sscanf(command + 6, "%d %d", &sensor_id, &break_value) == 2) {
+                            // Få gjeldende tid
+                            struct timeval tv;
+                            gettimeofday(&tv, NULL);
+                            
+                            // Send alltid rådata (ufiltrert)
+                            uint8_t mac_bytes[ESP_NOW_ETH_ALEN];
+                            // Konverterer mac-stringen til bytes hvis nødvendig
+                            // For enkelhets skyld bruker vi bare pole_idx her
+                            mac_bytes[0] = 0xAA; // Dummy MAC for TCP-sensorer
+                            mac_bytes[1] = 0xBB;
+                            mac_bytes[2] = 0xCC;
+                            mac_bytes[3] = 0xDD;
+                            mac_bytes[4] = 0xEE;
+                            mac_bytes[5] = pole_idx & 0xFF; // Bruk pole_idx som siste byte
+                            
+                            send_break_to_websocket(mac_bytes, tv.tv_sec, tv.tv_usec, break_value, false);
+                            
+                            // Sjekk om dette bruddet skal inkluderes i filtrert strøm
+                            if (!should_ignore_break(mac_bytes, sensor_id, tv.tv_sec, tv.tv_usec)) {
+                                send_break_to_websocket(mac_bytes, tv.tv_sec, tv.tv_usec, break_value, true);
+                            }
+                        }
+                    }
+                    // NY KODE SLUTTER HER
                     
                     // Logg mottatt kommando
                     //ESP_LOGI(TAG, "Mottatt kommando fra målestolpe %d: %s", pole_idx, command);
@@ -397,9 +452,13 @@ void tcp_client_handler(void *arg) {
     close(sock);
     ESP_LOGI(TAG, "Målestolpe %d koblet fra, frigjort", pole_idx);
     vTaskDelete(NULL);
-
-
 }
+
+
+
+
+
+
 
 // TCP-server som lytter etter innkommende forbindelser
 static void tcp_server_task(void *pvParameters) {
@@ -1123,6 +1182,91 @@ esp_err_t spiffs_get_handler(httpd_req_t *req) {
 // 
 //
 
+
+
+// Funksjon for å sjekke om et brudd skal ignoreres pga. debouncing
+bool should_ignore_break(const uint8_t *mac, int32_t sensor_id, uint32_t time_sec, uint32_t time_micros) {
+    // Konverter til total millisekunder for enkel sammenligning
+    uint64_t current_time_ms = (uint64_t)time_sec * 1000 + time_micros / 1000;
+    
+    // Sjekk om vi har et tidligere brudd for denne sensoren
+    for (int i = 0; i < last_break_count; i++) {
+        if (memcmp(last_breaks[i].mac, mac, ESP_NOW_ETH_ALEN) == 0 && 
+            last_breaks[i].sensor_id == sensor_id) {
+            
+            // Beregn tid siden siste brudd
+            uint64_t last_time_ms = (uint64_t)last_breaks[i].last_break_time * 1000 + 
+                                 last_breaks[i].last_break_micros / 1000;
+            uint64_t time_diff_ms = current_time_ms - last_time_ms;
+            
+            // Hvis tiden er innenfor debounce-vinduet, ignorer
+            if (time_diff_ms < break_debounce_ms) {
+                ESP_LOGI(TAG, "Ignorerer brudd innenfor debounce-tid (%llu ms)", time_diff_ms);
+                return true; // Ignorer dette bruddet
+            }
+            
+            // Oppdater siste brudd-tid
+            last_breaks[i].last_break_time = time_sec;
+            last_breaks[i].last_break_micros = time_micros;
+            return false; // Ikke ignorer - første brudd etter debounce-perioden
+        }
+    }
+    
+    // Første brudd for denne sensoren, legg til i oversikten
+    if (last_break_count < MAX_POLES * MAX_SENSORS_PER_POLE) {
+        memcpy(last_breaks[last_break_count].mac, mac, ESP_NOW_ETH_ALEN);
+        last_breaks[last_break_count].sensor_id = sensor_id;
+        last_breaks[last_break_count].last_break_time = time_sec;
+        last_breaks[last_break_count].last_break_micros = time_micros;
+        last_break_count++;
+    }
+    
+    return false; // Ikke ignorer - første kjente brudd på denne sensoren
+}
+
+
+
+// Funksjon for å sende brudd til WebSocket-klienter
+void send_break_to_websocket(const uint8_t *mac_addr, uint32_t time_sec, uint32_t time_micros, 
+                             int32_t sensor_id, bool filtered) {
+    char mac_str[18];
+    sprintf(mac_str, "%02x:%02x:%02x:%02x:%02x:%02x", 
+           mac_addr[0], mac_addr[1], mac_addr[2],
+           mac_addr[3], mac_addr[4], mac_addr[5]);
+    
+    char ws_msg[256];
+    if (filtered) {
+        sprintf(ws_msg, 
+            "{\"M\":\"%s\",\"K\":1,\"T\":%" PRIu32 ",\"U\":%" PRIu32 ",\"B\":%" PRId32 ",\"F\":true}",
+            mac_str, time_sec, time_micros, sensor_id);
+    } else {
+        sprintf(ws_msg, 
+            "{\"M\":\"%s\",\"K\":1,\"T\":%" PRIu32 ",\"U\":%" PRIu32 ",\"B\":%" PRId32 "}",
+            mac_str, time_sec, time_micros, sensor_id);
+    }
+    
+    // Send til alle WebSocket-klienter
+    httpd_ws_frame_t ws_pkt = {
+        .final = true,
+        .fragmented = false,
+        .type = HTTPD_WS_TYPE_TEXT,
+        .payload = (uint8_t *)ws_msg,
+        .len = strlen(ws_msg)
+    };
+
+    xSemaphoreTake(ws_mutex, portMAX_DELAY);
+    for (int i = 0; i < MAX_WS_CLIENTS; ++i) {
+        if (ws_clients[i] != 0) {
+            httpd_ws_send_frame_async(server, ws_clients[i], &ws_pkt);
+        }
+    }
+    xSemaphoreGive(ws_mutex);
+}
+
+
+
+
+// ESP-NOW mottaker callback
 // ESP-NOW mottaker callback
 void esp_now_recv_cb(const esp_now_recv_info_t *recv_info, const uint8_t *data, int len) {
    // Hent MAC-adressen fra recv_info
@@ -1224,35 +1368,17 @@ void esp_now_recv_cb(const esp_now_recv_info_t *recv_info, const uint8_t *data, 
        // Antar at en enkelt break-verdi fins i data[9]
        int32_t break_value;
        memcpy(&break_value, &data[9], sizeof(int32_t));
+       int32_t sensor_id = break_value; // Eller hvordan sensor_id faktisk bestemmes
+       
        ESP_LOGI(TAG, "Break event mottatt: verdi=%" PRId32, break_value);
 
-       // Send break event som JSON til WebSocket
-       char mac_str[18];
-       sprintf(mac_str, "%02x:%02x:%02x:%02x:%02x:%02x", 
-               mac_addr[0], mac_addr[1], mac_addr[2],
-               mac_addr[3], mac_addr[4], mac_addr[5]);
+       // Send alltid rådata (ufiltrert)
+       send_break_to_websocket(mac_addr, pole_data[pole_idx].t, pole_data[pole_idx].u, break_value, false);
        
-       char ws_msg[256];
-       sprintf(ws_msg, 
-               "{\"M\":\"%s\",\"K\":1,\"T\":%" PRIu32 ",\"U\":%" PRIu32 ",\"B\":%" PRId32 "}",
-               mac_str, pole_data[pole_idx].t, pole_data[pole_idx].u, break_value);
-       
-       // Send til alle WebSocket klienter
-       httpd_ws_frame_t ws_pkt = {
-           .final = true,
-           .fragmented = false,
-           .type = HTTPD_WS_TYPE_TEXT,
-           .payload = (uint8_t *)ws_msg,
-           .len = strlen(ws_msg)
-       };
-
-       xSemaphoreTake(ws_mutex, portMAX_DELAY);
-       for (int i = 0; i < MAX_WS_CLIENTS; ++i) {
-           if (ws_clients[i] != 0) {
-               httpd_ws_send_frame_async(server, ws_clients[i], &ws_pkt);
-           }
+       // Sjekk om dette bruddet skal inkluderes i den filtrerte strømmen
+       if (!should_ignore_break(mac_addr, sensor_id, pole_data[pole_idx].t, pole_data[pole_idx].u)) {
+           send_break_to_websocket(mac_addr, pole_data[pole_idx].t, pole_data[pole_idx].u, break_value, true);
        }
-       xSemaphoreGive(ws_mutex);
    } else if (k == 2 && len >= 9 + sizeof(int32_t) * 21) {  // Settings
        memcpy(pole_data[pole_idx].e, &data[9], sizeof(int32_t) * 7);
        memcpy(pole_data[pole_idx].o, &data[9 + sizeof(int32_t) * 7], sizeof(int32_t) * 7);
@@ -1303,6 +1429,7 @@ void esp_now_recv_cb(const esp_now_recv_info_t *recv_info, const uint8_t *data, 
    
    xSemaphoreGive(pole_data_mutex);
 }
+
 
 // Funksjon for å initialisere ESP-NOW
 void init_esp_now(void) {
@@ -1550,6 +1677,57 @@ esp_err_t simulate_pole_data_handler(httpd_req_t *req) {
 // 
 //
 
+
+
+// Handler for å sette debounce-tid
+esp_err_t set_debounce_time_handler(httpd_req_t *req) {
+    char buf[100];
+    int ret, remaining = req->content_len;
+    
+    ESP_LOGI(TAG, "set_debounce_time_handler called, content_len: %d", remaining);
+    
+    if (remaining > sizeof(buf)) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Request too large");
+        return ESP_FAIL;
+    }
+    
+    if ((ret = httpd_req_recv(req, buf, MIN(remaining, sizeof(buf)))) <= 0) {
+        if (ret == HTTPD_SOCK_ERR_TIMEOUT) {
+            httpd_resp_send_408(req);
+        }
+        return ESP_FAIL;
+    }
+    
+    buf[ret] = '\0';
+    ESP_LOGI(TAG, "Mottok data: %s", buf);
+    
+    // Parse JSON data
+    int debounce_ms = 0;
+    char *debounce_start = strstr(buf, "\"debounce_ms\":");
+    if (debounce_start) {
+        debounce_start += 14; // Hopp over "debounce_ms":
+        debounce_ms = atoi(debounce_start);
+    }
+    
+    // Valider og sett ny debounce-tid
+    if (debounce_ms >= 0 && debounce_ms <= 5000) { // Maks 5 sekunder
+        break_debounce_ms = debounce_ms;
+        ESP_LOGI(TAG, "Debounce-tid satt til %d ms", break_debounce_ms);
+    } else {
+        ESP_LOGW(TAG, "Ugyldig debounce-tid: %d ms", debounce_ms);
+    }
+    
+    // Send respons
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    httpd_resp_sendstr(req, "{\"status\":\"success\",\"message\":\"Debounce time updated\"}");
+    
+    return ESP_OK;
+}
+
+
+
+
 httpd_handle_t start_webserver(void) {
    httpd_config_t config = HTTPD_DEFAULT_CONFIG();
    config.uri_match_fn = httpd_uri_match_wildcard; //Important when when gui-files is hashed
@@ -1657,6 +1835,22 @@ httpd_handle_t start_webserver(void) {
        };
        httpd_register_uri_handler(server_handle, &pole_enabled);
        
+
+        // Debounce-innstillinger API
+        httpd_uri_t debounce_time = {
+            .uri = "/api/v1/config/debounce",
+            .method = HTTP_POST,
+            .handler = set_debounce_time_handler,
+            .user_ctx = NULL
+        };
+        httpd_register_uri_handler(server_handle, &debounce_time);
+
+
+
+
+
+
+
        // OPTIONS handler for CORS
        httpd_uri_t options = {
            .uri = "/api/*",
