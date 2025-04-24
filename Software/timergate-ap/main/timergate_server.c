@@ -134,7 +134,6 @@ bool process_break_for_passage_detection(const uint8_t *mac_addr, int32_t sensor
 
 
 
-
 static httpd_handle_t server = NULL;
 static int ws_clients[MAX_WS_CLIENTS];
 static SemaphoreHandle_t ws_mutex;
@@ -1431,8 +1430,7 @@ esp_err_t spiffs_get_handler(httpd_req_t *req) {
 //
 
 // Funksjon for å håndtere sensorbrudd og detektere passeringer
-bool process_break_for_passage_detection(const uint8_t *mac_addr, int32_t sensor_id, 
-                                         uint32_t time_sec, uint32_t time_micros) {
+bool process_break_for_passage_detection(const uint8_t *mac_addr, int32_t sensor_id, uint32_t time_sec, uint32_t time_micros) {
    
     //ESP_LOGI(TAG, "Sensorbrudd mottatt: MAC: %02x:%02x:%02x:%02x:%02x:%02x, sensor_id: %d",mac_addr[0], mac_addr[1], mac_addr[2], mac_addr[3], mac_addr[4], mac_addr[5],sensor_id);
   
@@ -1490,22 +1488,36 @@ bool process_break_for_passage_detection(const uint8_t *mac_addr, int32_t sensor
         }
     }
     
-    // Sjekk om vi har en pågående sekvens som har timet ut
-    if (passage_detectors[detector_idx].unique_sensors_count > 0) {
-        uint64_t sequence_start_ms = (uint64_t)passage_detectors[detector_idx].sequence_start_time * 1000;
-        uint64_t time_since_sequence_start_ms = current_time_ms - sequence_start_ms;
+    // ---- VIKTIG ENDRING HER ----
+    // Sjekk om vi har en ny sekvens (telleren er 0) eller en eksisterende sekvens
+    if (passage_detectors[detector_idx].unique_sensors_count == 0) {
+        // Dette er første sensor i en ny sekvens
+        passage_detectors[detector_idx].first_break_time = time_sec;
+        passage_detectors[detector_idx].first_break_micros = time_micros;
+        passage_detectors[detector_idx].sequence_start_time = time_sec;
+    } else {
+        // Vi har en eksisterende sekvens, sjekk om den har timet ut
+        uint64_t sequence_start_ms = (uint64_t)passage_detectors[detector_idx].sequence_start_time * 1000 + 
+                                     passage_detectors[detector_idx].first_break_micros / 1000;
+        uint64_t time_since_start_ms = current_time_ms - sequence_start_ms;
         
-        if (time_since_sequence_start_ms > sequence_timeout_ms) {
-            ESP_LOGI(TAG, "Sekvens timed ut etter %llu ms. Tilbakestiller.", time_since_sequence_start_ms);
+        if (time_since_start_ms > sequence_timeout_ms) {
+            ESP_LOGI(TAG, "Sekvens timed ut etter %llu ms. Tilbakestiller.", time_since_start_ms);
             // Tilbakestill tellere
             for (int i = 0; i < MAX_SENSORS_PER_POLE; i++) {
                 passage_detectors[detector_idx].sensor_triggered[i] = false;
             }
             passage_detectors[detector_idx].unique_sensors_count = 0;
+            
+            // Sett nye verdier for første brudd i ny sekvens
+            passage_detectors[detector_idx].first_break_time = time_sec;
+            passage_detectors[detector_idx].first_break_micros = time_micros;
+            passage_detectors[detector_idx].sequence_start_time = time_sec;
         }
     }
+    // ---- SLUTT PÅ VIKTIG ENDRING ----
     
-    // Registrer dette bruddet hvis sensoren ikke allerede er registrert i gjeldende sekvens
+    // Registrer denne sensoren hvis den ikke allerede er registrert i gjeldende sekvens
     if (!passage_detectors[detector_idx].sensor_triggered[sensor_id]) {
         passage_detectors[detector_idx].sensor_triggered[sensor_id] = true;
         passage_detectors[detector_idx].unique_sensors_count++;
@@ -1514,13 +1526,6 @@ bool process_break_for_passage_detection(const uint8_t *mac_addr, int32_t sensor
         ESP_LOGI(TAG, "Sensor %d registrert, sensorteller nå: %d, min for passering: %d", 
             sensor_id, passage_detectors[detector_idx].unique_sensors_count, min_sensors_for_passage);
         
-        
-        // Hvis dette er første sensor i sekvensen, lagre starttidspunkt
-        if (passage_detectors[detector_idx].unique_sensors_count == 1) {
-            passage_detectors[detector_idx].first_break_time = time_sec;
-            passage_detectors[detector_idx].first_break_micros = time_micros;
-            passage_detectors[detector_idx].sequence_start_time = time_sec;
-        }
         
         ESP_LOGI(TAG, "Sensor %d registrert, nå %d unike sensorer utløst", 
                 sensor_id, passage_detectors[detector_idx].unique_sensors_count);
@@ -1580,6 +1585,7 @@ bool process_break_for_passage_detection(const uint8_t *mac_addr, int32_t sensor
     xSemaphoreGive(passage_mutex);
     return false; // Ingen passering detektert ennå
 }
+
 
 // Funksjon for å sjekke om et brudd skal ignoreres pga. debouncing
 bool should_ignore_break(const uint8_t *mac, int32_t sensor_id, uint32_t time_sec, uint32_t time_micros) {
@@ -1772,6 +1778,7 @@ void esp_now_recv_cb(const esp_now_recv_info_t *recv_info, const uint8_t *data, 
        // Send alltid rådata (ufiltrert)
        send_break_to_websocket(mac_addr, pole_data[pole_idx].t, pole_data[pole_idx].u, break_value, false);
        
+
        // Behandle brudd for passeringsdeteksjon
        process_break_for_passage_detection(mac_addr, sensor_id, pole_data[pole_idx].t, pole_data[pole_idx].u);
    } else if (k == 2 && len >= 9 + sizeof(int32_t) * 21) {  // Settings
