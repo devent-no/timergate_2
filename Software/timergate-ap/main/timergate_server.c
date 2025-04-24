@@ -406,6 +406,132 @@ void tcp_client_handler(void *arg) {
                             process_break_for_passage_detection(mac_bytes, sensor_id, tv.tv_sec, tv.tv_usec);
                         }
                     }
+                   
+                   
+                    else if (strncmp(command, "{\"K\":1,", 7) == 0) {
+                        // Parse JSON-strengen
+                        char mac_str[18] = {0};
+                        int32_t break_value = -1;
+                        uint32_t time_sec = 0;
+                        uint32_t time_usec = 0;
+                        
+                        // Finn MAC
+                        char *mac_start = strstr(command, "\"M\":\"");
+                        if (mac_start) {
+                            mac_start += 5; // Hopp over "M":"
+                            char *mac_end = strchr(mac_start, '\"');
+                            if (mac_end && (mac_end - mac_start) < 18) {
+                                strncpy(mac_str, mac_start, mac_end - mac_start);
+                                mac_str[mac_end - mac_start] = '\0';
+                            }
+                        }
+                        
+                        // Finn break-verdien
+                        char *break_start = strstr(command, "\"B\":");
+                        if (break_start) {
+                            break_start += 4; // Hopp over "B":
+                            break_value = atoi(break_start);
+                        }
+                        
+                        // Finn tidspunktet
+                        char *time_start = strstr(command, "\"T\":");
+                        if (time_start) {
+                            time_start += 4; // Hopp over "T":
+                            time_sec = atoi(time_start);
+                        }
+                        
+                        char *usec_start = strstr(command, "\"U\":");
+                        if (usec_start) {
+                            usec_start += 4; // Hopp over "U":
+                            time_usec = atoi(usec_start);
+                        }
+                        
+                        // Viktig: Vi må bare behandle brudd-hendelser (B=1), ikke gjenopprettinger (B=0)
+                        if (break_value == 1 && strlen(mac_str) > 0) {
+                            // Konverter MAC-adressen til bytes
+                            uint8_t mac_bytes[ESP_NOW_ETH_ALEN];
+                            sscanf(mac_str, "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx", 
+                                &mac_bytes[0], &mac_bytes[1], &mac_bytes[2],
+                                &mac_bytes[3], &mac_bytes[4], &mac_bytes[5]);
+                            
+                            // Logg for debugging
+                            ESP_LOGI(TAG, "Parsert sensorbrudd fra JSON (K=1): MAC=%s, time=%u.%06u",
+                                    mac_str, time_sec, time_usec);
+                                    
+                            // Når vi får K=1 med B=1, antar vi at det er sensor med ID=0
+                            // Dette er en midlertidig løsning inntil vi får faktisk sensor_id
+                            int32_t sensor_id = 0;
+                            
+                            // Denne loggen viser spesifikt hva vi sender til passeringsdeteksjonen
+                            ESP_LOGI(TAG, "Kaller process_break_for_passage_detection med sensor_id=%d", sensor_id);
+                            
+                            // Process break_value som sensor_id=0 for passeringsdeteksjon
+                            process_break_for_passage_detection(mac_bytes, sensor_id, time_sec, time_usec);
+                        }
+                    }
+
+
+                    else if (strncmp(command, "{\"K\":0,", 7) == 0 && strstr(command, "\"B\":[") != NULL) {
+                        // Parse JSON-strengen for K=0 med B-array
+                        char mac_str[18] = {0};
+                        uint32_t time_sec = 0;
+                        uint32_t time_usec = 0;
+                        
+                        // Finn MAC
+                        char *mac_start = strstr(command, "\"M\":\"");
+                        if (mac_start) {
+                            mac_start += 5; // Hopp over "M":"
+                            char *mac_end = strchr(mac_start, '\"');
+                            if (mac_end && (mac_end - mac_start) < 18) {
+                                strncpy(mac_str, mac_start, mac_end - mac_start);
+                                mac_str[mac_end - mac_start] = '\0';
+                            }
+                        }
+                        
+                        // Vi bruker gjeldende tid siden T og U vanligvis ikke er i K=0 meldinger
+                        struct timeval tv;
+                        gettimeofday(&tv, NULL);
+                        time_sec = tv.tv_sec;
+                        time_usec = tv.tv_usec;
+                        
+                        // Finn B-array
+                        char *b_array_start = strstr(command, "\"B\":[");
+                        if (b_array_start && strlen(mac_str) > 0) {
+                            b_array_start += 5; // Hopp over "B":[
+                            
+                            // Konverter MAC-adressen til bytes
+                            uint8_t mac_bytes[ESP_NOW_ETH_ALEN];
+                            sscanf(mac_str, "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx", 
+                                &mac_bytes[0], &mac_bytes[1], &mac_bytes[2],
+                                &mac_bytes[3], &mac_bytes[4], &mac_bytes[5]);
+                            
+                            // Prosessere B-arrayet for å finne utløste sensorer
+                            char *ptr = b_array_start;
+                            for (int i = 0; i < 7; i++) {
+                                while (*ptr && (*ptr < '0' || *ptr > '9')) ptr++; // Hopp til neste tall
+                                if (*ptr) {
+                                    int value = *ptr - '0'; // Konverter til tall
+                                    if (value == 1) {
+                                        //ESP_LOGI(TAG, "Fant utløst sensor fra B-array: sensor_id=%d, MAC=%s", i, mac_str);
+                                        // Kall passeringsdeteksjon for denne sensoren
+                                        process_break_for_passage_detection(mac_bytes, i, time_sec, time_usec);
+                                    }
+                                    ptr++;
+                                }
+                            }
+                        }
+                    }
+
+
+
+
+
+
+
+
+
+
+
                     
                     // Logg mottatt kommando
                     //ESP_LOGI(TAG, "Mottatt kommando fra målestolpe %d: %s", pole_idx, command);
@@ -1307,6 +1433,9 @@ esp_err_t spiffs_get_handler(httpd_req_t *req) {
 // Funksjon for å håndtere sensorbrudd og detektere passeringer
 bool process_break_for_passage_detection(const uint8_t *mac_addr, int32_t sensor_id, 
                                          uint32_t time_sec, uint32_t time_micros) {
+   
+    //ESP_LOGI(TAG, "Sensorbrudd mottatt: MAC: %02x:%02x:%02x:%02x:%02x:%02x, sensor_id: %d",mac_addr[0], mac_addr[1], mac_addr[2], mac_addr[3], mac_addr[4], mac_addr[5],sensor_id);
+  
     // Sjekk at sensor_id er gyldig
     if (sensor_id < 0 || sensor_id >= MAX_SENSORS_PER_POLE) {
         ESP_LOGW(TAG, "Ugyldig sensor_id for passeringsdeteksjon: %d", sensor_id);
@@ -1355,8 +1484,7 @@ bool process_break_for_passage_detection(const uint8_t *mac_addr, int32_t sensor
         uint64_t time_since_last_passage_ms = current_time_ms - last_passage_ms;
         
         if (time_since_last_passage_ms < passage_debounce_ms) {
-            ESP_LOGI(TAG, "Ignorerer brudd under debounce-perioden (%llu ms siden siste passering)", 
-                    time_since_last_passage_ms);
+            //ESP_LOGI(TAG, "Ignorerer brudd under debounce-perioden (%llu ms siden siste passering)",time_since_last_passage_ms);
             xSemaphoreGive(passage_mutex);
             return false;
         }
@@ -1381,6 +1509,11 @@ bool process_break_for_passage_detection(const uint8_t *mac_addr, int32_t sensor
     if (!passage_detectors[detector_idx].sensor_triggered[sensor_id]) {
         passage_detectors[detector_idx].sensor_triggered[sensor_id] = true;
         passage_detectors[detector_idx].unique_sensors_count++;
+
+        
+        ESP_LOGI(TAG, "Sensor %d registrert, sensorteller nå: %d, min for passering: %d", 
+            sensor_id, passage_detectors[detector_idx].unique_sensors_count, min_sensors_for_passage);
+        
         
         // Hvis dette er første sensor i sekvensen, lagre starttidspunkt
         if (passage_detectors[detector_idx].unique_sensors_count == 1) {
@@ -2138,16 +2271,7 @@ httpd_handle_t start_webserver(void) {
        };
        httpd_register_uri_handler(server_handle, &ws_test);
        
-       // All other URIs
-       httpd_uri_t common = {
-           .uri = "/*",
-           .method = HTTP_GET,
-           .handler = spiffs_get_handler,
-           .user_ctx = "/www"
-       };
-       httpd_register_uri_handler(server_handle, &common);
-
-
+  
         // Passerings-konfigurasjon API
         httpd_uri_t set_passage_config = {
             .uri = "/api/v1/config/passage",
@@ -2166,6 +2290,14 @@ httpd_handle_t start_webserver(void) {
         httpd_register_uri_handler(server_handle, &get_passage_config);
 
 
+     // All other URIs
+       httpd_uri_t common = {
+           .uri = "/*",
+           .method = HTTP_GET,
+           .handler = spiffs_get_handler,
+           .user_ctx = "/www"
+       };
+       httpd_register_uri_handler(server_handle, &common);
 
 
 
