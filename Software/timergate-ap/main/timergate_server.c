@@ -96,6 +96,10 @@ typedef struct {
     uint32_t sequence_start_time;        // Starttidspunkt for gjeldende sekvens
     uint32_t last_passage_time;          // Tidspunkt for siste passering (for debouncing)
     uint32_t last_passage_micros;        // Mikrosekunder del av tidspunkt for siste passering
+    // Legg til disse nye variablene:
+    bool use_sensor_time_scale;          // Sant hvis vi bruker sensor-tid for denne sekvensen
+    uint32_t last_sensor_time;           // Siste tidspunkt fra sensoren
+    uint32_t last_sensor_micros;         // Mikrosekunder del    
 } passage_detection_t;
 
 // Array for å holde passeringsdeteksjonsstatus per målestolpe
@@ -1470,8 +1474,13 @@ bool process_break_for_passage_detection(const uint8_t *mac_addr, int32_t sensor
         passage_detectors[detector_idx].sequence_start_time = 0;
         passage_detectors[detector_idx].last_passage_time = 0;
         passage_detectors[detector_idx].last_passage_micros = 0;
+
+        // Initialiser nye felt for robust tidshåndtering
+        passage_detectors[detector_idx].last_sensor_time = time_sec;
+        passage_detectors[detector_idx].last_sensor_micros = time_micros;
     }
-    
+
+
     // Konverter tidspunkt til millisekunder for enklere sammenligning
     uint64_t current_time_ms = (uint64_t)time_sec * 1000 + time_micros / 1000;
     uint64_t last_passage_ms = (uint64_t)passage_detectors[detector_idx].last_passage_time * 1000 + 
@@ -1496,13 +1505,39 @@ bool process_break_for_passage_detection(const uint8_t *mac_addr, int32_t sensor
         passage_detectors[detector_idx].first_break_micros = time_micros;
         passage_detectors[detector_idx].sequence_start_time = time_sec;
     } else {
-        // Vi har en eksisterende sekvens, sjekk om den har timet ut
-        uint64_t sequence_start_ms = (uint64_t)passage_detectors[detector_idx].sequence_start_time * 1000 + 
-                                     passage_detectors[detector_idx].first_break_micros / 1000;
-        uint64_t time_since_start_ms = current_time_ms - sequence_start_ms;
+      // Vi har en eksisterende sekvens
+        // Sjekk om vi kan bruke tid direkte fra sensoren for timeout
+        uint32_t sensor_elapsed_time = 0;
         
-        if (time_since_start_ms > sequence_timeout_ms) {
-            ESP_LOGI(TAG, "Sekvens timed ut etter %llu ms. Tilbakestiller.", time_since_start_ms);
+        // Beregn tid basert på sensor-tidsstempler (som er den mest konsistente kilden)
+        if (passage_detectors[detector_idx].last_sensor_time > 0) {
+            if (time_sec >= passage_detectors[detector_idx].last_sensor_time) {
+                // Vanlig tilfelle - sensortid går fremover
+                sensor_elapsed_time = (time_sec - passage_detectors[detector_idx].last_sensor_time) * 1000;
+                
+                // Legg til mikrosekunder-delen
+                if (time_micros >= passage_detectors[detector_idx].last_sensor_micros) {
+                    sensor_elapsed_time += (time_micros - passage_detectors[detector_idx].last_sensor_micros) / 1000;
+                } else {
+                    // Håndter mikrosekund-overgang
+                    sensor_elapsed_time += (1000000 + time_micros - passage_detectors[detector_idx].last_sensor_micros) / 1000 - 1000;
+                }
+            } else {
+                // Sensortid hopper bakover - sannsynligvis en reset
+                ESP_LOGW(TAG, "Sensor-tid hopper bakover: %u -> %u, antar ny sekvens", 
+                          passage_detectors[detector_idx].last_sensor_time, time_sec);
+                sensor_elapsed_time = sequence_timeout_ms + 1; // Force timeout
+            }
+        }
+        
+        // Oppdater siste sensortid for neste beregning
+        passage_detectors[detector_idx].last_sensor_time = time_sec;
+        passage_detectors[detector_idx].last_sensor_micros = time_micros;
+        
+        // Sjekk om sekvensen har timed ut basert på sensortid
+        if (sensor_elapsed_time > sequence_timeout_ms) {
+            ESP_LOGI(TAG, "Sekvens timed ut etter %u ms (sensortid). Tilbakestiller.", sensor_elapsed_time);
+            
             // Tilbakestill tellere
             for (int i = 0; i < MAX_SENSORS_PER_POLE; i++) {
                 passage_detectors[detector_idx].sensor_triggered[i] = false;
@@ -1515,6 +1550,7 @@ bool process_break_for_passage_detection(const uint8_t *mac_addr, int32_t sensor
             passage_detectors[detector_idx].sequence_start_time = time_sec;
         }
     }
+
     // ---- SLUTT PÅ VIKTIG ENDRING ----
     
     // Registrer denne sensoren hvis den ikke allerede er registrert i gjeldende sekvens
@@ -1522,7 +1558,10 @@ bool process_break_for_passage_detection(const uint8_t *mac_addr, int32_t sensor
         passage_detectors[detector_idx].sensor_triggered[sensor_id] = true;
         passage_detectors[detector_idx].unique_sensors_count++;
 
-        
+        // Oppdater siste sensor-tid
+        passage_detectors[detector_idx].last_sensor_time = time_sec;
+        passage_detectors[detector_idx].last_sensor_micros = time_micros;
+
         ESP_LOGI(TAG, "Sensor %d registrert, sensorteller nå: %d, min for passering: %d", 
             sensor_id, passage_detectors[detector_idx].unique_sensors_count, min_sensors_for_passage);
         
