@@ -105,6 +105,7 @@ typedef struct {
 // Array for å holde passeringsdeteksjonsstatus per målestolpe
 #define MAX_PASSAGE_DETECTORS MAX_POLES
 static passage_detection_t passage_detectors[MAX_PASSAGE_DETECTORS];
+static uint32_t passage_counter = 0; // Teller for unike passeringer
 static int passage_detector_count = 0;
 static SemaphoreHandle_t passage_mutex;
 
@@ -1445,6 +1446,10 @@ bool process_break_for_passage_detection(const uint8_t *mac_addr, int32_t sensor
     }
     
     xSemaphoreTake(passage_mutex, portMAX_DELAY);
+    char mac_str[18];
+    sprintf(mac_str, "%02x:%02x:%02x:%02x:%02x:%02x", 
+        mac_addr[0], mac_addr[1], mac_addr[2],
+        mac_addr[3], mac_addr[4], mac_addr[5]);
     
     // Søk etter målestolpe i vår liste
     int detector_idx = -1;
@@ -1491,7 +1496,8 @@ bool process_break_for_passage_detection(const uint8_t *mac_addr, int32_t sensor
         uint64_t time_since_last_passage_ms = current_time_ms - last_passage_ms;
         
         if (time_since_last_passage_ms < passage_debounce_ms) {
-            //ESP_LOGI(TAG, "Ignorerer brudd under debounce-perioden (%llu ms siden siste passering)",time_since_last_passage_ms);
+            ESP_LOGI(TAG, "DEBOUNCE: Ignorerer brudd under debounce-perioden (%llu ms siden siste passering, MAC=%s, sensor=%d)",
+                    time_since_last_passage_ms, mac_str, sensor_id);
             xSemaphoreGive(passage_mutex);
             return false;
         }
@@ -1522,11 +1528,25 @@ bool process_break_for_passage_detection(const uint8_t *mac_addr, int32_t sensor
                     // Håndter mikrosekund-overgang
                     sensor_elapsed_time += (1000000 + time_micros - passage_detectors[detector_idx].last_sensor_micros) / 1000 - 1000;
                 }
-            } else {
-                // Sensortid hopper bakover - sannsynligvis en reset
-                ESP_LOGW(TAG, "Sensor-tid hopper bakover: %u -> %u, antar ny sekvens", 
-                          passage_detectors[detector_idx].last_sensor_time, time_sec);
-                sensor_elapsed_time = sequence_timeout_ms + 1; // Force timeout
+            } 
+            else {
+                // Sensortid hopper bakover
+                ESP_LOGW(TAG, "Sensor-tid hopper bakover: %u -> %u", 
+                        passage_detectors[detector_idx].last_sensor_time, time_sec);
+
+                 // Fortsett sekvensen uansett, bruk en kort relativ tid
+                sensor_elapsed_time = 200; // Anta ~100ms siden forrige        
+                
+                // // Sjekk om tilbakehoppet er stort (mer enn 60 sekunder)
+                // if (passage_detectors[detector_idx].last_sensor_time - time_sec > 60) {
+                //     ESP_LOGW(TAG, "Stort tidshopp bakover, antar ny sekvens");
+                //     sensor_elapsed_time = sequence_timeout_ms + 1; // Force timeout
+                // } else {
+                //     // Små tidshopp kan være normale variasjoner, fortsett med nåværende sekvens
+                //     ESP_LOGI(TAG, "Lite tidshopp, fortsetter sekvensen");
+                //     // Bruk en estimert relativ tid istedenfor absolutt tid
+                //     sensor_elapsed_time = 100; // Anta ~100ms siden forrige
+                // }
             }
         }
         
@@ -1536,8 +1556,9 @@ bool process_break_for_passage_detection(const uint8_t *mac_addr, int32_t sensor
         
         // Sjekk om sekvensen har timed ut basert på sensortid
         if (sensor_elapsed_time > sequence_timeout_ms) {
-            ESP_LOGI(TAG, "Sekvens timed ut etter %u ms (sensortid). Tilbakestiller.", sensor_elapsed_time);
-            
+            ESP_LOGI(TAG, "TIMEOUT: Sekvens timed ut etter %u ms (sensortid). MAC=%s, sensor=%d, Tilbakestiller.", 
+                    sensor_elapsed_time, mac_str, sensor_id);
+
             // Tilbakestill tellere
             for (int i = 0; i < MAX_SENSORS_PER_POLE; i++) {
                 passage_detectors[detector_idx].sensor_triggered[i] = false;
@@ -1571,6 +1592,7 @@ bool process_break_for_passage_detection(const uint8_t *mac_addr, int32_t sensor
         
         // Sjekk om vi har nådd terskelen for en passering
         if (passage_detectors[detector_idx].unique_sensors_count >= min_sensors_for_passage) {
+            uint32_t current_passage_id = passage_counter++;
             char mac_str[18];
             sprintf(mac_str, "%02x:%02x:%02x:%02x:%02x:%02x", 
                     mac_addr[0], mac_addr[1], mac_addr[2],
@@ -1584,11 +1606,13 @@ bool process_break_for_passage_detection(const uint8_t *mac_addr, int32_t sensor
             // Send passering til WebSocket-klienter
             char passage_msg[256];
             sprintf(passage_msg, 
-                    "{\"M\":\"%s\",\"K\":4,\"T\":%" PRIu32 ",\"U\":%" PRIu32 ",\"S\":%d}",
+                    "{\"M\":\"%s\",\"K\":4,\"T\":%" PRIu32 ",\"U\":%" PRIu32 ",\"S\":%d,\"D\":%llu,\"ID\":%" PRIu32 "}",
                     mac_str, passage_detectors[detector_idx].first_break_time, 
                     passage_detectors[detector_idx].first_break_micros, 
-                    passage_detectors[detector_idx].unique_sensors_count);
-            
+                    passage_detectors[detector_idx].unique_sensors_count,
+                    current_time_ms - last_passage_ms,
+                    current_passage_id);
+                    
             // Lagre denne passeringens tidspunkt for debouncing
             passage_detectors[detector_idx].last_passage_time = passage_detectors[detector_idx].first_break_time;
             passage_detectors[detector_idx].last_passage_micros = passage_detectors[detector_idx].first_break_micros;
@@ -1686,6 +1710,12 @@ void send_break_to_websocket(const uint8_t *mac_addr, uint32_t time_sec, uint32_
             "{\"M\":\"%s\",\"K\":1,\"T\":%" PRIu32 ",\"U\":%" PRIu32 ",\"B\":%" PRId32 "}",
             mac_str, time_sec, time_micros, sensor_id);
     }
+
+
+
+ESP_LOGI(TAG, "SENSORBRUDD: MAC=%s, Tid=%u.%06u, Sensor=%d, Filtrert=%s",
+        mac_str, time_sec, time_micros, sensor_id, filtered ? "Ja" : "Nei");
+
     
     // Send til alle WebSocket-klienter
     httpd_ws_frame_t ws_pkt = {

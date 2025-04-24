@@ -82,7 +82,7 @@ export default {
     },
     onSocketMessage(evt) {
   var received = JSON.parse(evt.data);
-  console.log("Mottatt WebSocket-melding:", received); // Debugging-utskrift
+  console.log("WebSocket melding mottatt:", new Date().toISOString(), received); // Debugging-utskrift
   
   if (!this.lookup.has(received.M)) {
     this.lookup.set(received.M, this.poles.length);
