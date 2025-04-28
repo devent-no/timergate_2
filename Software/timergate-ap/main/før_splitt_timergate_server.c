@@ -105,29 +105,9 @@ typedef struct {
 // Array for å holde passeringsdeteksjonsstatus per målestolpe
 #define MAX_PASSAGE_DETECTORS MAX_POLES
 static passage_detection_t passage_detectors[MAX_PASSAGE_DETECTORS];
-//static uint32_t passage_counter = 0; // Teller for unike passeringer, er vist ikke i bruk lenger...
+static uint32_t passage_counter = 0; // Teller for unike passeringer
 static int passage_detector_count = 0;
 static SemaphoreHandle_t passage_mutex;
-
-
-
-// Strukt for å holde styr på sendte passeringer
-typedef struct {
-    uint8_t mac[ESP_NOW_ETH_ALEN];     // MAC-adresse til målestolpen
-    uint32_t timestamp_sec;            // Sekunder
-    uint32_t timestamp_micros;         // Mikrosekunder
-    int sensors_count;                 // Antall sensorer
-    uint32_t send_time;                // Tidspunkt for når passeringen ble sendt
-} sent_passage_t;
-
-#define MAX_SENT_PASSAGES 20           // Hvor mange tidligere passeringer vi holder styr på
-static sent_passage_t sent_passages[MAX_SENT_PASSAGES];
-static int sent_passage_count = 0;
-static SemaphoreHandle_t sent_passages_mutex;
-
-
-
-
 
 // Konfigurasjon for passeringsdeteksjon
 static int passage_debounce_ms = 1000;   // Standard debounce-tid: 1 sekund
@@ -157,10 +137,6 @@ bool should_ignore_break(const uint8_t *mac, int32_t sensor_id, uint32_t time_se
 void send_break_to_websocket(const uint8_t *mac_addr, uint32_t time_sec, uint32_t time_micros, int32_t sensor_id, bool filtered);
 bool process_break_for_passage_detection(const uint8_t *mac_addr, int32_t sensor_id, uint32_t time_sec, uint32_t time_micros);
 
-// Nye funksjonsdeklarasjoner for håndtering av sendte passeringer
-bool is_passage_already_sent(const uint8_t *mac, uint32_t time_sec, uint32_t time_micros, int sensors_count);
-void register_sent_passage(const uint8_t *mac, uint32_t time_sec, uint32_t time_micros, int sensors_count);
-void clean_old_passages(void *pvParameters);
 
 
 static httpd_handle_t server = NULL;
@@ -1024,7 +1000,7 @@ esp_err_t set_passage_config_handler(httpd_req_t *req) {
     }
     
     // Oppdater konfigurasjon
-    if (debounce_ms >= 0 && debounce_ms <= 30000) { // Maks 30 sekunder
+    if (debounce_ms >= 0 && debounce_ms <= 10000) { // Maks 10 sekunder
         passage_debounce_ms = debounce_ms;
         ESP_LOGI(TAG, "Passering debounce-tid satt til %d ms", passage_debounce_ms);
     }
@@ -1034,7 +1010,7 @@ esp_err_t set_passage_config_handler(httpd_req_t *req) {
         ESP_LOGI(TAG, "Minimum sensorer for passering satt til %d", min_sensors_for_passage);
     }
     
-    if (timeout_ms >= 1000 && timeout_ms <= 5000) { // Mellom 1 og 5 sekunder
+    if (timeout_ms >= 1000 && timeout_ms <= 30000) { // Mellom 1 og 30 sekunder
         sequence_timeout_ms = timeout_ms;
         ESP_LOGI(TAG, "Timeout for sekvens satt til %d ms", sequence_timeout_ms);
     }
@@ -1614,63 +1590,39 @@ bool process_break_for_passage_detection(const uint8_t *mac_addr, int32_t sensor
         ESP_LOGI(TAG, "Sensor %d registrert, nå %d unike sensorer utløst", 
                 sensor_id, passage_detectors[detector_idx].unique_sensors_count);
         
-// Sjekk om vi har nådd terskelen for en passering
-if (passage_detectors[detector_idx].unique_sensors_count >= min_sensors_for_passage) {
-    char mac_str[18];
-    sprintf(mac_str, "%02x:%02x:%02x:%02x:%02x:%02x", 
-            mac_addr[0], mac_addr[1], mac_addr[2],
-            mac_addr[3], mac_addr[4], mac_addr[5]);
-    
-        // Sjekk om denne passeringen allerede er sendt
-        if (is_passage_already_sent(mac_addr, 
-                                passage_detectors[detector_idx].first_break_time, 
-                                passage_detectors[detector_idx].first_break_micros, 
-                                passage_detectors[detector_idx].unique_sensors_count)) {
+        // Sjekk om vi har nådd terskelen for en passering
+        if (passage_detectors[detector_idx].unique_sensors_count >= min_sensors_for_passage) {
+            uint32_t current_passage_id = passage_counter++;
+            char mac_str[18];
+            sprintf(mac_str, "%02x:%02x:%02x:%02x:%02x:%02x", 
+                    mac_addr[0], mac_addr[1], mac_addr[2],
+                    mac_addr[3], mac_addr[4], mac_addr[5]);
             
-            ESP_LOGI(TAG, "DUPLIKAT: Ignorerer duplisert passering: MAC: %s, tidspunkt: %u.%06u", 
+            ESP_LOGI(TAG, "Passering detektert! MAC: %s, tidspunkt: %u.%06u, sensorer: %d", 
                     mac_str, passage_detectors[detector_idx].first_break_time, 
-                    passage_detectors[detector_idx].first_break_micros);
+                    passage_detectors[detector_idx].first_break_micros, 
+                    passage_detectors[detector_idx].unique_sensors_count);
             
-            // Vi tilbakestiller fortsatt telleren for å være klar for neste sekvens
+            // Send passering til WebSocket-klienter
+            char passage_msg[256];
+            sprintf(passage_msg, 
+                    "{\"M\":\"%s\",\"K\":4,\"T\":%" PRIu32 ",\"U\":%" PRIu32 ",\"S\":%d,\"D\":%llu,\"ID\":%" PRIu32 "}",
+                    mac_str, passage_detectors[detector_idx].first_break_time, 
+                    passage_detectors[detector_idx].first_break_micros, 
+                    passage_detectors[detector_idx].unique_sensors_count,
+                    current_time_ms - last_passage_ms,
+                    current_passage_id);
+                    
+            // Lagre denne passeringens tidspunkt for debouncing
+            passage_detectors[detector_idx].last_passage_time = passage_detectors[detector_idx].first_break_time;
+            passage_detectors[detector_idx].last_passage_micros = passage_detectors[detector_idx].first_break_micros;
+            
+            // Tilbakestill tellere for neste sekvens
             for (int i = 0; i < MAX_SENSORS_PER_POLE; i++) {
                 passage_detectors[detector_idx].sensor_triggered[i] = false;
             }
             passage_detectors[detector_idx].unique_sensors_count = 0;
             
-            xSemaphoreGive(passage_mutex);
-            return false; // Ingen ny passering å rapportere
-        }
-        
-            ESP_LOGI(TAG, "Passering detektert! MAC: %s, tidspunkt: %u.%06u, sensorer: %d", 
-                mac_str, passage_detectors[detector_idx].first_break_time, 
-                passage_detectors[detector_idx].first_break_micros, 
-                passage_detectors[detector_idx].unique_sensors_count);
-        
-            // Registrer denne passeringen som sendt
-            register_sent_passage(mac_addr, 
-                            passage_detectors[detector_idx].first_break_time, 
-                            passage_detectors[detector_idx].first_break_micros, 
-                            passage_detectors[detector_idx].unique_sensors_count);
-        
-            // Send passering til WebSocket-klienter
-            char passage_msg[256];
-            sprintf(passage_msg, 
-                "{\"M\":\"%s\",\"K\":4,\"T\":%" PRIu32 ",\"U\":%" PRIu32 ",\"S\":%d}",
-                mac_str, passage_detectors[detector_idx].first_break_time, 
-                passage_detectors[detector_idx].first_break_micros, 
-                passage_detectors[detector_idx].unique_sensors_count);
-        
-            // Lagre denne passeringens tidspunkt for debouncing
-            passage_detectors[detector_idx].last_passage_time = passage_detectors[detector_idx].first_break_time;
-            passage_detectors[detector_idx].last_passage_micros = passage_detectors[detector_idx].first_break_micros;
-        
-            // Tilbakestill tellere for neste sekvens
-            for (int i = 0; i < MAX_SENSORS_PER_POLE; i++) {
-                passage_detectors[detector_idx].sensor_triggered[i] = false;
-           }
-            passage_detectors[detector_idx].unique_sensors_count = 0;
-
-
             // Send til alle WebSocket-klienter
             httpd_ws_frame_t ws_pkt = {
                 .final = true,
@@ -1761,7 +1713,7 @@ void send_break_to_websocket(const uint8_t *mac_addr, uint32_t time_sec, uint32_
 
 
 
-    ESP_LOGI(TAG, "SENSORBRUDD: MAC=%s, Tid=%u.%06u, Sensor=%d, Filtrert=%s",
+ESP_LOGI(TAG, "SENSORBRUDD: MAC=%s, Tid=%u.%06u, Sensor=%d, Filtrert=%s",
         mac_str, time_sec, time_micros, sensor_id, filtered ? "Ja" : "Nei");
 
     
@@ -1783,93 +1735,6 @@ void send_break_to_websocket(const uint8_t *mac_addr, uint32_t time_sec, uint32_
     xSemaphoreGive(ws_mutex);
 }
 
-
-
-
-// Sjekker om en passering allerede er sendt
-bool is_passage_already_sent(const uint8_t *mac, uint32_t time_sec, uint32_t time_micros, int sensors_count) {
-    xSemaphoreTake(sent_passages_mutex, portMAX_DELAY);
-    
-    // Sjekk om vi har en identisk passering i nylig sendte passeringer
-    for (int i = 0; i < sent_passage_count; i++) {
-        // Sjekk om MAC-adresse og tidspunkt (innenfor en liten margin) er like
-        if (memcmp(sent_passages[i].mac, mac, ESP_NOW_ETH_ALEN) == 0 &&
-            sent_passages[i].sensors_count == sensors_count) {
-            
-            // Beregn tidsdifferanse i millisekunder
-            uint64_t t1 = (uint64_t)sent_passages[i].timestamp_sec * 1000 + sent_passages[i].timestamp_micros / 1000;
-            uint64_t t2 = (uint64_t)time_sec * 1000 + time_micros / 1000;
-            uint64_t diff_ms = (t1 > t2) ? (t1 - t2) : (t2 - t1);
-            
-            // Hvis tidspunktene er innenfor 50ms anser vi det som duplisert
-            if (diff_ms < 50) {
-                xSemaphoreGive(sent_passages_mutex);
-                return true;
-            }
-        }
-    }
-    
-    xSemaphoreGive(sent_passages_mutex);
-    return false;
-}
-
-// Registrerer en ny sendt passering
-void register_sent_passage(const uint8_t *mac, uint32_t time_sec, uint32_t time_micros, int sensors_count) {
-    xSemaphoreTake(sent_passages_mutex, portMAX_DELAY);
-    
-    int idx = sent_passage_count;
-    if (sent_passage_count >= MAX_SENT_PASSAGES) {
-        // Hvis array er fullt, lag plass ved å fjerne eldste innslag
-        idx = 0;
-        for (int i = 1; i < MAX_SENT_PASSAGES; i++) {
-            sent_passages[i-1] = sent_passages[i];
-        }
-        sent_passage_count = MAX_SENT_PASSAGES - 1;
-    }
-    
-    // Legg til ny passering
-    memcpy(sent_passages[idx].mac, mac, ESP_NOW_ETH_ALEN);
-    sent_passages[idx].timestamp_sec = time_sec;
-    sent_passages[idx].timestamp_micros = time_micros;
-    sent_passages[idx].sensors_count = sensors_count;
-    sent_passages[idx].send_time = time(NULL);
-    
-    sent_passage_count++;
-    
-    xSemaphoreGive(sent_passages_mutex);
-}
-
-// Task som fjerner gamle passeringer
-void clean_old_passages(void *pvParameters) {
-    const uint32_t MAX_AGE_SEC = 300; // 5 minutter
-    
-    while (1) {
-        vTaskDelay(pdMS_TO_TICKS(60000)); // Kjør hvert minutt
-        
-        uint32_t now = time(NULL);
-        xSemaphoreTake(sent_passages_mutex, portMAX_DELAY);
-        
-        int valid_count = 0;
-        for (int i = 0; i < sent_passage_count; i++) {
-            if (now - sent_passages[i].send_time < MAX_AGE_SEC) {
-                // Behold denne passeringen (flytt framover hvis nødvendig)
-                if (valid_count != i) {
-                    sent_passages[valid_count] = sent_passages[i];
-                }
-                valid_count++;
-            }
-        }
-        
-        // Oppdater antall gyldige passeringer
-        if (valid_count != sent_passage_count) {
-            ESP_LOGI(TAG, "Fjernet %d gamle passeringer, %d igjen", 
-                     sent_passage_count - valid_count, valid_count);
-            sent_passage_count = valid_count;
-        }
-        
-        xSemaphoreGive(sent_passages_mutex);
-    }
-}
 
 
 
@@ -2580,17 +2445,11 @@ void app_main(void) {
     pole_data_mutex = xSemaphoreCreateMutex();
     tcp_poles_mutex = xSemaphoreCreateMutex();
     passage_mutex = xSemaphoreCreateMutex();
-    sent_passages_mutex = xSemaphoreCreateMutex();
-
     
     // Initialiser arrays
     memset(ws_clients, 0, sizeof(ws_clients));
     memset(pole_data, 0, sizeof(pole_data));
     memset(tcp_poles, 0, sizeof(tcp_poles));
-    memset(sent_passages, 0, sizeof(sent_passages));
-    sent_passage_count = 0;
-
-
     // Sikre at alle nominal_mac-felt er initialisert
     for (int i = 0; i < MAX_TCP_POLES; i++) {
         tcp_poles[i].nominal_mac[0] = '\0';
@@ -2601,9 +2460,6 @@ void app_main(void) {
     
     // Start TCP-serveroppgaven
     xTaskCreate(tcp_server_task, "tcp_server", 4096, NULL, 5, NULL);
-
-    // Start oppgave for å rydde i gamle passeringer
-    xTaskCreate(clean_old_passages, "clean_passages", 2048, NULL, 1, NULL);
     
     // Initialiser ESP-NOW
     init_esp_now();
