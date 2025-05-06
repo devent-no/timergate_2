@@ -20,12 +20,6 @@
 #include "esp_http_server.h"
 #include "lwip/sockets.h"
 #include "esp_spiffs.h"
-#include "lwip/sockets.h"
-#include "esp_netif_net_stack.h"
-
-#include "mdns.h"
-#include "esp_timer.h"
-
 #include "esp_timer.h"
 #include "esp_now.h"
 
@@ -1563,8 +1557,20 @@ bool process_break_for_passage_detection(const uint8_t *mac_addr, int32_t sensor
                 // Sensortid hopper bakover
                 ESP_LOGW(TAG, "Sensor-tid hopper bakover: %u -> %u", 
                         passage_detectors[detector_idx].last_sensor_time, time_sec);
+
                  // Fortsett sekvensen uansett, bruk en kort relativ tid
                 sensor_elapsed_time = 200; // Anta ~100ms siden forrige        
+                
+                // // Sjekk om tilbakehoppet er stort (mer enn 60 sekunder)
+                // if (passage_detectors[detector_idx].last_sensor_time - time_sec > 60) {
+                //     ESP_LOGW(TAG, "Stort tidshopp bakover, antar ny sekvens");
+                //     sensor_elapsed_time = sequence_timeout_ms + 1; // Force timeout
+                // } else {
+                //     // Små tidshopp kan være normale variasjoner, fortsett med nåværende sekvens
+                //     ESP_LOGI(TAG, "Lite tidshopp, fortsetter sekvensen");
+                //     // Bruk en estimert relativ tid istedenfor absolutt tid
+                //     sensor_elapsed_time = 100; // Anta ~100ms siden forrige
+                // }
             }
         }
         
@@ -1866,6 +1872,8 @@ void clean_old_passages(void *pvParameters) {
 }
 
 
+
+// ESP-NOW mottaker callback
 // ESP-NOW mottaker callback
 void esp_now_recv_cb(const esp_now_recv_info_t *recv_info, const uint8_t *data, int len) {
    // Hent MAC-adressen fra recv_info
@@ -2505,6 +2513,14 @@ httpd_handle_t start_webserver(void) {
 
 
 
+
+
+
+
+
+
+
+
        ESP_LOGI(TAG, "Web server started");
    } else {
        ESP_LOGE(TAG, "Failed to start web server!");
@@ -2541,8 +2557,8 @@ wifi_config_t wifi_config = {
     .ap = {
         .ssid = "Timergate",
         .ssid_len = strlen("Timergate"),
-        .channel = 6,
-        .password = "12345678",  // Tomt passord
+        .channel = 1,
+        .password = "12345678", 
         .max_connection = 4,
         .authmode = WIFI_AUTH_WPA_WPA2_PSK
     }
