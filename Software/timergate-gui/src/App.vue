@@ -2,12 +2,15 @@
 import BreakItem from "./components/BreakItem.vue";
 import Pole from "./components/Pole.vue";
 import MainLayout from "./layouts/MainLayout.vue";
+import TimerView from "./views/TimerView.vue";
+
 
 export default {
   components: {
     BreakItem,
     Pole,
-    MainLayout
+    MainLayout,
+    TimerView
   },
   data() {
     return {

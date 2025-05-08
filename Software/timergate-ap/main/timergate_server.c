@@ -1123,11 +1123,15 @@ esp_err_t pole_enabled_handler(httpd_req_t *req) {
        sensor_nr = atoi(sensor_start);
    }
    
-   // Finn enabled
+   // Finn enabled - FIKSET VERSJON
    char *enabled_start = strstr(buf, "\"enabled\":");
    if (enabled_start) {
        enabled_start += 10; // Hopp over "enabled":
-       enabled = atoi(enabled_start);
+       if (strncmp(enabled_start, "true", 4) == 0) {
+           enabled = 1;
+       } else {
+           enabled = 0;
+       }
    }
    
    ESP_LOGI(TAG, "Parsed values - MAC: %s, Sensor: %d, Enabled: %d", mac, sensor_nr, enabled);
@@ -1153,6 +1157,7 @@ esp_err_t pole_enabled_handler(httpd_req_t *req) {
    
    return ESP_OK;
 }
+
 
 // Funksjon for å håndtere OPTIONS forespørsler (CORS preflight)
 esp_err_t options_handler(httpd_req_t *req) {

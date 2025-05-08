@@ -95,7 +95,7 @@ export default {
     <!-- Hovedinnhold basert på valgt visning -->
     <main class="app-content">
       <dashboard v-if="currentView === 'dashboard'" :time="time" :poles="poles" :breaks="breaks" />
-      <timer-view v-else-if="currentView === 'timer'" :time="time" :poles="poles" :breaks="breaks" />
+      <timer-view v-else-if="currentView === 'timer'" :time="time" :poles="poles" :breaks="breaks" :passages="passages"/>
       <devices-view v-else-if="currentView === 'devices'" :poles="poles" />
       <config-view v-else-if="currentView === 'config'" />
       <log-view v-else-if="currentView === 'log'" :breaks="breaks" :passages="passages" />
