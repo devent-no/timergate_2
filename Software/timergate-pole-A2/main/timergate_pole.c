@@ -36,6 +36,7 @@
 #include "lwip/netdb.h"
 
 #include "esp_log.h"
+#include "esp_timer.h"  // For esp_timer_get_time()
 
 /* Constants that aren't configurable in menuconfig */
 #define HOST_IP_ADDR "192.168.4.1"
@@ -95,6 +96,51 @@ int highpoint_max = 0;
 int highpoint_offset_max = 0;
 int highpoint_channel = 0;
 
+// Nye variabler for blinkelogikk
+bool blink_mode = false;
+uint32_t blink_start_time = 0;
+uint32_t all_sensors_broken_start_time = 0;
+uint32_t min_time_for_alert = 5000;  // 5 sekunder i millisekunder
+uint32_t blink_interval = 500;       // Blinkehastighet i millisekunder
+bool blink_state = false;            // Av/på tilstand for blinking
+
+
+// Nye globale enum for systemstatus
+typedef enum {
+    STATUS_INITIALIZING,
+    STATUS_WIFI_CONNECTING,
+    STATUS_SERVER_CONNECTING,
+    STATUS_READY,
+    STATUS_ERROR_WIFI,
+    STATUS_ERROR_SERVER,
+    STATUS_ERROR_SENSORS_BLOCKED
+} system_status_t;
+
+// Globale variabler for statushåndtering
+system_status_t current_status = STATUS_INITIALIZING;
+uint32_t status_animation_start_time = 0;
+uint32_t status_animation_step = 0;
+bool normal_led_control = false;  // Om vanlig sensorvisning skal overstyre animasjoner
+
+// LED-farger for de ulike tilstandene (R, G, B)
+const uint8_t STATUS_COLORS[7][3] = {
+    {64, 64, 64},  // Initialisering - Hvit
+    {0, 0, 255},   // WiFi-tilkobling - Blå
+    {255, 255, 0}, // Servertilkobling - Gul
+    {0, 255, 0},   // Klar - Grønn
+    {255, 0, 0},   // WiFi-feil - Rød
+    {255, 0, 0},   // Serverfeil - Rød
+    {255, 0, 0}    // Sensorer blokkert - Rød
+};
+
+
+
+
+
+
+
+
+
 led_strip_config_t strip_config = {
     .max_leds = 7, // at least one LED on board
     .strip_gpio_num = LED_GPIO,
@@ -135,14 +181,15 @@ static void pwm_init(int timer_num, int frequency, int channel, int gpio, int hp
     ESP_ERROR_CHECK(ledc_channel_config(&ledc_channel));
 }
 
-void led_set(uint8_t led_nr, uint8_t value)
+// Modifisert LED sett funksjon med fargeparametre
+void led_set(uint8_t led_nr, uint8_t value, uint8_t r, uint8_t g, uint8_t b)
 {
     if (led_val[led_nr] == value)
         return;
 
     if (value)
     {
-        led_strip_set_pixel(led_strip, led_nr, 16, 16, 16);
+        led_strip_set_pixel(led_strip, led_nr, r, g, b);
         led_strip_refresh(led_strip);
     }
     else
@@ -153,6 +200,262 @@ void led_set(uint8_t led_nr, uint8_t value)
 
     led_val[led_nr] = value;
 }
+
+// Enkel overladning av led_set for å opprettholde bakoverkompatibilitet
+void led_set_simple(uint8_t led_nr, uint8_t value)
+{
+    led_set(led_nr, value, 16, 16, 16); // Standard hvit farge når ikke angitt
+}
+
+// Funksjon for å sette alle LED-er til samme farge
+void set_all_leds(uint8_t value, uint8_t r, uint8_t g, uint8_t b) 
+{
+    for (int i = 0; i < NUM_SENSORS; i++) {
+        if (enabled[i]) {
+            led_strip_set_pixel(led_strip, i, value ? r : 0, value ? g : 0, value ? b : 0);
+        }
+    }
+    led_strip_refresh(led_strip);
+}
+
+// Funksjon for å håndtere blinkemodus
+void handle_blink_mode() 
+{
+    uint32_t current_time = esp_timer_get_time() / 1000;  // Konverter til millisekunder
+    
+    // Sjekk om alle sensorer er brutt
+    bool all_sensors_broken = true;
+    int active_sensors = 0;
+    
+    for (int i = 0; i < NUM_SENSORS; i++) {
+        if (enabled[i]) {
+            active_sensors++;
+            if (!sensor_break[i]) {
+                all_sensors_broken = false;
+                break;
+            }
+        }
+    }
+    
+    // Må ha minst én aktiv sensor for å vurdere "alle sensorer brutt"
+    if (active_sensors == 0) {
+        all_sensors_broken = false;
+    }
+    
+    if (!blink_mode) {
+        // Ikke i blinkemodus ennå
+        if (all_sensors_broken) {
+            // Første gang vi oppdager at alle er brutt
+            if (all_sensors_broken_start_time == 0) {
+                all_sensors_broken_start_time = current_time;
+                ESP_LOGI(TAG, "Alle sensorer er brutt, starter timer");
+            } 
+            // Sjekk om det har gått nok tid
+            else if (current_time - all_sensors_broken_start_time >= min_time_for_alert) {
+                ESP_LOGI(TAG, "Alle sensorer har vært brutt i %d ms - aktiverer blinkemodus", min_time_for_alert);
+                blink_mode = true;
+                blink_start_time = current_time;
+                blink_state = true;
+                set_system_status(STATUS_ERROR_SENSORS_BLOCKED); // Sett systemstatus
+                set_all_leds(1, 255, 0, 0); // Start med rødt
+            }
+        } else {
+            // Hvis ikke alle sensorer er brutt, nullstill timeren
+            if (all_sensors_broken_start_time != 0) {
+                ESP_LOGI(TAG, "Ikke alle sensorer er brutt lenger, nullstiller timer");
+                all_sensors_broken_start_time = 0;
+            }
+        }
+    } else {
+        // Vi er allerede i blinkemodus
+        // Sjekk om det er på tide å blinke
+        if (current_time - blink_start_time >= blink_interval) {
+            blink_start_time = current_time;
+            blink_state = !blink_state;
+            
+            if (blink_state) {
+                set_all_leds(1, 255, 0, 0);  // Rødt på
+            } else {
+                set_all_leds(0, 0, 0, 0);    // Av
+            }
+        }
+        
+        // Sjekk om vi skal avslutte blinkemodus (når ikke alle sensorer lenger er brutt)
+        if (!all_sensors_broken) {
+            ESP_LOGI(TAG, "Ikke alle sensorer er brutt lenger, avslutter blinkemodus");
+            blink_mode = false;
+            all_sensors_broken_start_time = 0;
+            
+            // Tilbakestill status til READY
+            set_system_status(STATUS_READY);
+        }
+    }
+}
+
+
+
+// Funksjon for å sette systemstatus
+void set_system_status(system_status_t status) {
+    if (current_status != status) {
+        ESP_LOGI(TAG, "System status endret: %d -> %d", current_status, status);
+        current_status = status;
+        status_animation_start_time = esp_timer_get_time() / 1000;
+        status_animation_step = 0;
+        
+        // Tilbakestill eventuelle tilstandsvariabler for den tidligere statusen
+        if (status != STATUS_ERROR_SENSORS_BLOCKED) {
+            blink_mode = false;
+            all_sensors_broken_start_time = 0;
+        }
+        
+        // For klar-tilstand, slå av alle LED-er først
+        if (status == STATUS_READY) {
+            set_all_leds(0, 0, 0, 0);
+        }
+        
+        // Aktiver normal LED-kontroll bare i READY-tilstand
+        normal_led_control = (status == STATUS_READY);
+    }
+}
+
+// Funksjon for å håndtere status-animasjoner
+void handle_status_animation() {
+    uint32_t current_time = esp_timer_get_time() / 1000; // Millisekunder
+    uint32_t elapsed_time = current_time - status_animation_start_time;
+    
+    // Håndter allerede implementert sensorblokkeringsstatus separat
+    if (current_status == STATUS_ERROR_SENSORS_BLOCKED) {
+        handle_blink_mode();
+        return;
+    }
+    
+    switch (current_status) {
+        case STATUS_INITIALIZING: {
+            // Oppstartssekvens: LED-er tennes én etter én, så slukkes alle
+            uint32_t step_time = 200; // 200ms per LED
+            uint32_t current_step = elapsed_time / step_time;
+            
+            if (current_step <= NUM_SENSORS) {
+                // Tenn LED-er én etter én
+                for (int i = 0; i < NUM_SENSORS; i++) {
+                    if (enabled[i]) {
+                        led_set(i, (i < current_step), 
+                               STATUS_COLORS[STATUS_INITIALIZING][0],
+                               STATUS_COLORS[STATUS_INITIALIZING][1],
+                               STATUS_COLORS[STATUS_INITIALIZING][2]);
+                    }
+                }
+            } else if (current_step <= NUM_SENSORS * 2) {
+                // Slukk LED-er én etter én
+                for (int i = 0; i < NUM_SENSORS; i++) {
+                    if (enabled[i]) {
+                        led_set(i, (i >= (current_step - NUM_SENSORS)), 
+                               STATUS_COLORS[STATUS_INITIALIZING][0],
+                               STATUS_COLORS[STATUS_INITIALIZING][1],
+                               STATUS_COLORS[STATUS_INITIALIZING][2]);
+                    }
+                }
+            } else {
+                // Sett til neste status når animasjonen er ferdig
+                set_system_status(STATUS_WIFI_CONNECTING);
+            }
+            break;
+        }
+        
+        case STATUS_WIFI_CONNECTING: {
+            // Roterende LED-er
+            uint32_t step_time = 250; // 250ms per steg
+            uint32_t current_led = (elapsed_time / step_time) % NUM_SENSORS;
+            
+            for (int i = 0; i < NUM_SENSORS; i++) {
+                if (enabled[i]) {
+                    led_set(i, (i == current_led), 
+                           STATUS_COLORS[STATUS_WIFI_CONNECTING][0],
+                           STATUS_COLORS[STATUS_WIFI_CONNECTING][1],
+                           STATUS_COLORS[STATUS_WIFI_CONNECTING][2]);
+                }
+            }
+            break;
+        }
+        
+        case STATUS_SERVER_CONNECTING: {
+            // Alle LED-er blinker sakte
+            uint32_t blink_cycle = 1000; // 1 sekund på/av
+            bool on = ((elapsed_time / blink_cycle) % 2) == 0;
+            
+            set_all_leds(on, 
+                       STATUS_COLORS[STATUS_SERVER_CONNECTING][0],
+                       STATUS_COLORS[STATUS_SERVER_CONNECTING][1],
+                       STATUS_COLORS[STATUS_SERVER_CONNECTING][2]);
+            break;
+        }
+        
+        case STATUS_READY: {
+            // Kort "pulsering" hver 5. sekund
+            uint32_t pulse_cycle = 5000; // 5 sekunder mellom hver pulsering
+            uint32_t pulse_duration = 200; // 200ms pulsering
+            
+            uint32_t time_in_cycle = elapsed_time % pulse_cycle;
+            bool pulse_on = time_in_cycle < pulse_duration;
+            
+            if (pulse_on) {
+                // Vis kort pulsering
+                set_all_leds(1, 
+                           STATUS_COLORS[STATUS_READY][0],
+                           STATUS_COLORS[STATUS_READY][1],
+                           STATUS_COLORS[STATUS_READY][2]);
+                normal_led_control = false;
+            } else {
+                // Tillat normal LED-kontroll
+                if (!normal_led_control) {
+                    set_all_leds(0, 0, 0, 0);
+                    normal_led_control = true;
+                }
+            }
+            break;
+        }
+        
+        case STATUS_ERROR_WIFI: {
+            // Rytmisk blinking av annenhver LED
+            uint32_t blink_cycle = 1000; // 1 sekund per full syklus
+            bool odd_leds = ((elapsed_time / (blink_cycle/2)) % 2) == 0;
+            
+            for (int i = 0; i < NUM_SENSORS; i++) {
+                if (enabled[i]) {
+                    bool should_be_on = (i % 2 == 0) ? odd_leds : !odd_leds;
+                    led_set(i, should_be_on, 
+                           STATUS_COLORS[STATUS_ERROR_WIFI][0],
+                           STATUS_COLORS[STATUS_ERROR_WIFI][1],
+                           STATUS_COLORS[STATUS_ERROR_WIFI][2]);
+                }
+            }
+            break;
+        }
+        
+        case STATUS_ERROR_SERVER: {
+            // Blinking av første og siste LED
+            uint32_t blink_cycle = 1000; // 1 sekund per full syklus
+            bool on = ((elapsed_time / (blink_cycle/2)) % 2) == 0;
+            
+            for (int i = 0; i < NUM_SENSORS; i++) {
+                if (enabled[i]) {
+                    bool should_be_on = (i == 0 || i == (NUM_SENSORS-1)) ? on : false;
+                    led_set(i, should_be_on, 
+                           STATUS_COLORS[STATUS_ERROR_SERVER][0],
+                           STATUS_COLORS[STATUS_ERROR_SERVER][1],
+                           STATUS_COLORS[STATUS_ERROR_SERVER][2]);
+                }
+            }
+            break;
+        }
+        
+        default:
+            break;
+    }
+}
+
+
+
 
 void nvs_setup()
 {
@@ -340,11 +643,18 @@ static void tcp_connect()
     if (err != 0)
     {
         ESP_LOGE(TAG, "Socket unable to connect: errno %d", errno);
+        // Etter feilet tilkobling, sett status til ERROR_SERVER
+        set_system_status(STATUS_ERROR_SERVER);
         return;
     }
     ESP_LOGI(TAG, "Successfully connected");
     connected = true;
+    
+    // Etter vellykket tilkobling, sett status til READY
+    set_system_status(STATUS_READY);
 }
+
+
 
 static void add_to_queue(char *msg)
 {
@@ -557,7 +867,7 @@ static void check_socket()
                     if (sensor_nr < 7)
                     {
                         enabled[sensor_nr] = is_enabled;
-                        led_set(sensor_nr, 0);
+                        led_set_simple(sensor_nr, 0);
                         nvs_update_offsets();
                         publish_settings();    
                     }
@@ -579,13 +889,26 @@ static void tcp_client_task(void *pvParameters)
     while (1)
     {
         vTaskDelay(10 / portTICK_PERIOD_MS);
+
         if (!connected)
         {
             ESP_LOGI(TAG, "Not connected, trying to connect");
             tcp_close();
             vTaskDelay(100 / portTICK_PERIOD_MS);
             tcp_setup();
-            tcp_connect();
+            
+            // Sjekk WiFi-status før TCP-tilkobling
+            wifi_ap_record_t ap_info;
+            esp_err_t wifi_status = esp_wifi_sta_get_ap_info(&ap_info);
+            
+            if (wifi_status == ESP_OK) {
+                // WiFi er tilkoblet, sett server connecting
+                set_system_status(STATUS_SERVER_CONNECTING);
+                tcp_connect();
+            } else {
+                // WiFi er ikke tilkoblet, sett WiFi error
+                set_system_status(STATUS_ERROR_WIFI);
+            }
         }
         else
         {
@@ -624,8 +947,17 @@ static void wifi_init()
     ESP_ERROR_CHECK(nvs_flash_init());
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
+    
+    // Sett status til WiFi connecting før vi starter tilkobling
+    set_system_status(STATUS_WIFI_CONNECTING);
+    
     ESP_ERROR_CHECK(example_connect());
+    
+    // Etter tilkobling, oppdater status til server connecting
+    set_system_status(STATUS_SERVER_CONNECTING);
 }
+
+
 
 static void pwm_setup(){
     pwm_init(LEDC_TIMER_0, PWM_0_FREQUENCY, LEDC_CHANNEL_0, PWM_SEND_0, 0);
@@ -641,6 +973,8 @@ static void pwm_setup(){
     }
 }
 
+
+
 void app_main(void)
 {
 
@@ -649,6 +983,9 @@ void app_main(void)
     pwm_setup();
 
     led_strip_new_rmt_device(&strip_config, &rmt_config, &led_strip);
+
+    // Sett oppstartsstatus
+    set_system_status(STATUS_INITIALIZING);   
 
     esp_log_level_set("gpio", ESP_LOG_WARN);
 
@@ -678,11 +1015,18 @@ void app_main(void)
             {
                 ESP_ERROR_CHECK(adc_oneshot_read(adc1_handle, adc_channel[i], &adc_raw[0][i]));
                 sensor_break[i] = (adc_raw[0][i] < break_limit[i]);
-                led_set(i, sensor_break[i]);
+                
+                // Bare oppdater LED-er når vi ikke er i blinkemodus
+                if (!blink_mode) {
+                    led_set_simple(i, sensor_break[i]);
+                }
+                
                 curr_broken |= sensor_break[i];
             }
         }
 
+        // Håndter blinkemodus etter sensorkontroll
+        handle_status_animation();
         publish_sensor();
 
         if (highpoint_search)
@@ -718,7 +1062,7 @@ void app_main(void)
         }
         else
         {
-            // Send event if there is a change in state
+            // Send event hvis det er en endring i tilstand
             if (curr_broken != prev_broken)
             {
                 publish_break(curr_broken);
@@ -726,4 +1070,5 @@ void app_main(void)
             prev_broken = curr_broken;
         }
     }
+
 }
