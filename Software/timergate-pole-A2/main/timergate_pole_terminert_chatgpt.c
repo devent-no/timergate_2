@@ -25,6 +25,13 @@
 
 #include "driver/gpio.h"
 #include "esp_log.h"
+#include "led_strip.h"
+#include "driver/rmt_tx.h"
+#include "led_strip.h"
+#include "driver/rmt_tx.h"
+#include "driver/gpio.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "esp_adc/adc_oneshot.h"
 #include "esp_adc/adc_cali.h"
 #include "esp_adc/adc_cali_scheme.h"
@@ -36,6 +43,13 @@
 #include "lwip/netdb.h"
 
 #include "esp_log.h"
+#include "led_strip.h"
+#include "driver/rmt_tx.h"
+#include "led_strip.h"
+#include "driver/rmt_tx.h"
+#include "driver/gpio.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 /* Constants that aren't configurable in menuconfig */
 #define HOST_IP_ADDR "192.168.4.1"
@@ -727,3 +741,18 @@ void app_main(void)
         }
     }
 }
+typedef enum {
+    LED_STATUS_STARTUP,
+    LED_STATUS_WIFI_CONNECTING,
+    LED_STATUS_WIFI_CONNECTED,
+    LED_STATUS_SENSOR_OK,
+    LED_STATUS_SENSOR_BREAK_SINGLE,
+    LED_STATUS_SENSOR_BREAK_MULTI,
+    LED_STATUS_SENSOR_BREAK_TOO_LONG,
+    LED_STATUS_ERROR
+} led_status_t;
+
+static led_status_t current_led_status = LED_STATUS_STARTUP;
+static led_strip_handle_t led_strip;
+
+

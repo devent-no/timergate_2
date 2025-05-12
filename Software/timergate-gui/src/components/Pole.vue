@@ -93,7 +93,7 @@ export default {
     watch: {
       values: {
         handler(newValues) {
-          console.log("Pole-verdier oppdatert:", newValues);
+          //console.log("Pole-verdier oppdatert:", newValues);
         },
         deep: true
       }

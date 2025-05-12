@@ -85,7 +85,7 @@ export default {
     },
     onSocketMessage(evt) {
   var received = JSON.parse(evt.data);
-  console.log("WebSocket melding mottatt:", new Date().toISOString(), received); // Debugging-utskrift
+  //console.log("WebSocket melding mottatt:", new Date().toISOString(), received); // Debugging-utskrift
   
   if (!this.lookup.has(received.M)) {
     this.lookup.set(received.M, this.poles.length);
@@ -105,7 +105,7 @@ export default {
     this.poles[id].broken = received.B.map((x) =>
       x == 1 ? "#f87979" : "#087979"
     );
-    console.log("Oppdatert ADC-verdier for stolpe", id, this.poles[id].values);
+    //console.log("Oppdatert ADC-verdier for stolpe", id, this.poles[id].values);
   } else if (received.K == 1) {
     // Sensor breaks
     if (!(received.M in this.breaks)) {
@@ -118,7 +118,7 @@ export default {
       filtered: !!received.F  // Sjekk om dette er et filtrert brudd
     };
     this.breaks[received.M].push(br);
-    console.log("Registrert brudd for stolpe", received.M, br);
+    //console.log("Registrert brudd for stolpe", received.M, br);
   } else if (received.K == 2) {
     // Settings. These are sent once, when the pole connects.
     this.poles[id].enabled = received.E.map((x) => (x == 1 ? true : false));
@@ -130,6 +130,7 @@ export default {
     console.log("Mottatt kommando:", received.cmd);
   } else if (received.K == 4) {
     // Passage detection
+    console.log("📣 PASSERING MOTTATT FRA WEBSOCKET:", received);
     if (!this.passages) {
       this.passages = [];
     }
@@ -148,7 +149,8 @@ export default {
     }
     
     this.passages.push(passage);
-    console.log("Passering registrert:", passage);
+    console.log("📊 PASSAGES ARRAY ETTER OPPDATERING:", JSON.stringify(this.passages));
+    //console.log("Passering registrert:", passage);
   }
 },
       

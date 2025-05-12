@@ -28,7 +28,8 @@
         <span class="button-icon">↺</span>
         <span class="button-text">RESET</span>
       </button>
-      <button v-if="status !== 'ready'" @click="calibrateSensors" class="calibrate-button">
+      <!--<button v-if="status !== 'ready'" @click="calibrateSensors" class="calibrate-button">-->
+        <button v-if="false" @click="calibrateSensors" class="calibrate-button">
         <span class="button-icon">⚙️</span>
         <span class="button-text">CALIBRATE</span>
       </button>
@@ -63,7 +64,7 @@
 
       <div class="penalty-group">
       <div class="penalty-header">
-        <div class="disqualify-icon">❌</div>
+        <div class="disqualify-icon">🙅</div>
         <span class="penalty-label"></span>
       </div>
       <button 
@@ -71,7 +72,7 @@
         class="eliminate-button"
         :class="{ 'eliminated': isEliminated }"
       >
-        <span class="button-text">{{ isEliminated ? 'REMOVE DQ' : 'DISQUALIFY' }}</span>
+        <span class="button-text">{{ isEliminated ? 'REMOVE DQ' : 'DISQUALIFIED' }}</span>
       </button>
     </div>
 
@@ -80,21 +81,28 @@
 
     <!-- Siste tider -->
     <div class="recent-times">
-      <h3>Siste resultater</h3>
+      <h3>Previous results</h3>
       <div class="times-list">
-        <div v-for="(time, index) in recentTimes" :key="index" class="time-entry">
-          <span class="time-number">{{ index + 1 }}</span>
+
+      <div v-for="(time, index) in recentTimes" :key="index" class="time-entry">
+        <span class="time-number">{{ index + 1 }}</span>
+        <div class="time-value-container">
+          <span class="time-of-day">{{ time.timeOfDay }}</span>
+          <span class="time-separator"> | </span>
           <span class="time-value">{{ formatTime(time.time) }}</span>
-          <div class="time-penalties-container">
-            <span class="time-penalty-item" v-if="time.faults">
-              <span class="fault-icon small">✋</span> {{ time.faults }}
-            </span>
-            <span class="time-penalty-item" v-if="time.refusals">
-              <span class="refusal-icon small">✊</span> {{ time.refusals }}
-            </span>
-            <span class="time-eliminated" v-if="time.eliminated">DQ</span>
-          </div>
         </div>
+        <div class="time-penalties-container">
+          <span class="time-penalty-item" v-if="time.faults">
+            <span class="fault-icon small">✋</span> {{ time.faults }}
+          </span>
+          <span class="time-penalty-item" v-if="time.refusals">
+            <span class="refusal-icon small">✊</span> {{ time.refusals }}
+          </span>
+          <span class="time-eliminated" v-if="time.eliminated">DQ</span>
+        </div>
+      </div>
+
+
         <div v-if="recentTimes.length === 0" class="no-times">
           Ingen resultater registrert ennå
         </div>
@@ -139,7 +147,8 @@ export default {
       isEliminated: false,
       recentTimes: [], // Array av {time, faults, refusals, eliminated}
       timerStartTime: 0,
-      lastPassageTime: 0
+      lastPassageTime: 0,
+      lastKnownPassagesLength: 0  // Legg til denne linjen
     };
   },
   computed: {
@@ -188,34 +197,48 @@ export default {
         .slice(0, 5);
     }
   },
+
   watch: {
     // Observatør for passages - oppdaterer timer og siste tider når nye passeringer registreres
     passages: {
-    handler(newPassages, oldPassages) {
-      if (newPassages.length > 0 && (!oldPassages || newPassages.length > oldPassages.length)) {
-        // En ny passering er lagt til
-        const latestPassage = newPassages[newPassages.length - 1];
+      handler(newPassages) {
+        console.log("🕒 TIMER WATCH:", { 
+          nyLengde: newPassages?.length,
+          sisteKjenteLengde: this.lastKnownPassagesLength,
+          status: this.status
+        });
         
-        if (this.status === 'running') {
-          // Hvis klokken allerede kjører, stopp den (målpassering)
-          this.currentTime = latestPassage.time - this.timerStartTime;
-          this.stopTimer();
-          this.status = 'finished';
+        // Sjekk om lengden har økt (nye passeringer er lagt til)
+        if (newPassages.length > this.lastKnownPassagesLength) {
+          // Antall nye passeringer
+          const numNewPassages = newPassages.length - this.lastKnownPassagesLength;
+          console.log(`🔔 ${numNewPassages} NYE PASSERINGER DETEKTERT`);
           
-          // Legg til i nylige tider
-          this.addCompletedTime();
-        } else {
-          // Hvis klokken ikke kjører, start den (startpassering)
-          this.resetPenalties();
-          this.timerStartTime = latestPassage.time;
-          this.currentTime = 0;
-          this.startTimer();
-          this.status = 'running';
+          // Få den nyeste passeringen
+          const latestPassage = newPassages[newPassages.length - 1];
+          
+          if (this.status === 'running') {
+            console.log("⏹️ STOPPER TIMER: Timer kjører, stopping ved målpassering");
+            this.currentTime = latestPassage.time - this.timerStartTime;
+            this.stopTimer();
+            this.status = 'finished';
+            this.addCompletedTime();
+          } else if (this.status === 'ready' || this.status === 'finished') {
+            console.log("▶️ STARTER TIMER: Timer starter ved startpassering");
+            this.resetPenalties();
+            this.timerStartTime = latestPassage.time;
+            this.currentTime = 0;
+            this.startTimer();
+            this.status = 'running';
+          }
+          
+          // Oppdater sist kjente lengde
+          this.lastKnownPassagesLength = newPassages.length;
         }
-      }
+      },
+      deep: true,
+      immediate: true
     },
-    deep: true
-  },
     
     // Overvåk tilkoblingsstatus
     connected(isConnected) {
@@ -233,8 +256,33 @@ export default {
       } else if (areOk && this.status === 'error' && this.connected) {
         this.status = this.timerRunning ? 'running' : 'ready';
       }
+    },
+    
+    // Nye watches for straffer
+    faults(newValue) {
+      // Oppdater siste resultat hvis vi er i 'finished' tilstand
+      if (this.status === 'finished' && this.recentTimes.length > 0) {
+        this.recentTimes[0].faults = newValue;
+      }
+    },
+    
+    refusals(newValue) {
+      // Oppdater siste resultat hvis vi er i 'finished' tilstand
+      if (this.status === 'finished' && this.recentTimes.length > 0) {
+        this.recentTimes[0].refusals = newValue;
+      }
+    },
+    
+    isEliminated(newValue) {
+      // Oppdater siste resultat hvis vi er i 'finished' tilstand
+      if (this.status === 'finished' && this.recentTimes.length > 0) {
+        this.recentTimes[0].eliminated = newValue;
+      }
     }
   },
+
+
+
   methods: {
     startTimer() {
       this.timerRunning = true;
@@ -296,20 +344,40 @@ export default {
     },
     
     addCompletedTime() {
-      // Legg til gjeldende tid og feil i listen over siste tider
-      this.recentTimes.unshift({
-        time: this.currentTime,
-        faults: this.faults,
-        refusals: this.refusals,
-        eliminated: this.isEliminated,
-        timestamp: Date.now()
-      });
-      
-      // Behold bare de 5 siste tidene
-      if (this.recentTimes.length > 5) {
-        this.recentTimes.pop();
+      // Vi må først hente den siste passeringen fra props.passages
+      if (this.passages && this.passages.length > 0) {
+        const latestPassage = this.passages[this.passages.length - 1];
+        
+        // Lag et dato-objekt fra passeringstidspunktet
+        const passageDate = new Date(latestPassage.time);
+        
+        // Henter timer, minutter og sekunder og formaterer dem riktig
+        const hours = passageDate.getHours().toString().padStart(2, '0');
+        const minutes = passageDate.getMinutes().toString().padStart(2, '0');
+        const seconds = passageDate.getSeconds().toString().padStart(2, '0');
+        
+        // Kombinerer til timeOfDay-streng
+        const timeOfDay = `${hours}:${minutes}:${seconds}`;
+        
+        console.log("Original timestamp:", latestPassage.time);
+        console.log("Formatert klokkeslett:", timeOfDay);
+        
+        // Legg til gjeldende tid og feil i listen over siste tider
+        this.recentTimes.unshift({
+          time: this.currentTime,
+          faults: this.faults,
+          refusals: this.refusals,
+          eliminated: this.isEliminated,
+          timeOfDay: timeOfDay
+        });
+        
+        // Behold bare de 5 siste tidene
+        if (this.recentTimes.length > 5) {
+          this.recentTimes.pop();
+        }
       }
-    },
+    }
+    ,
     
     formatTime(ms) {
       const minutes = Math.floor(ms / 60000);
@@ -320,20 +388,43 @@ export default {
     }
   },
   mounted() {
-    // Nullstill timer ved oppstart
-    this.resetTimer();
+    console.log("🔧 TIMERVIEW MONTERT MED PASSAGES:", {
+      passagesLength: this.passages?.length,
+      passages: this.passages
+    });
     
-    // Sett initial status basert på tilkoblingsstatus og sensorstatus
-    if (!this.connected || !this.sensorsOk) {
-      this.status = 'error';
+    // Sjekk om det finnes passeringer ved oppstart
+    if (this.passages && this.passages.length > 0) {
+      console.log("⚠️ PASSAGES FINNES ALLEREDE VED OPPSTART, MEN WATCH IKKE TRIGGET");
     }
-  },
-  beforeDestroy() {
-    // Rydd opp ved komponent-ødeleggelse
+    
+    this.checkInterval = setInterval(() => {
+      // tidligere console.log her – nå er funksjonen tom
+    }, 5000);
+    
+  
+    /*
+    this.checkInterval = setInterval(() => {
+      console.log("🔍 PASSAGES SJEKK:", {
+        length: this.passages?.length, 
+        lastPassage: this.passages?.length > 0 ? this.passages[this.passages.length - 1] : null
+      });
+    }, 5000); // Sjekk hvert 5. sekund
+    */
+    
+  }
+ ,
+ beforeDestroy() {
     if (this.timerInterval) {
       clearInterval(this.timerInterval);
     }
+    if (this.checkInterval) {
+      clearInterval(this.checkInterval);
+    }
   }
+  
+
+
 };
 </script>
 
@@ -627,8 +718,8 @@ export default {
 
 .eliminate-button.eliminated {
   background-color: #FFFFFF; /* Endre dette til #FFFFFF for hvit bakgrunn */
-  color: #2E7D32;
-  border-color: #C8E6C9;
+  color: #7d2e2e;
+  border-color: #e6c8c8;
 }
 
 .eliminate-button.eliminated:hover {
