@@ -1257,6 +1257,7 @@ void app_main(void)
 
 
     // Legg til kode for å starte kalibrering umiddelbart
+    vTaskDelay(5000 / portTICK_PERIOD_MS);
     ESP_LOGI(TAG, "*** STARTER HIGHPOINT SEARCH MANUELT VED OPPSTART ***");
     highpoint_search = true;
     highpoint_offset = 0;
