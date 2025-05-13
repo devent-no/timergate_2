@@ -1445,33 +1445,75 @@ void app_main(void)
             // Sett current_led til den sensoren som for øyeblikket kalibreres
             led_set(highpoint_channel, 1, 255, 0, 255); // Sett aktiv LED til lilla
             
-            ledc_set_duty_with_hpoint(LEDC_MODE, LEDC_CHANNEL_1 + highpoint_channel, LEDC_DUTY, highpoint_offset);
-            ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_1 + highpoint_channel);
+            // Deaktiver andre sensorer midlertidig for å redusere interferens
+            for (int i = 0; i < NUM_SENSORS; i++) {
+                if (i != highpoint_channel && enabled[i]) {
+                    // Sett PWM til 0 for alle andre sensorer
+                    ledc_set_duty(LEDC_MODE, rcv_channels[i], 0);
+                    ledc_update_duty(LEDC_MODE, rcv_channels[i]);
+                }
+            }
             
-
+            // Gi tid til å stabilisere
+            vTaskDelay(5 / portTICK_PERIOD_MS);
             
-            // Ignorere nullverdier og krev minimum verdinivå (f.eks. 100)
-            if (adc_raw[0][highpoint_channel] > highpoint_max && adc_raw[0][highpoint_channel] > 100)
-            {
-                // Logg høyere verdier for debugging
-                if (adc_raw[0][highpoint_channel] > 1000) {
-                    ESP_LOGI(TAG, "Ny høyere verdi for sensor %d: %d ved offset %d", 
-                            highpoint_channel, adc_raw[0][highpoint_channel], highpoint_offset);
+            // Sett PWM for gjeldende sensor
+            ledc_set_duty_with_hpoint(LEDC_MODE, rcv_channels[highpoint_channel], LEDC_DUTY, highpoint_offset);
+            ledc_update_duty(LEDC_MODE, rcv_channels[highpoint_channel]);
+            
+            // Gi tid til å stabilisere før måling
+            vTaskDelay(15 / portTICK_PERIOD_MS);
+            
+            // Ta flere målinger og bruk gjennomsnitt for å redusere støy
+            int sum_readings = 0;
+            int valid_readings = 0;
+            
+            for (int j = 0; j < 3; j++) {
+                int current_reading = 0;
+                ESP_ERROR_CHECK(adc_oneshot_read(adc1_handle, adc_channel[highpoint_channel], &current_reading));
+                
+                // Ignorer nullverdier og for lave verdier
+                if (current_reading > 100) {
+                    sum_readings += current_reading;
+                    valid_readings++;
                 }
                 
-                highpoint_max = adc_raw[0][highpoint_channel];
-                highpoint_offset_max = highpoint_offset;
+                vTaskDelay(5 / portTICK_PERIOD_MS);  // Kort pause mellom målinger
+            }
+            
+            // Oppdater adc_raw med gjennomsnittlig verdi hvis vi har gyldige målinger
+            if (valid_readings > 0) {
+                adc_raw[0][highpoint_channel] = sum_readings / valid_readings;
+                
+                // Oppdater max hvis den nye verdien er høyere
+                if (adc_raw[0][highpoint_channel] > highpoint_max) {
+                    // Logg betydelige nye høydepunkter
+                    if (adc_raw[0][highpoint_channel] > 1000) {
+                        ESP_LOGI(TAG, "Ny høyere verdi for sensor %d: %d ved offset %d", 
+                                highpoint_channel, adc_raw[0][highpoint_channel], highpoint_offset);
+                    }
+                    
+                    highpoint_max = adc_raw[0][highpoint_channel];
+                    highpoint_offset_max = highpoint_offset;
+                }
             }
 
 
         // Endre dette i highpoint_search-delen av koden
         if (highpoint_offset >= 8092) {
+            // Sett optimal offset for denne sensoren
             ledc_set_duty_with_hpoint(LEDC_MODE, rcv_channels[highpoint_channel], LEDC_DUTY, highpoint_offset_max);
             ledc_update_duty(LEDC_MODE, rcv_channels[highpoint_channel]);
             
-
-            // Sett break_limit basert på highpoint_max (forbedret versjon)
-            if (highpoint_max > 500) {  // Krev høyere minimumsverdi for gyldighet
+            // Gi tid til å stabilisere
+            vTaskDelay(20 / portTICK_PERIOD_MS);
+            
+            // Verifiser at sensoren fungerer med ny offset
+            int verification_value = 0;
+            ESP_ERROR_CHECK(adc_oneshot_read(adc1_handle, adc_channel[highpoint_channel], &verification_value));
+            
+            // Sett break_limit basert på highpoint_max (robust versjon)
+            if (highpoint_max > 500 && verification_value > 300) {  // Krev at både max OG verifikasjon er bra
                 // Sett grensen til 70% av maksimumsverdien
                 break_limit[highpoint_channel] = (uint16_t)(highpoint_max * 0.7);
                 ESP_LOGI(TAG, "Satt ny break_limit for sensor %d: %d (70%% av maks %d)", 
@@ -1484,8 +1526,6 @@ void app_main(void)
                 ESP_LOGW(TAG, "Sensor %d har for lav maksverdi (%d), beholder eksisterende verdi: %d", 
                         highpoint_channel, highpoint_max, break_limit[highpoint_channel]);
             }
-
-
             
             ESP_LOGI(TAG, "hsearch done for channel %d, max adc value: %d, offset: %d, break_limit: %d", 
                     highpoint_channel, highpoint_max, highpoint_offset_max, break_limit[highpoint_channel]);
@@ -1518,15 +1558,24 @@ void app_main(void)
                 calibration_completed = true;
                 auto_calibration_started = true;  // Forhindre at automatisk kalibrering starter igjen
                 ESP_LOGI(TAG, "Kalibrering fullført!");
-                
+
+                // Gjenopprett PWM-signaler for alle sensorer med deres optimale offset
+                for (int i = 0; i < NUM_SENSORS; i++) {
+                    if (enabled[i]) {
+                        ledc_set_duty_with_hpoint(LEDC_MODE, rcv_channels[i], LEDC_DUTY, offsets[i]);
+                        ledc_update_duty(LEDC_MODE, rcv_channels[i]);
+                        ESP_LOGI(TAG, "Gjenopprettet PWM for sensor %d med offset %d", i, offsets[i]);
+                    }
+                }
+
                 // Punkt 4 - Deaktiver sensor-blokkeringsfeil midlertidig
                 all_sensors_broken_start_time = 0;
                 blink_mode = false;  // Sikre at blinkemodus er deaktivert
-                
+
                 // Gi systemet litt tid til å stabilisere seg etter kalibrering
                 ESP_LOGI(TAG, "Venter 2 sekunder for å stabilisere systemet etter kalibrering");
                 vTaskDelay(500 / portTICK_PERIOD_MS);
-                
+
                 // Nullstill sensorbrudd-status etter kalibrering
                 for (int i = 0; i < NUM_SENSORS; i++) {
                     if (enabled[i]) {
@@ -1535,7 +1584,7 @@ void app_main(void)
                 }
                 curr_broken = false;
                 prev_broken = false;
-                
+
                 set_system_status(STATUS_READY);
             }
             else {
