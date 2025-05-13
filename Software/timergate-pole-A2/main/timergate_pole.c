@@ -1556,6 +1556,17 @@ void app_main(void)
                 nvs_update_offsets();
                 publish_settings();
                 calibration_completed = true;
+
+                // Gjenopprett PWM-signaler for alle sensorer med deres optimale offset
+                for (int i = 0; i < NUM_SENSORS; i++) {
+                    if (enabled[i]) {
+                        ledc_set_duty_with_hpoint(LEDC_MODE, rcv_channels[i], LEDC_DUTY, offsets[i]);
+                        ledc_update_duty(LEDC_MODE, rcv_channels[i]);
+                        ESP_LOGI(TAG, "Gjenopprettet PWM for sensor %d med offset %d", i, offsets[i]);
+                    }
+                }
+
+
                 auto_calibration_started = true;  // Forhindre at automatisk kalibrering starter igjen
                 ESP_LOGI(TAG, "Kalibrering fullført!");
 
