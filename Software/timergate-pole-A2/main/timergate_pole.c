@@ -1447,13 +1447,13 @@ void app_main(void)
             led_set(highpoint_channel, 1, 255, 0, 255); // Sett aktiv LED til lilla
             
             // Deaktiver andre sensorer midlertidig for å redusere interferens
-            for (int i = 0; i < NUM_SENSORS; i++) {
-                if (i != highpoint_channel && enabled[i]) {
-                    // Sett PWM til 0 for alle andre sensorer
-                    ledc_set_duty(LEDC_MODE, rcv_channels[i], 0);
-                    ledc_update_duty(LEDC_MODE, rcv_channels[i]);
-                }
-            }
+            // for (int i = 0; i < NUM_SENSORS; i++) {
+            //     if (i != highpoint_channel && enabled[i]) {
+            //         // Sett PWM til 0 for alle andre sensorer
+            //         ledc_set_duty(LEDC_MODE, rcv_channels[i], 0);
+            //         ledc_update_duty(LEDC_MODE, rcv_channels[i]);
+            //     }
+            // }
             
             // Gi tid til å stabilisere
             vTaskDelay(5 / portTICK_PERIOD_MS);
@@ -1515,9 +1515,9 @@ void app_main(void)
             
             // Sett break_limit basert på highpoint_max (robust versjon)
             if (highpoint_max > 500 && verification_value > 300) {  // Krev at både max OG verifikasjon er bra
-                // Sett grensen til 70% av maksimumsverdien
-                break_limit[highpoint_channel] = (uint16_t)(highpoint_max * 0.7);
-                ESP_LOGI(TAG, "Satt ny break_limit for sensor %d: %d (70%% av maks %d)", 
+                // Sett grensen til 90% av maksimumsverdien
+                break_limit[highpoint_channel] = (uint16_t)(highpoint_max * 0.9);
+                ESP_LOGI(TAG, "Satt ny break_limit for sensor %d: %d (90%% av maks %d)", 
                         highpoint_channel, break_limit[highpoint_channel], highpoint_max);
             } else {
                 // Behold gjeldende break_limit hvis den finnes, ellers sett standardverdi
@@ -1559,13 +1559,13 @@ void app_main(void)
                 calibration_completed = true;
 
                 // Gjenopprett PWM-signaler for alle sensorer med deres optimale offset
-                for (int i = 0; i < NUM_SENSORS; i++) {
-                    if (enabled[i]) {
-                        ledc_set_duty_with_hpoint(LEDC_MODE, rcv_channels[i], LEDC_DUTY, offsets[i]);
-                        ledc_update_duty(LEDC_MODE, rcv_channels[i]);
-                        ESP_LOGI(TAG, "Gjenopprettet PWM for sensor %d med offset %d", i, offsets[i]);
-                    }
-                }
+                // for (int i = 0; i < NUM_SENSORS; i++) {
+                //     if (enabled[i]) {
+                //         ledc_set_duty_with_hpoint(LEDC_MODE, rcv_channels[i], LEDC_DUTY, offsets[i]);
+                //         ledc_update_duty(LEDC_MODE, rcv_channels[i]);
+                //         ESP_LOGI(TAG, "Gjenopprettet PWM for sensor %d med offset %d", i, offsets[i]);
+                //     }
+                // }
 
 
                 auto_calibration_started = true;  // Forhindre at automatisk kalibrering starter igjen
