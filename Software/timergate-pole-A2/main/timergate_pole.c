@@ -133,6 +133,16 @@ bool auto_calibration_started = false;
 
 
 
+// Nye variabler for WiFi-gjenoppkobling
+static bool wifi_connected = false;
+static int wifi_reconnect_attempts = 0;
+static const int MAX_WIFI_RECONNECT_ATTEMPTS = 10; // Maksimalt antall forsøk før timeout
+static TaskHandle_t wifi_reconnect_task_handle = NULL;
+
+
+
+
+
 
 // LED-farger for de ulike tilstandene (R, G, B)
 const uint8_t STATUS_COLORS[8][3] = {
@@ -443,8 +453,8 @@ void handle_status_animation() {
         
         case STATUS_READY: {
             // Standard grønn pulsering hver 30. sekund for kalibrert system
-            uint32_t pulse_cycle = 30000; // 30 sekunder mellom hver pulsering (endret fra 5000)
-            uint32_t pulse_duration = 200; // 200ms pulsering
+            uint32_t pulse_cycle = 60000; // 30 sekunder mellom hver pulsering (endret fra 5000)
+            uint32_t pulse_duration = 100; // 200ms pulsering
             
             uint32_t time_in_cycle = elapsed_time % pulse_cycle;
             bool pulse_on = time_in_cycle < pulse_duration;
@@ -462,8 +472,8 @@ void handle_status_animation() {
                 normal_led_control = false;
             } else {
                 // Standard grønn pulsering hver 30. sekund for kalibrert system
-                uint32_t pulse_cycle = 30000; // 30 sekunder mellom hver pulsering
-                uint32_t pulse_duration = 200; // 200ms pulsering
+                uint32_t pulse_cycle = 60000; // 30 sekunder mellom hver pulsering
+                uint32_t pulse_duration = 100; // 200ms pulsering
                 
                 uint32_t time_in_cycle = elapsed_time % pulse_cycle;
                 bool pulse_on = time_in_cycle < pulse_duration;
@@ -704,6 +714,90 @@ void nvs_update_offsets()
         nvs_close(my_handle);
     }
 }
+
+
+
+
+// Task for å håndtere WiFi-gjenoppkobling
+static void wifi_reconnect_task(void *pvParameters) {
+    while (1) {
+        if (!wifi_connected) {
+            ESP_LOGI(TAG, "WiFi ikke tilkoblet, forsøker å koble til igjen (forsøk %d/%d)",
+                   wifi_reconnect_attempts + 1, MAX_WIFI_RECONNECT_ATTEMPTS);
+            
+            // Sett status til WiFi_CONNECTING
+            set_system_status(STATUS_WIFI_CONNECTING);
+            
+            // Prøv å koble til WiFi på nytt
+            esp_err_t err = esp_wifi_connect();
+            if (err != ESP_OK) {
+                ESP_LOGE(TAG, "WiFi tilkoblingsforsøk feilet med feilkode %d", err);
+            }
+            
+            // Inkrementere forsøksteller
+            wifi_reconnect_attempts++;
+            
+            // Sjekk om vi har overskredet maks antall forsøk
+            if (wifi_reconnect_attempts >= MAX_WIFI_RECONNECT_ATTEMPTS) {
+                ESP_LOGE(TAG, "Nådde maksimalt antall WiFi-gjenoppkoblingsforsøk. Restarter enheten...");
+                vTaskDelay(1000 / portTICK_PERIOD_MS); // Vent litt før restart
+                esp_restart();
+            }
+        } else {
+            // WiFi er tilkoblet, nullstill forsøksteller
+            wifi_reconnect_attempts = 0;
+        }
+        
+        // Vent 5 sekunder før neste forsøk
+        vTaskDelay(5000 / portTICK_PERIOD_MS);
+    }
+}
+
+
+
+// WiFi-event handler for å håndtere tilkoblings- og frakoblingshendelser
+static void wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data) {
+    // Håndtere WiFi-hendelser
+    if (event_base == WIFI_EVENT) {
+        if (event_id == WIFI_EVENT_STA_START) {
+            ESP_LOGI(TAG, "WiFi STA startet, forsøker å koble til AP");
+            esp_wifi_connect();
+        } 
+        else if (event_id == WIFI_EVENT_STA_DISCONNECTED) {
+            wifi_event_sta_disconnected_t* disconnected = (wifi_event_sta_disconnected_t*) event_data;
+            ESP_LOGW(TAG, "WiFi frakoblet (reason: %d), starter gjenoppkoblingsprosess", disconnected->reason);
+            
+            // Oppdater WiFi-tilkoblingsstatus
+            wifi_connected = false;
+            
+            // Sett systemstatus til ERROR_WIFI
+            set_system_status(STATUS_ERROR_WIFI);
+            
+            // Sikre at reconnect task er startet
+            if (wifi_reconnect_task_handle == NULL) {
+                xTaskCreate(wifi_reconnect_task, "wifi_reconnect", 4096, NULL, 3, &wifi_reconnect_task_handle);
+                ESP_LOGI(TAG, "WiFi-gjenoppkoblings-task startet");
+            }
+        }
+    } 
+    // Håndtere IP-hendelser
+    else if (event_base == IP_EVENT) {
+        if (event_id == IP_EVENT_STA_GOT_IP) {
+            ip_event_got_ip_t* event = (ip_event_got_ip_t*) event_data;
+            ESP_LOGI(TAG, "WiFi tilkoblet! IP-adresse: " IPSTR, IP2STR(&event->ip_info.ip));
+            
+            // Oppdater WiFi-tilkoblingsstatus
+            wifi_connected = true;
+            
+            // Hvis systemstatus er ERROR_WIFI, endre til SERVER_CONNECTING
+            if (current_status == STATUS_ERROR_WIFI) {
+                set_system_status(STATUS_SERVER_CONNECTING);
+            }
+        }
+    }
+}
+
+
 
 static void adc_init()
 {
@@ -1073,11 +1167,16 @@ static void wifi_init()
     ESP_ERROR_CHECK(nvs_flash_init());
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
+
+
+    // Registrer event-handlere
+    ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &wifi_event_handler, NULL));
+    ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &wifi_event_handler, NULL));
     
     // Sett status til WiFi connecting før vi starter tilkobling
     set_system_status(STATUS_WIFI_CONNECTING);
 
-    // Reduser ventetid til 100ms
+    // Reduser ventetid til 500ms
     vTaskDelay(100 / portTICK_PERIOD_MS);
     
     // Initialiser WiFi med optimaliserte innstillinger
@@ -1093,9 +1192,16 @@ static void wifi_init()
     // Etter tilkobling, oppdater status til server connecting
     set_system_status(STATUS_SERVER_CONNECTING);
 
-    // Reduser ventetid til 100ms
+    // Reduser ventetid til 500ms
     vTaskDelay(100 / portTICK_PERIOD_MS);    
 }
+
+
+
+
+
+
+
 
 
 static void pwm_setup(){
@@ -1112,23 +1218,11 @@ static void pwm_setup(){
     }
 }
 
-// Funksjon for å starte automatisk Highpoint search
-/*
-static void start_auto_highpoint_search() {
-    if (!highpoint_search && connected) {
-        ESP_LOGI(TAG, "Starter automatisk Highpoint search...");
-        highpoint_search = true;
-        highpoint_offset = 0;
-        highpoint_channel = 0;
-        highpoint_max = 0;
-        calibration_completed = false;  // Sikre at flagget er nullstilt
-        set_system_status(STATUS_CALIBRATING);
-    } else {
-        ESP_LOGW(TAG, "Kan ikke starte Highpoint search: %s", 
-                !connected ? "Ikke tilkoblet" : "Highpoint search allerede aktiv");
-    }
-}
-*/
+// Deklarasjon av WiFi-event handler
+static void wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data); 
+
+
+
 
 void app_main(void)
 {
@@ -1136,6 +1230,7 @@ void app_main(void)
     nvs_setup();
     nvs_read();
     pwm_setup();
+
 
     led_strip_new_rmt_device(&strip_config, &rmt_config, &led_strip);
 
@@ -1169,6 +1264,18 @@ void app_main(void)
     highpoint_max = 0;
     calibration_completed = false;
     set_system_status(STATUS_CALIBRATING);
+
+
+    // Sett høyere initialverdier for break_limit før kalibrering starter
+    for (int i = 0; i < NUM_SENSORS; i++) {
+        // Behold eksisterende verdier hvis de er rimelige, ellers sett en konservativ verdi
+        if (enabled[i] && break_limit[i] < 500) {
+            ESP_LOGI(TAG, "Sensor %d: Endrer break_limit fra %d til 2000 (konservativ initialverdi)", 
+                    i, break_limit[i]);
+            break_limit[i] = 2000;  // Høyere initialverdi
+        }
+    }
+
 
 
    
@@ -1341,29 +1448,44 @@ void app_main(void)
             ledc_set_duty_with_hpoint(LEDC_MODE, LEDC_CHANNEL_1 + highpoint_channel, LEDC_DUTY, highpoint_offset);
             ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_1 + highpoint_channel);
             
-            if (adc_raw[0][highpoint_channel] > highpoint_max)
+
+            
+            // Ignorere nullverdier og krev minimum verdinivå (f.eks. 100)
+            if (adc_raw[0][highpoint_channel] > highpoint_max && adc_raw[0][highpoint_channel] > 100)
             {
+                // Logg høyere verdier for debugging
+                if (adc_raw[0][highpoint_channel] > 1000) {
+                    ESP_LOGI(TAG, "Ny høyere verdi for sensor %d: %d ved offset %d", 
+                            highpoint_channel, adc_raw[0][highpoint_channel], highpoint_offset);
+                }
+                
                 highpoint_max = adc_raw[0][highpoint_channel];
                 highpoint_offset_max = highpoint_offset;
             }
-            
+
+
         // Endre dette i highpoint_search-delen av koden
         if (highpoint_offset >= 8092) {
             ledc_set_duty_with_hpoint(LEDC_MODE, rcv_channels[highpoint_channel], LEDC_DUTY, highpoint_offset_max);
             ledc_update_duty(LEDC_MODE, rcv_channels[highpoint_channel]);
             
-            // Sett break_limit basert på highpoint_max (Punkt 3, del 1)
-            if (highpoint_max > 100) {
+
+            // Sett break_limit basert på highpoint_max (forbedret versjon)
+            if (highpoint_max > 500) {  // Krev høyere minimumsverdi for gyldighet
                 // Sett grensen til 70% av maksimumsverdien
                 break_limit[highpoint_channel] = (uint16_t)(highpoint_max * 0.7);
                 ESP_LOGI(TAG, "Satt ny break_limit for sensor %d: %d (70%% av maks %d)", 
                         highpoint_channel, break_limit[highpoint_channel], highpoint_max);
             } else {
-                // Om max er for lav, sett en standardverdi
-                break_limit[highpoint_channel] = 1000;
-                ESP_LOGI(TAG, "Sensor %d har lav verdi (%d), setter standardverdi på 1000", 
-                        highpoint_channel, highpoint_max);
+                // Behold gjeldende break_limit hvis den finnes, ellers sett standardverdi
+                if (break_limit[highpoint_channel] < 500) {
+                    break_limit[highpoint_channel] = 1000;  // Standard break-grense
+                }
+                ESP_LOGW(TAG, "Sensor %d har for lav maksverdi (%d), beholder eksisterende verdi: %d", 
+                        highpoint_channel, highpoint_max, break_limit[highpoint_channel]);
             }
+
+
             
             ESP_LOGI(TAG, "hsearch done for channel %d, max adc value: %d, offset: %d, break_limit: %d", 
                     highpoint_channel, highpoint_max, highpoint_offset_max, break_limit[highpoint_channel]);
@@ -1425,6 +1547,7 @@ void app_main(void)
                     
             //highpoint_offset += 30;
             highpoint_offset += 300;
+            vTaskDelay(15 / portTICK_PERIOD_MS);  // Legg til en kort pause mellom justeringene
         }
         else
         {
