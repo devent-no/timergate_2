@@ -105,6 +105,8 @@ uint32_t blink_interval = 500;       // Blinkehastighet i millisekunder
 bool blink_state = false;            // Av/på tilstand for blinking
 
 
+bool calibration_completed = false;  // Flagg for å holde styr på om kalibrering er fullført
+
 // Nye globale enum for systemstatus
 typedef enum {
     STATUS_INITIALIZING,
@@ -113,8 +115,11 @@ typedef enum {
     STATUS_READY,
     STATUS_ERROR_WIFI,
     STATUS_ERROR_SERVER,
-    STATUS_ERROR_SENSORS_BLOCKED
+    STATUS_ERROR_SENSORS_BLOCKED,
+    STATUS_CALIBRATING // Ny status for kalibrering
 } system_status_t;
+
+void set_system_status(system_status_t status);
 
 // Globale variabler for statushåndtering
 system_status_t current_status = STATUS_INITIALIZING;
@@ -122,24 +127,24 @@ uint32_t status_animation_start_time = 0;
 uint32_t status_animation_step = 0;
 bool normal_led_control = false;  // Om vanlig sensorvisning skal overstyre animasjoner
 
+// Variabler for tidsstyrt automatisk kalibrering
+uint32_t ready_start_time = 0;
+bool auto_calibration_started = false;
+
+
+
+
 // LED-farger for de ulike tilstandene (R, G, B)
-const uint8_t STATUS_COLORS[7][3] = {
+const uint8_t STATUS_COLORS[8][3] = {
     {64, 64, 64},  // Initialisering - Hvit
     {0, 0, 255},   // WiFi-tilkobling - Blå
     {255, 255, 0}, // Servertilkobling - Gul
     {0, 255, 0},   // Klar - Grønn
     {255, 0, 0},   // WiFi-feil - Rød
     {255, 0, 0},   // Serverfeil - Rød
-    {255, 0, 0}    // Sensorer blokkert - Rød
+    {255, 0, 0},   // Sensorer blokkert - Rød
+    {128, 0, 128}  // Kalibrering - Lilla
 };
-
-
-
-
-
-
-
-
 
 led_strip_config_t strip_config = {
     .max_leds = 7, // at least one LED on board
@@ -181,23 +186,22 @@ static void pwm_init(int timer_num, int frequency, int channel, int gpio, int hp
     ESP_ERROR_CHECK(ledc_channel_config(&ledc_channel));
 }
 
-// Modifisert LED sett funksjon med fargeparametre
+// Modifisert LED sett funksjon med forbedret fargekontroll
 void led_set(uint8_t led_nr, uint8_t value, uint8_t r, uint8_t g, uint8_t b)
 {
-    if (led_val[led_nr] == value)
-        return;
+    // Fjern denne sjekken som kan forhindre oppdatering
+    // if (led_val[led_nr] == value)
+    //    return;
 
     if (value)
     {
         led_strip_set_pixel(led_strip, led_nr, r, g, b);
-        led_strip_refresh(led_strip);
     }
     else
     {
         led_strip_set_pixel(led_strip, led_nr, 0, 0, 0);
-        led_strip_refresh(led_strip);
     }
-
+    led_strip_refresh(led_strip);
     led_val[led_nr] = value;
 }
 
@@ -218,7 +222,7 @@ void set_all_leds(uint8_t value, uint8_t r, uint8_t g, uint8_t b)
     led_strip_refresh(led_strip);
 }
 
-// Funksjon for å håndtere blinkemodus
+// Funksjon for å håndtere blinkemodus for sensorblokkeringssvarsel
 void handle_blink_mode() 
 {
     uint32_t current_time = esp_timer_get_time() / 1000;  // Konverter til millisekunder
@@ -274,8 +278,10 @@ void handle_blink_mode()
             blink_state = !blink_state;
             
             if (blink_state) {
+                normal_led_control = false;
                 set_all_leds(1, 255, 0, 0);  // Rødt på
             } else {
+                normal_led_control = false;
                 set_all_leds(0, 0, 0, 0);    // Av
             }
         }
@@ -292,40 +298,85 @@ void handle_blink_mode()
     }
 }
 
-
-
-// Funksjon for å sette systemstatus
+// Funksjon for å sette systemstatus med forbedrede statusoverganger
 void set_system_status(system_status_t status) {
     if (current_status != status) {
         ESP_LOGI(TAG, "System status endret: %d -> %d", current_status, status);
+        
+
+        // Legg til denne koden for å nullstille variabler når tilstanden endres
+        if (status != STATUS_READY) {
+            ready_start_time = 0; // Nullstill timer for READY-tilstand
+        }
+        
+        // Hvis vi går fra STATUS_CALIBRATING tilbake til STATUS_READY, er kalibreringen fullført
+        if (current_status == STATUS_CALIBRATING && status == STATUS_READY) {
+            calibration_completed = true;
+        }
+
+
+        // Slå av alle LED-er før status endres
+        set_all_leds(0, 0, 0, 0);
+        vTaskDelay(50 / portTICK_PERIOD_MS);  // Kort pause for å tydeliggjøre statusendring
+        
         current_status = status;
         status_animation_start_time = esp_timer_get_time() / 1000;
         status_animation_step = 0;
         
-        // Tilbakestill eventuelle tilstandsvariabler for den tidligere statusen
+        // Tilbakestill tilstandsvariabler basert på ny status
         if (status != STATUS_ERROR_SENSORS_BLOCKED) {
             blink_mode = false;
             all_sensors_broken_start_time = 0;
         }
         
-        // For klar-tilstand, slå av alle LED-er først
-        if (status == STATUS_READY) {
-            set_all_leds(0, 0, 0, 0);
-        }
+        // Nullstill LED-kontroll og la status-animasjoner ta over
+        normal_led_control = false;
         
-        // Aktiver normal LED-kontroll bare i READY-tilstand
-        normal_led_control = (status == STATUS_READY);
+        // Aktiver normal LED-kontroll kun i READY-tilstand (men først etter status-animasjon)
+        if (status == STATUS_READY) {
+            // Gå direkte til READY-status visning (grønt blink) med en gang
+            for (int i = 0; i < NUM_SENSORS; i++) {
+                if (enabled[i]) {
+                    led_set(i, 1, 
+                           STATUS_COLORS[STATUS_READY][0],
+                           STATUS_COLORS[STATUS_READY][1],
+                           STATUS_COLORS[STATUS_READY][2]);
+                }
+            }
+            // LED-er vil oppdateres i neste handle_status_animation() kall
+        }
     }
 }
 
-// Funksjon for å håndtere status-animasjoner
+// Forbedret funksjon for status-animasjoner
 void handle_status_animation() {
     uint32_t current_time = esp_timer_get_time() / 1000; // Millisekunder
     uint32_t elapsed_time = current_time - status_animation_start_time;
     
-    // Håndter allerede implementert sensorblokkeringsstatus separat
+    // Håndter sensorblokkering separat
     if (current_status == STATUS_ERROR_SENSORS_BLOCKED) {
         handle_blink_mode();
+        return;
+    }
+    
+    // Håndter kalibreringsstatus separat
+    if (current_status == STATUS_CALIBRATING) {
+        // Pulserende lilla for kalibrering
+        uint32_t pulse_period = 1000; // 1 sekund pulsering
+        uint32_t phase = (elapsed_time % pulse_period);
+        uint8_t brightness = phase < (pulse_period / 2) 
+            ? 50 + (phase * 200 / (pulse_period / 2))  // Øk fra 50 til 250
+            : 250 - ((phase - (pulse_period / 2)) * 200 / (pulse_period / 2));  // Reduser fra 250 til 50
+        
+        for (int i = 0; i < NUM_SENSORS; i++) {
+            if (enabled[i] && highpoint_channel == i) {
+                // Aktiv sensor som kalibreres: Pulserende lilla
+                led_set(i, 1, brightness / 2, 0, brightness / 2);
+            } else if (enabled[i]) {
+                // Andre sensorer: dempet lilla
+                led_set(i, 1, 20, 0, 20);
+            }
+        }
         return;
     }
     
@@ -363,8 +414,8 @@ void handle_status_animation() {
         }
         
         case STATUS_WIFI_CONNECTING: {
-            // Roterende LED-er
-            uint32_t step_time = 250; // 250ms per steg
+            // Roterende LED-er (blå)
+            uint32_t step_time = 150; // Raskere rotasjon: 150ms per steg
             uint32_t current_led = (elapsed_time / step_time) % NUM_SENSORS;
             
             for (int i = 0; i < NUM_SENSORS; i++) {
@@ -379,8 +430,8 @@ void handle_status_animation() {
         }
         
         case STATUS_SERVER_CONNECTING: {
-            // Alle LED-er blinker sakte
-            uint32_t blink_cycle = 1000; // 1 sekund på/av
+            // Alle LED-er blinker samtidig (gul)
+            uint32_t blink_cycle = 500; // 0.5 sekund på/av (raskere blinking)
             bool on = ((elapsed_time / blink_cycle) % 2) == 0;
             
             set_all_leds(on, 
@@ -391,33 +442,55 @@ void handle_status_animation() {
         }
         
         case STATUS_READY: {
-            // Kort "pulsering" hver 5. sekund
-            uint32_t pulse_cycle = 5000; // 5 sekunder mellom hver pulsering
+            // Standard grønn pulsering hver 30. sekund for kalibrert system
+            uint32_t pulse_cycle = 30000; // 30 sekunder mellom hver pulsering (endret fra 5000)
             uint32_t pulse_duration = 200; // 200ms pulsering
             
             uint32_t time_in_cycle = elapsed_time % pulse_cycle;
             bool pulse_on = time_in_cycle < pulse_duration;
             
             if (pulse_on) {
-                // Vis kort pulsering
+                // Vis kort pulsering (grønn)
                 set_all_leds(1, 
-                           STATUS_COLORS[STATUS_READY][0],
-                           STATUS_COLORS[STATUS_READY][1],
-                           STATUS_COLORS[STATUS_READY][2]);
+                        STATUS_COLORS[STATUS_READY][0],
+                        STATUS_COLORS[STATUS_READY][1],
+                        STATUS_COLORS[STATUS_READY][2]);
+                normal_led_control = false;
+            } else if (time_in_cycle < pulse_duration + 50) {
+                // Slå av LED-er umiddelbart etter pulsering
+                set_all_leds(0, 0, 0, 0);
                 normal_led_control = false;
             } else {
-                // Tillat normal LED-kontroll
-                if (!normal_led_control) {
+                // Standard grønn pulsering hver 30. sekund for kalibrert system
+                uint32_t pulse_cycle = 30000; // 30 sekunder mellom hver pulsering
+                uint32_t pulse_duration = 200; // 200ms pulsering
+                
+                uint32_t time_in_cycle = elapsed_time % pulse_cycle;
+                bool pulse_on = time_in_cycle < pulse_duration;
+                
+                if (pulse_on) {
+                    // Vis kort pulsering (grønn)
+                    set_all_leds(1, 
+                            STATUS_COLORS[STATUS_READY][0],
+                            STATUS_COLORS[STATUS_READY][1],
+                            STATUS_COLORS[STATUS_READY][2]);
+                    normal_led_control = false;
+                } else if (time_in_cycle < pulse_duration + 50) {
+                    // Slå av LED-er umiddelbart etter pulsering
                     set_all_leds(0, 0, 0, 0);
+                    normal_led_control = false;
+                } else {
+                    // Resten av tiden, aktiver normal LED-kontroll
                     normal_led_control = true;
                 }
             }
             break;
         }
         
+
         case STATUS_ERROR_WIFI: {
-            // Rytmisk blinking av annenhver LED
-            uint32_t blink_cycle = 1000; // 1 sekund per full syklus
+            // Rytmisk blinking av annenhver LED (rødt mønster)
+            uint32_t blink_cycle = 800; // 0.8 sekund per full syklus
             bool odd_leds = ((elapsed_time / (blink_cycle/2)) % 2) == 0;
             
             for (int i = 0; i < NUM_SENSORS; i++) {
@@ -433,13 +506,23 @@ void handle_status_animation() {
         }
         
         case STATUS_ERROR_SERVER: {
-            // Blinking av første og siste LED
-            uint32_t blink_cycle = 1000; // 1 sekund per full syklus
+            // Blinking av første og siste LED (rødt mønster)
+            uint32_t blink_cycle = 800; // 0.8 sekund per full syklus
             bool on = ((elapsed_time / (blink_cycle/2)) % 2) == 0;
+            
+            // Finn først og siste aktive sensor
+            int first_active = -1;
+            int last_active = -1;
+            for (int i = 0; i < NUM_SENSORS; i++) {
+                if (enabled[i]) {
+                    if (first_active == -1) first_active = i;
+                    last_active = i;
+                }
+            }
             
             for (int i = 0; i < NUM_SENSORS; i++) {
                 if (enabled[i]) {
-                    bool should_be_on = (i == 0 || i == (NUM_SENSORS-1)) ? on : false;
+                    bool should_be_on = (i == first_active || i == last_active) ? on : false;
                     led_set(i, should_be_on, 
                            STATUS_COLORS[STATUS_ERROR_SERVER][0],
                            STATUS_COLORS[STATUS_ERROR_SERVER][1],
@@ -448,14 +531,54 @@ void handle_status_animation() {
             }
             break;
         }
+
+
+
+        // I handle_status_animation()-funksjonen, legg til denne nye casen:
+        case STATUS_CALIBRATING: {
+            // Tydeligere indikasjon på kalibrering
+            
+            // Aktiv sensor som kalibreres: Hvit pulserende
+            uint32_t pulse_period = 1000; // 1 sekund pulsering
+            uint32_t phase = (elapsed_time % pulse_period);
+            uint8_t brightness = phase < (pulse_period / 2) 
+                ? 50 + (phase * 200 / (pulse_period / 2))  // Øk fra 50 til 250
+                : 250 - ((phase - (pulse_period / 2)) * 200 / (pulse_period / 2));  // Reduser fra 250 til 50
+            
+            // Sett fargene for hver sensor basert på kalibreringsstatus
+            for (int i = 0; i < NUM_SENSORS; i++) {
+                if (enabled[i]) {
+                    if (i == highpoint_channel) {
+                        // Aktiv sensor som kalibreres: Pulserende hvit
+                        led_set(i, 1, brightness, brightness, brightness);
+                    } else if (i < highpoint_channel) {
+                        // Kalibrert sensor: Grønn
+                        led_set(i, 1, 0, 100, 0);
+                    } else {
+                        // Ikke kalibrert ennå: Dempet lilla
+                        led_set(i, 1, 20, 0, 20);
+                    }
+                }
+            }
+            
+            // Legg til kalibreringsprogresjon (indikator for hvor langt vi er kommet)
+            float progress = (float)highpoint_offset / 8092.0;
+            if (progress > 0.95) {
+                // Når nesten ferdig med gjeldende sensor, blink hvitt/grønt
+                if ((elapsed_time / 100) % 2 == 0) {
+                    led_set(highpoint_channel, 1, 255, 255, 255);
+                } else {
+                    led_set(highpoint_channel, 1, 0, 255, 0);
+                }
+            }
+            break;  // Viktig å ha break her
+        }
+
         
         default:
             break;
     }
 }
-
-
-
 
 void nvs_setup()
 {
@@ -512,8 +635,6 @@ void nvs_read()
             sprintf(var_s, "break_limit_%d", i);
             err |= nvs_get_u16(my_handle, var_s, &break_limit[i]);
 
-            //sprintf(var_s, "enabled_%d", i);
-            //err |= nvs_get_u16(my_handle, var_s, &enabled[i]);
             sprintf(var_s, "enabled_%d", i);
             uint16_t tmp_enabled;
             err |= nvs_get_u16(my_handle, var_s, &tmp_enabled);
@@ -638,23 +759,25 @@ static void tcp_close()
 
 static void tcp_connect()
 {
+    // Vis STATUS_SERVER_CONNECTING lenger før vi forsøker tilkobling
+    vTaskDelay(500 / portTICK_PERIOD_MS);
+
     ESP_LOGI(TAG, "Socket connecting to %s:%d", host_ip, PORT);
     int err = connect(sock, (struct sockaddr *)&dest_addr, sizeof(dest_addr));
     if (err != 0)
     {
         ESP_LOGE(TAG, "Socket unable to connect: errno %d", errno);
-        // Etter feilet tilkobling, sett status til ERROR_SERVER
         set_system_status(STATUS_ERROR_SERVER);
         return;
     }
-    ESP_LOGI(TAG, "Successfully connected");
+    
+    ESP_LOGI(TAG, "Successfully connected to server");
     connected = true;
     
-    // Etter vellykket tilkobling, sett status til READY
+    // Vent lenger før status endres til READY
+    vTaskDelay(1000 / portTICK_PERIOD_MS);
     set_system_status(STATUS_READY);
 }
-
-
 
 static void add_to_queue(char *msg)
 {
@@ -858,6 +981,9 @@ static void check_socket()
                     highpoint_offset = 0;
                     highpoint_channel = channel;
                     highpoint_max = 0;
+                    
+                    // Sett status til kalibrering når hsearch starter
+                    set_system_status(STATUS_CALIBRATING);
                 }
                 if (strncmp(command, "enabled", 7) == 0)
                 {
@@ -950,14 +1076,19 @@ static void wifi_init()
     
     // Sett status til WiFi connecting før vi starter tilkobling
     set_system_status(STATUS_WIFI_CONNECTING);
+
+    // Gi tid til å vise WiFi-tilkoblingsstatus
+    vTaskDelay(1000 / portTICK_PERIOD_MS);
     
     ESP_ERROR_CHECK(example_connect());
     
     // Etter tilkobling, oppdater status til server connecting
     set_system_status(STATUS_SERVER_CONNECTING);
+
+    // Gi ekstra tid til å vise server-tilkoblingsstatus før vi går videre
+    vTaskDelay(1000 / portTICK_PERIOD_MS);    
+
 }
-
-
 
 static void pwm_setup(){
     pwm_init(LEDC_TIMER_0, PWM_0_FREQUENCY, LEDC_CHANNEL_0, PWM_SEND_0, 0);
@@ -973,11 +1104,27 @@ static void pwm_setup(){
     }
 }
 
-
+// Funksjon for å starte automatisk Highpoint search
+/*
+static void start_auto_highpoint_search() {
+    if (!highpoint_search && connected) {
+        ESP_LOGI(TAG, "Starter automatisk Highpoint search...");
+        highpoint_search = true;
+        highpoint_offset = 0;
+        highpoint_channel = 0;
+        highpoint_max = 0;
+        calibration_completed = false;  // Sikre at flagget er nullstilt
+        set_system_status(STATUS_CALIBRATING);
+    } else {
+        ESP_LOGW(TAG, "Kan ikke starte Highpoint search: %s", 
+                !connected ? "Ikke tilkoblet" : "Highpoint search allerede aktiv");
+    }
+}
+*/
 
 void app_main(void)
 {
-
+    // Initialiser komponenter
     nvs_setup();
     nvs_read();
     pwm_setup();
@@ -1002,63 +1149,275 @@ void app_main(void)
     xQueueBreak = xQueueCreate(30, sizeof(char *));
     xTaskCreatePinnedToCore(tcp_client_task, "tcp_client", 4096, (void *)AF_INET, 5, NULL, 1);
 
+
     publish_settings();
 
+
+    // Legg til kode for å starte kalibrering umiddelbart
+    ESP_LOGI(TAG, "*** STARTER HIGHPOINT SEARCH MANUELT VED OPPSTART ***");
+    highpoint_search = true;
+    highpoint_offset = 0;
+    highpoint_channel = 0;
+    highpoint_max = 0;
+    calibration_completed = false;
+    set_system_status(STATUS_CALIBRATING);
+
+
+   
+    // Hovedløkke
     while (1)
     {
         vTaskDelay(10 / portTICK_PERIOD_MS);
 
         curr_broken = false;
-        for (int i = 0; i < 7; i++)
-        {
-            if (enabled[i])
-            {
+        bool all_sensors_broken = true;
+        int active_sensors = 0;
+        
+        // Les sensorverdier og oppdater sensor_break-tilstand
+        for (int i = 0; i < 7; i++) {
+            if (enabled[i]) {
                 ESP_ERROR_CHECK(adc_oneshot_read(adc1_handle, adc_channel[i], &adc_raw[0][i]));
-                sensor_break[i] = (adc_raw[0][i] < break_limit[i]);
+                if (adc_raw[0][i] > 0) {
+                    //ESP_LOGI(TAG, "ADC verdi for sensor %d: %d", i, adc_raw[0][i]);
+                }
+
                 
-                // Bare oppdater LED-er når vi ikke er i blinkemodus
-                if (!blink_mode) {
-                    led_set_simple(i, sensor_break[i]);
+                // Hvis vi er i kalibrering, ikke still sensorer
+                if (!highpoint_search) {
+                    sensor_break[i] = (adc_raw[0][i] < break_limit[i]);
+                    curr_broken |= sensor_break[i];
+                } else {
+                    // Under kalibrering, angi alle sensorer som ikke brutt
+                    sensor_break[i] = false;
                 }
                 
-                curr_broken |= sensor_break[i];
+                // Oppdater tellere for all_sensors_broken sjekk
+                active_sensors++;
+                if (!sensor_break[i]) {
+                    all_sensors_broken = false;
+                }
             }
         }
 
-        // Håndter blinkemodus etter sensorkontroll
-        handle_status_animation();
-        publish_sensor();
+        // Sjekk sensorblokkeringsstatus - men kun når vi IKKE er i kalibrering
+        if (!highpoint_search && active_sensors > 0) {
+            uint32_t current_time = esp_timer_get_time() / 1000;
+            
+            if (all_sensors_broken) {
+                // Første gang alle sensorer er brutt
+                if (all_sensors_broken_start_time == 0) {
+                    all_sensors_broken_start_time = current_time;
+                    ESP_LOGI(TAG, "Alle sensorer er brutt, starter timer");
+                } 
+                // Sjekk om det har gått nok tid
+                else if (current_time - all_sensors_broken_start_time >= min_time_for_alert && 
+                         current_status != STATUS_ERROR_SENSORS_BLOCKED) {
+                    ESP_LOGI(TAG, "Alle sensorer har vært brutt i %d ms - aktiverer blinkemodus", min_time_for_alert);
+                    set_system_status(STATUS_ERROR_SENSORS_BLOCKED);
+                }
+            } else if (all_sensors_broken_start_time != 0) {
+                // Nullstill timer hvis ikke alle sensorer er brutt
+                ESP_LOGI(TAG, "Ikke alle sensorer er brutt lenger, nullstiller timer");
+                all_sensors_broken_start_time = 0;
+                
+                // Hvis vi er i feil-status, tilbakestill til READY
+                if (current_status == STATUS_ERROR_SENSORS_BLOCKED) {
+                    set_system_status(STATUS_READY);
+                }
+            }
+        }
 
+        // Håndter status-animasjoner
+        handle_status_animation();
+
+        // Oppdater LED-er basert på sensortilstand men bare hvis normal_led_control er aktivert og ikke under kalibrering
+        if (normal_led_control && !highpoint_search) {
+            for (int i = 0; i < 7; i++) {
+                if (enabled[i]) {
+                    led_set_simple(i, sensor_break[i]);
+                }
+            }
+        }
+
+        // Send sensor data til serveren
+        //Midlertidig disablet på grunn av mye i loggen
+        //publish_sensor();
+
+
+
+
+        // Sjekk om vi skal starte automatisk kalibrering
+        if (current_status == STATUS_READY && !auto_calibration_started && connected) {
+            if (ready_start_time == 0) {
+                // Første gang vi er i READY-tilstand, start tid
+                ready_start_time = esp_timer_get_time() / 1000; // Millisekunder
+                ESP_LOGI(TAG, "System i READY-tilstand, starter timer for automatisk kalibrering");
+            } else {
+                // Sjekk om det har gått nok tid siden vi ble READY
+                uint32_t current_time = esp_timer_get_time() / 1000;
+                if (current_time - ready_start_time > 5000) { // 5 sekunder etter READY
+                    ESP_LOGI(TAG, "Starter automatisk kalibrering etter 5 sekunder i READY-tilstand");
+                    highpoint_search = true;
+                    highpoint_offset = 0;
+                    highpoint_channel = 0;
+                    highpoint_max = 0;
+                    calibration_completed = false;
+                    set_system_status(STATUS_CALIBRATING);
+                    auto_calibration_started = true;
+                }
+            }
+        }
+
+
+
+
+        // I hovedløkken, rett før sjekk av highpoint_search
+        // Legg til jevnlig logging av systemtilstand
+        //if (esp_timer_get_time() / 1000000 % 5 == 0) { // Logg hvert 5. sekund
+            //ESP_LOGI(TAG, "Systemstatus: %d, Connected: %d, Auto Calibration Started: %d, Ready Time: %lu", 
+            //        current_status, connected, auto_calibration_started, ready_start_time);
+        //}
+
+        // I koden for å starte automatisk kalibrering
+        if (current_status == STATUS_READY && !auto_calibration_started && connected) {
+            // Logg mer detaljer om tilstandene
+            ESP_LOGI(TAG, "Sjekker kalibrering - Status: %d, Auto: %d, Connected: %d", 
+                    current_status, auto_calibration_started, connected);
+            
+            if (ready_start_time == 0) {
+                ready_start_time = esp_timer_get_time() / 1000;
+                ESP_LOGI(TAG, "System i READY-tilstand, starter timer for automatisk kalibrering: %lu", ready_start_time);
+            } else {
+                uint32_t current_time = esp_timer_get_time() / 1000;
+                ESP_LOGI(TAG, "Kalibrerings-timer: %lu/%lu (%lu ms siden READY)", 
+                        current_time - ready_start_time, 5000, current_time - ready_start_time);
+                
+                if (current_time - ready_start_time > 5000) {
+                    ESP_LOGI(TAG, "*** STARTER AUTOMATISK KALIBRERING ETTER 5 SEKUNDER I READY-TILSTAND ***");
+                    highpoint_search = true;
+                    highpoint_offset = 0;
+                    highpoint_channel = 0;
+                    highpoint_max = 0;
+                    calibration_completed = false;
+                    set_system_status(STATUS_CALIBRATING);
+                    auto_calibration_started = true;
+                }
+            }
+        }
+
+
+
+
+
+
+
+
+
+
+
+
+
+        // Håndter highpoint_search
         if (highpoint_search)
         {
-            // ESP_LOGI(TAG, "offset: %d", highpoint_offset);
+            // Sikre at statusen er satt til kalibrering
+            if (current_status != STATUS_CALIBRATING) {
+                set_system_status(STATUS_CALIBRATING);
+            }
+
+            // Vis status for kalibrering
+            set_system_status(STATUS_CALIBRATING);
+            
+            // Sett current_led til den sensoren som for øyeblikket kalibreres
+            led_set(highpoint_channel, 1, 255, 0, 255); // Sett aktiv LED til lilla
+            
             ledc_set_duty_with_hpoint(LEDC_MODE, LEDC_CHANNEL_1 + highpoint_channel, LEDC_DUTY, highpoint_offset);
             ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_1 + highpoint_channel);
+            
             if (adc_raw[0][highpoint_channel] > highpoint_max)
             {
                 highpoint_max = adc_raw[0][highpoint_channel];
                 highpoint_offset_max = highpoint_offset;
             }
-            if (highpoint_offset >= 8092)
-            {
-                ledc_set_duty_with_hpoint(LEDC_MODE, rcv_channels[highpoint_channel], LEDC_DUTY, highpoint_offset_max);
-                ledc_update_duty(LEDC_MODE, rcv_channels[highpoint_channel]);
-                ESP_LOGI(TAG, "hsearch done for channel %d, max adc value: %d, offset: %d", highpoint_channel, highpoint_max, highpoint_offset_max);
-
-                if (highpoint_channel == 6)
-                {
-                    highpoint_search = false;
-                    nvs_update_offsets();
-                    publish_settings();
-                }
-                else
-                {
-                    highpoint_channel++;
-                    highpoint_offset = 0;
-                    highpoint_max = 0;
-                }
+            
+        // Endre dette i highpoint_search-delen av koden
+        if (highpoint_offset >= 8092) {
+            ledc_set_duty_with_hpoint(LEDC_MODE, rcv_channels[highpoint_channel], LEDC_DUTY, highpoint_offset_max);
+            ledc_update_duty(LEDC_MODE, rcv_channels[highpoint_channel]);
+            
+            // Sett break_limit basert på highpoint_max (Punkt 3, del 1)
+            if (highpoint_max > 100) {
+                // Sett grensen til 70% av maksimumsverdien
+                break_limit[highpoint_channel] = (uint16_t)(highpoint_max * 0.7);
+                ESP_LOGI(TAG, "Satt ny break_limit for sensor %d: %d (70%% av maks %d)", 
+                        highpoint_channel, break_limit[highpoint_channel], highpoint_max);
+            } else {
+                // Om max er for lav, sett en standardverdi
+                break_limit[highpoint_channel] = 1000;
+                ESP_LOGI(TAG, "Sensor %d har lav verdi (%d), setter standardverdi på 1000", 
+                        highpoint_channel, highpoint_max);
             }
-            highpoint_offset += 30;
+            
+            ESP_LOGI(TAG, "hsearch done for channel %d, max adc value: %d, offset: %d, break_limit: %d", 
+                    highpoint_channel, highpoint_max, highpoint_offset_max, break_limit[highpoint_channel]);
+
+            if (highpoint_channel == 6) {
+                highpoint_search = false;
+                
+                // Sjekk om noen sensorer har fått brukbare verdier (Punkt 3, del 2)
+                bool any_valid_sensors = false;
+                for (int i = 0; i < NUM_SENSORS; i++) {
+                    if (enabled[i] && break_limit[i] > 100) {
+                        any_valid_sensors = true;
+                        break;
+                    }
+                }
+                
+                if (!any_valid_sensors) {
+                    ESP_LOGW(TAG, "Ingen sensorer fikk gyldige kalibreringsverdier - bruker standardverdier");
+                    // Sett standardverdier for alle sensorer
+                    for (int i = 0; i < NUM_SENSORS; i++) {
+                        if (enabled[i]) {
+                            break_limit[i] = 1000;  // Standard break-grense
+                            offsets[i] = 4500;      // Standard offset
+                        }
+                    }
+                }
+                
+                nvs_update_offsets();
+                publish_settings();
+                calibration_completed = true;
+                auto_calibration_started = true;  // Forhindre at automatisk kalibrering starter igjen
+                ESP_LOGI(TAG, "Kalibrering fullført!");
+                
+                // Punkt 4 - Deaktiver sensor-blokkeringsfeil midlertidig
+                all_sensors_broken_start_time = 0;
+                blink_mode = false;  // Sikre at blinkemodus er deaktivert
+                
+                // Gi systemet litt tid til å stabilisere seg etter kalibrering
+                ESP_LOGI(TAG, "Venter 2 sekunder for å stabilisere systemet etter kalibrering");
+                vTaskDelay(500 / portTICK_PERIOD_MS);
+                
+                // Nullstill sensorbrudd-status etter kalibrering
+                for (int i = 0; i < NUM_SENSORS; i++) {
+                    if (enabled[i]) {
+                        sensor_break[i] = false;
+                    }
+                }
+                curr_broken = false;
+                prev_broken = false;
+                
+                set_system_status(STATUS_READY);
+            }
+            else {
+                highpoint_channel++;
+                highpoint_offset = 0;
+                highpoint_max = 0;
+            }
+        }
+                    
+            //highpoint_offset += 30;
+            highpoint_offset += 300;
         }
         else
         {
@@ -1070,5 +1429,4 @@ void app_main(void)
             prev_broken = curr_broken;
         }
     }
-
 }
