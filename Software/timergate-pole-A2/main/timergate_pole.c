@@ -103,6 +103,7 @@ uint32_t all_sensors_broken_start_time = 0;
 uint32_t min_time_for_alert = 5000;  // 5 sekunder i millisekunder
 uint32_t blink_interval = 500;       // Blinkehastighet i millisekunder
 bool blink_state = false;            // Av/på tilstand for blinking
+static int min_broken_sensors_for_alert = 3;  // Antall sensorer som må være brutt for å utløse varsel
 
 
 bool calibration_completed = false;  // Flagg for å holde styr på om kalibrering er fullført
@@ -240,19 +241,21 @@ void handle_blink_mode()
     // Sjekk om alle sensorer er brutt
     bool all_sensors_broken = true;
     int active_sensors = 0;
-    
+    int broken_sensors = 0;
+
     for (int i = 0; i < NUM_SENSORS; i++) {
         if (enabled[i]) {
             active_sensors++;
-            if (!sensor_break[i]) {
+            if (sensor_break[i]) {
+                broken_sensors++;
+            } else {
                 all_sensors_broken = false;
-                break;
             }
         }
     }
     
-    // Må ha minst én aktiv sensor for å vurdere "alle sensorer brutt"
-    if (active_sensors == 0) {
+    // Må ha minst én aktiv sensor og minst min_broken_sensors_for_alert brutt sensorer
+    if (active_sensors == 0 || broken_sensors < min_broken_sensors_for_alert) {
         all_sensors_broken = false;
     }
     
@@ -1355,9 +1358,10 @@ void app_main(void)
             }
         }
 
-        // Send sensor data til serveren
-        publish_sensor();
-
+        // Send sensor data til serveren kun hvis vi ikke er i rødblink-modus
+        if (!blink_mode && current_status != STATUS_ERROR_SENSORS_BLOCKED) {
+            publish_sensor();
+        }
 
 
 
