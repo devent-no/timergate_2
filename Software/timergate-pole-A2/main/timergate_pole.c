@@ -716,7 +716,7 @@ static void adc_init()
     //-------------ADC1 Config---------------//
     adc_oneshot_chan_cfg_t config = {
         .bitwidth = ADC_BITWIDTH_DEFAULT,
-        .atten = ADC_ATTEN_DB_11,
+        .atten = ADC_ATTEN_DB_12,
     };
 
     for (int i = 0; i < 7; i++)
@@ -1077,18 +1077,26 @@ static void wifi_init()
     // Sett status til WiFi connecting før vi starter tilkobling
     set_system_status(STATUS_WIFI_CONNECTING);
 
-    // Gi tid til å vise WiFi-tilkoblingsstatus
-    vTaskDelay(1000 / portTICK_PERIOD_MS);
+    // Reduser ventetid til 100ms
+    vTaskDelay(100 / portTICK_PERIOD_MS);
     
+    // Initialiser WiFi med optimaliserte innstillinger
+    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+    
+    // Deaktiver strømsparing for raskere tilkobling
+    ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
+    
+    // Bruk example_connect som før
     ESP_ERROR_CHECK(example_connect());
     
     // Etter tilkobling, oppdater status til server connecting
     set_system_status(STATUS_SERVER_CONNECTING);
 
-    // Gi ekstra tid til å vise server-tilkoblingsstatus før vi går videre
-    vTaskDelay(1000 / portTICK_PERIOD_MS);    
-
+    // Reduser ventetid til 100ms
+    vTaskDelay(100 / portTICK_PERIOD_MS);    
 }
+
 
 static void pwm_setup(){
     pwm_init(LEDC_TIMER_0, PWM_0_FREQUENCY, LEDC_CHANNEL_0, PWM_SEND_0, 0);
@@ -1149,7 +1157,7 @@ void app_main(void)
     xQueueBreak = xQueueCreate(30, sizeof(char *));
     xTaskCreatePinnedToCore(tcp_client_task, "tcp_client", 4096, (void *)AF_INET, 5, NULL, 1);
 
-
+       
     publish_settings();
 
 
@@ -1240,8 +1248,7 @@ void app_main(void)
         }
 
         // Send sensor data til serveren
-        //Midlertidig disablet på grunn av mye i loggen
-        //publish_sensor();
+        publish_sensor();
 
 
 
