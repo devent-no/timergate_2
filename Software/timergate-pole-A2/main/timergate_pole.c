@@ -103,7 +103,7 @@ uint32_t all_sensors_broken_start_time = 0;
 uint32_t min_time_for_alert = 5000;  // 5 sekunder i millisekunder
 uint32_t blink_interval = 500;       // Blinkehastighet i millisekunder
 bool blink_state = false;            // Av/på tilstand for blinking
-static int min_broken_sensors_for_alert = 3;  // Antall sensorer som må være brutt for å utløse varsel
+static int min_broken_sensors_for_alert = 1;  // Antall sensorer som må være brutt for å utløse varsel
 
 
 bool calibration_completed = false;  // Flagg for å holde styr på om kalibrering er fullført
@@ -236,29 +236,37 @@ void set_all_leds(uint8_t value, uint8_t r, uint8_t g, uint8_t b)
 // Funksjon for å håndtere blinkemodus for sensorblokkeringssvarsel
 void handle_blink_mode() 
 {
+
+    // LEGG TIL DENNE LINJEN HELT I STARTEN AV FUNKSJONEN
+    ESP_LOGI(TAG, "!!!BLINK MODE KALT!!! - min_broken_sensors_for_alert=%d", min_broken_sensors_for_alert);
+    
     uint32_t current_time = esp_timer_get_time() / 1000;  // Konverter til millisekunder
     
     // Sjekk om alle sensorer er brutt
-    bool all_sensors_broken = true;
+    bool all_sensors_broken = false;  // Start med false
     int active_sensors = 0;
     int broken_sensors = 0;
-
+    
     for (int i = 0; i < NUM_SENSORS; i++) {
         if (enabled[i]) {
             active_sensors++;
             if (sensor_break[i]) {
                 broken_sensors++;
-            } else {
-                all_sensors_broken = false;
             }
         }
     }
     
-    // Må ha minst én aktiv sensor og minst min_broken_sensors_for_alert brutt sensorer
-    if (active_sensors == 0 || broken_sensors < min_broken_sensors_for_alert) {
-        all_sensors_broken = false;
+    // Sett all_sensors_broken basert på tellerne
+    if (active_sensors > 0 && broken_sensors >= min_broken_sensors_for_alert) {
+        all_sensors_broken = true;
     }
     
+    // LEGG TIL LOGGMELDINGEN HER, rett etter koden ovenfor
+    if (broken_sensors >= min_broken_sensors_for_alert) {
+        ESP_LOGI(TAG, "!!!SENSOR ALARM!!! %d av %d sensorer er brutt (krav: %d) - all_sensors_broken=%d", 
+                 broken_sensors, active_sensors, min_broken_sensors_for_alert, all_sensors_broken);
+    }
+
     if (!blink_mode) {
         // Ikke i blinkemodus ennå
         if (all_sensors_broken) {
@@ -269,6 +277,7 @@ void handle_blink_mode()
             } 
             // Sjekk om det har gått nok tid
             else if (current_time - all_sensors_broken_start_time >= min_time_for_alert) {
+                // LOGGMELDING 2: Legg til her, ved aktivering av blinkemodus
                 ESP_LOGI(TAG, "Alle sensorer har vært brutt i %d ms - aktiverer blinkemodus", min_time_for_alert);
                 blink_mode = true;
                 blink_start_time = current_time;
@@ -276,6 +285,10 @@ void handle_blink_mode()
                 set_system_status(STATUS_ERROR_SENSORS_BLOCKED); // Sett systemstatus
                 set_all_leds(1, 255, 0, 0); // Start med rødt
             }
+            
+            // LOGGMELDING 3: Legg til her, etter tidsjekken
+            ESP_LOGI(TAG, "Timer aktiv: %lu ms av %d ms", 
+                     current_time - all_sensors_broken_start_time, min_time_for_alert);
         } else {
             // Hvis ikke alle sensorer er brutt, nullstill timeren
             if (all_sensors_broken_start_time != 0) {
@@ -906,7 +919,7 @@ static void publish_sensor()
             sensor_break[6]);
     sprintf(event, "{\"K\":0,\"M\":\"%s\",\"V\":%s,\"B\":%s}\n", mac_addr, adc_vals_s, broken_s);
     add_to_queue(event);
-    ESP_LOGI(TAG, "%s", adc_vals_s);
+    //ESP_LOGI(TAG, "%s", adc_vals_s); //MIDLERTIDIG for å ikke drukne loggen
 }
 
 static void publish_break(int broken)
@@ -1576,13 +1589,13 @@ void app_main(void)
                 ESP_LOGI(TAG, "Kalibrering fullført!");
 
                 // Gjenopprett PWM-signaler for alle sensorer med deres optimale offset
-                for (int i = 0; i < NUM_SENSORS; i++) {
-                    if (enabled[i]) {
-                        ledc_set_duty_with_hpoint(LEDC_MODE, rcv_channels[i], LEDC_DUTY, offsets[i]);
-                        ledc_update_duty(LEDC_MODE, rcv_channels[i]);
-                        ESP_LOGI(TAG, "Gjenopprettet PWM for sensor %d med offset %d", i, offsets[i]);
-                    }
-                }
+                // for (int i = 0; i < NUM_SENSORS; i++) {
+                //     if (enabled[i]) {
+                //         ledc_set_duty_with_hpoint(LEDC_MODE, rcv_channels[i], LEDC_DUTY, offsets[i]);
+                //         ledc_update_duty(LEDC_MODE, rcv_channels[i]);
+                //         ESP_LOGI(TAG, "Gjenopprettet PWM for sensor %d med offset %d", i, offsets[i]);
+                //     }
+                // }
 
                 // Punkt 4 - Deaktiver sensor-blokkeringsfeil midlertidig
                 all_sensors_broken_start_time = 0;
