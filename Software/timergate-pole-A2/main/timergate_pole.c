@@ -133,16 +133,11 @@ uint32_t ready_start_time = 0;
 bool auto_calibration_started = false;
 
 
-
 // Nye variabler for WiFi-gjenoppkobling
 static bool wifi_connected = false;
 static int wifi_reconnect_attempts = 0;
 static const int MAX_WIFI_RECONNECT_ATTEMPTS = 10; // Maksimalt antall forsøk før timeout
 static TaskHandle_t wifi_reconnect_task_handle = NULL;
-
-
-
-
 
 
 // LED-farger for de ulike tilstandene (R, G, B)
@@ -326,21 +321,31 @@ void set_system_status(system_status_t status) {
     if (current_status != status) {
         ESP_LOGI(TAG, "System status endret: %d -> %d", current_status, status);
         
-
-        // Legg til denne koden for å nullstille variabler når tilstanden endres
-        if (status != STATUS_READY) {
-            ready_start_time = 0; // Nullstill timer for READY-tilstand
+        // Spesiell håndtering for WiFi-feilmodus
+        if (status == STATUS_ERROR_WIFI) {
+            // Tydelig visuell indikasjon på WiFi-feil
+            normal_led_control = false;
+            for (int i = 0; i < 3; i++) {  // Rask rød blinking for WiFi-feil
+                set_all_leds(1, 255, 0, 0);  // Rødt
+                vTaskDelay(200 / portTICK_PERIOD_MS);
+                set_all_leds(0, 0, 0, 0);  // Av
+                vTaskDelay(200 / portTICK_PERIOD_MS);
+            }
         }
         
-        // Hvis vi går fra STATUS_CALIBRATING tilbake til STATUS_READY, er kalibreringen fullført
+        // Nullstill timer for READY-tilstand ved tilstandsendring
+        if (status != STATUS_READY) {
+            ready_start_time = 0;
+        }
+        
+        // Oppdater status for kalibrering
         if (current_status == STATUS_CALIBRATING && status == STATUS_READY) {
             calibration_completed = true;
         }
-
-
+        
         // Slå av alle LED-er før status endres
         set_all_leds(0, 0, 0, 0);
-        vTaskDelay(50 / portTICK_PERIOD_MS);  // Kort pause for å tydeliggjøre statusendring
+        vTaskDelay(50 / portTICK_PERIOD_MS);
         
         current_status = status;
         status_animation_start_time = esp_timer_get_time() / 1000;
@@ -352,24 +357,33 @@ void set_system_status(system_status_t status) {
             all_sensors_broken_start_time = 0;
         }
         
-        // Nullstill LED-kontroll og la status-animasjoner ta over
+        // Nullstill LED-kontroll for å la status-animasjoner ta over
         normal_led_control = false;
         
-        // Aktiver normal LED-kontroll kun i READY-tilstand (men først etter status-animasjon)
-        if (status == STATUS_READY) {
-            // Gå direkte til READY-status visning (grønt blink) med en gang
-            for (int i = 0; i < NUM_SENSORS; i++) {
-                if (enabled[i]) {
-                    led_set(i, 1, 
-                           STATUS_COLORS[STATUS_READY][0],
-                           STATUS_COLORS[STATUS_READY][1],
-                           STATUS_COLORS[STATUS_READY][2]);
+        // Vis umiddelbar indikasjon på ny status
+        switch (status) {
+            case STATUS_ERROR_WIFI:
+                set_all_leds(1, 255, 0, 0);  // Rødt for WiFi-feil
+                break;
+            case STATUS_ERROR_SERVER:
+                // Alternevende røde LEDer for serverfeil
+                for (int i = 0; i < NUM_SENSORS; i++) {
+                    if (enabled[i]) {
+                        led_set(i, (i % 2 == 0), 255, 0, 0);
+                    }
                 }
-            }
-            // LED-er vil oppdateres i neste handle_status_animation() kall
+                break;
+            case STATUS_READY:
+                // Kort grønt blink for READY-status
+                set_all_leds(1, 0, 255, 0);
+                break;
+            default:
+                break;
         }
     }
 }
+
+
 
 // Forbedret funksjon for status-animasjoner
 void handle_status_animation() {
@@ -738,10 +752,12 @@ static void wifi_reconnect_task(void *pvParameters) {
             ESP_LOGI(TAG, "WiFi ikke tilkoblet, forsøker å koble til igjen (forsøk %d/%d)",
                    wifi_reconnect_attempts + 1, MAX_WIFI_RECONNECT_ATTEMPTS);
             
+            // Legg til en pause før reconnect for å unngå race conditions
+            vTaskDelay(1000 / portTICK_PERIOD_MS);
+            
             // Prøv å koble til WiFi på nytt
             esp_err_t err = esp_wifi_connect();
             
-            // Sett status basert på resultatet, ikke før forsøket
             if (err != ESP_OK) {
                 ESP_LOGE(TAG, "WiFi tilkoblingsforsøk feilet med feilkode %d", err);
                 set_system_status(STATUS_ERROR_WIFI);  // Behold feilstatus siden tilkoblingen feilet
@@ -787,10 +803,19 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t e
             // Oppdater WiFi-tilkoblingsstatus
             wifi_connected = false;
             
-            // Sett systemstatus til ERROR_WIFI og behold denne status
+            // Tydelig visualisering av WiFi-problem - vis et spesielt varselsmønster
+            normal_led_control = false;
+            for (int i = 0; i < 3; i++) {  // Tydelig blinkemønster for WiFi-feil
+                set_all_leds(1, 255, 0, 0);  // Rødt
+                vTaskDelay(150 / portTICK_PERIOD_MS);
+                set_all_leds(0, 0, 0, 0);    // Av
+                vTaskDelay(150 / portTICK_PERIOD_MS);
+            }
+            
+            // Sett systemstatus til ERROR_WIFI
             set_system_status(STATUS_ERROR_WIFI);
             
-            // Sikre at reconnect task er startet, men ikke endre status igjen her
+            // Start reconnect task i stedet for å prøve umiddelbart
             if (wifi_reconnect_task_handle == NULL) {
                 xTaskCreate(wifi_reconnect_task, "wifi_reconnect", 4096, NULL, 3, &wifi_reconnect_task_handle);
                 ESP_LOGI(TAG, "WiFi-gjenoppkoblings-task startet");
@@ -813,6 +838,7 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t e
         }
     }
 }
+
 
 static void adc_init()
 {
@@ -1177,6 +1203,8 @@ static void tcp_client_task(void *pvParameters)
     }
 }
 
+
+
 static void wifi_init()
 {
     ESP_ERROR_CHECK(nvs_flash_init());
@@ -1190,17 +1218,23 @@ static void wifi_init()
     // Sett status til WiFi connecting før vi starter tilkobling
     set_system_status(STATUS_WIFI_CONNECTING);
 
-    // Gi tid til å vise WiFi-tilkoblingsstatus
+    // Gi tid til å vise WiFi-tilkoblingsstatus, men ikke for lenge
     vTaskDelay(500 / portTICK_PERIOD_MS);
     
     // Initialiser WiFi med optimaliserte innstillinger
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+    cfg.nvs_enable = 1;
+    cfg.nano_enable = 0;
+    cfg.rx_ba_win = 32;   // Redusere buffer for raskere håndtering
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
     
     // Deaktiver strømsparing for raskere tilkobling
     ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
+
+    // Sett kortere timeout og færre forsøk
+    ESP_ERROR_CHECK(esp_wifi_set_inactive_time(WIFI_IF_STA, 10)); // Reduser disconnection time
     
-    // Bruk example_connect og håndter feil her
+    // Bruk example_connect
     esp_err_t ret = example_connect();
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "WiFi tilkobling feilet med kode %d", ret);
@@ -1210,7 +1244,6 @@ static void wifi_init()
     
     // Status blir oppdatert i event handler når tilkoblingen er ferdig
 }
-
 
 
 
@@ -1272,13 +1305,27 @@ void app_main(void)
 
     // Legg til kode for å starte kalibrering umiddelbart
     vTaskDelay(5000 / portTICK_PERIOD_MS);
-    ESP_LOGI(TAG, "*** STARTER HIGHPOINT SEARCH MANUELT VED OPPSTART ***");
-    highpoint_search = true;
-    highpoint_offset = 0;
-    highpoint_channel = 0;
-    highpoint_max = 0;
-    calibration_completed = false;
-    set_system_status(STATUS_CALIBRATING);
+    // Sjekk om WiFi og server er tilkoblet før kalibrering startes
+    if (wifi_connected && connected) {
+        ESP_LOGI(TAG, "*** STARTER HIGHPOINT SEARCH MANUELT VED OPPSTART ***");
+        highpoint_search = true;
+        highpoint_offset = 0;
+        highpoint_channel = 0;
+        highpoint_max = 0;
+        calibration_completed = false;
+        set_system_status(STATUS_CALIBRATING);
+    } else {
+        ESP_LOGW(TAG, "Kan ikke starte kalibrering: WiFi %s, Server %s", 
+                wifi_connected ? "tilkoblet" : "frakoblet",
+                connected ? "tilkoblet" : "frakoblet");
+                
+        // Sett riktig tilstand basert på tilkoblingsstatus
+        if (!wifi_connected) {
+            set_system_status(STATUS_ERROR_WIFI);
+        } else if (!connected) {
+            set_system_status(STATUS_ERROR_SERVER);
+        }
+    }
 
 
     // Sett høyere initialverdier for break_limit før kalibrering starter
@@ -1459,7 +1506,21 @@ void app_main(void)
 
 
 
-
+        if (highpoint_search && (!wifi_connected || !connected)) {
+            ESP_LOGW(TAG, "Avbryter highpoint search: WiFi %s, Server %s", 
+                    wifi_connected ? "tilkoblet" : "frakoblet",
+                    connected ? "tilkoblet" : "frakoblet");
+                    
+            // Avbryt kalibrering ved nettverksproblemer
+            highpoint_search = false;
+            
+            // Sett riktig feilstatus
+            if (!wifi_connected) {
+                set_system_status(STATUS_ERROR_WIFI);
+            } else {
+                set_system_status(STATUS_ERROR_SERVER);
+            }
+        }
 
 
 
