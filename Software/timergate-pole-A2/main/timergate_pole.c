@@ -103,7 +103,7 @@ uint32_t all_sensors_broken_start_time = 0;
 uint32_t min_time_for_alert = 5000;  // 5 sekunder i millisekunder
 uint32_t blink_interval = 500;       // Blinkehastighet i millisekunder
 bool blink_state = false;            // Av/på tilstand for blinking
-static int min_broken_sensors_for_alert = 1;  // Antall sensorer som må være brutt for å utløse varsel
+static int min_broken_sensors_for_alert = 2;  // Antall sensorer som må være brutt for å utløse varsel
 
 
 bool calibration_completed = false;  // Flagg for å holde styr på om kalibrering er fullført
@@ -237,9 +237,6 @@ void set_all_leds(uint8_t value, uint8_t r, uint8_t g, uint8_t b)
 void handle_blink_mode() 
 {
 
-    // LEGG TIL DENNE LINJEN HELT I STARTEN AV FUNKSJONEN
-    ESP_LOGI(TAG, "!!!BLINK MODE KALT!!! - min_broken_sensors_for_alert=%d", min_broken_sensors_for_alert);
-    
     uint32_t current_time = esp_timer_get_time() / 1000;  // Konverter til millisekunder
     
     // Sjekk om alle sensorer er brutt
@@ -262,10 +259,10 @@ void handle_blink_mode()
     }
     
     // LEGG TIL LOGGMELDINGEN HER, rett etter koden ovenfor
-    if (broken_sensors >= min_broken_sensors_for_alert) {
-        ESP_LOGI(TAG, "!!!SENSOR ALARM!!! %d av %d sensorer er brutt (krav: %d) - all_sensors_broken=%d", 
-                 broken_sensors, active_sensors, min_broken_sensors_for_alert, all_sensors_broken);
-    }
+    // if (broken_sensors >= min_broken_sensors_for_alert) {
+    //     ESP_LOGI(TAG, "!!!SENSOR ALARM!!! %d av %d sensorer er brutt (krav: %d) - all_sensors_broken=%d", 
+    //              broken_sensors, active_sensors, min_broken_sensors_for_alert, all_sensors_broken);
+    // }
 
     if (!blink_mode) {
         // Ikke i blinkemodus ennå
@@ -741,13 +738,16 @@ static void wifi_reconnect_task(void *pvParameters) {
             ESP_LOGI(TAG, "WiFi ikke tilkoblet, forsøker å koble til igjen (forsøk %d/%d)",
                    wifi_reconnect_attempts + 1, MAX_WIFI_RECONNECT_ATTEMPTS);
             
-            // Sett status til WiFi_CONNECTING
-            set_system_status(STATUS_WIFI_CONNECTING);
-            
             // Prøv å koble til WiFi på nytt
             esp_err_t err = esp_wifi_connect();
+            
+            // Sett status basert på resultatet, ikke før forsøket
             if (err != ESP_OK) {
                 ESP_LOGE(TAG, "WiFi tilkoblingsforsøk feilet med feilkode %d", err);
+                set_system_status(STATUS_ERROR_WIFI);  // Behold feilstatus siden tilkoblingen feilet
+            } else {
+                // Sett status til connecting bare ved vellykket oppstart av tilkobling
+                set_system_status(STATUS_WIFI_CONNECTING);
             }
             
             // Inkrementere forsøksteller
@@ -778,6 +778,7 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t e
         if (event_id == WIFI_EVENT_STA_START) {
             ESP_LOGI(TAG, "WiFi STA startet, forsøker å koble til AP");
             esp_wifi_connect();
+            set_system_status(STATUS_WIFI_CONNECTING);
         } 
         else if (event_id == WIFI_EVENT_STA_DISCONNECTED) {
             wifi_event_sta_disconnected_t* disconnected = (wifi_event_sta_disconnected_t*) event_data;
@@ -786,10 +787,10 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t e
             // Oppdater WiFi-tilkoblingsstatus
             wifi_connected = false;
             
-            // Sett systemstatus til ERROR_WIFI
+            // Sett systemstatus til ERROR_WIFI og behold denne status
             set_system_status(STATUS_ERROR_WIFI);
             
-            // Sikre at reconnect task er startet
+            // Sikre at reconnect task er startet, men ikke endre status igjen her
             if (wifi_reconnect_task_handle == NULL) {
                 xTaskCreate(wifi_reconnect_task, "wifi_reconnect", 4096, NULL, 3, &wifi_reconnect_task_handle);
                 ESP_LOGI(TAG, "WiFi-gjenoppkoblings-task startet");
@@ -805,15 +806,13 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t e
             // Oppdater WiFi-tilkoblingsstatus
             wifi_connected = true;
             
-            // Hvis systemstatus er ERROR_WIFI, endre til SERVER_CONNECTING
-            if (current_status == STATUS_ERROR_WIFI) {
+            // Sjekk forbedret: Hvis systemstatus er ERROR_WIFI, endre til SERVER_CONNECTING
+            if (current_status == STATUS_ERROR_WIFI || current_status == STATUS_WIFI_CONNECTING) {
                 set_system_status(STATUS_SERVER_CONNECTING);
             }
         }
     }
 }
-
-
 
 static void adc_init()
 {
@@ -1184,7 +1183,6 @@ static void wifi_init()
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
 
-
     // Registrer event-handlere
     ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &wifi_event_handler, NULL));
     ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &wifi_event_handler, NULL));
@@ -1192,8 +1190,8 @@ static void wifi_init()
     // Sett status til WiFi connecting før vi starter tilkobling
     set_system_status(STATUS_WIFI_CONNECTING);
 
-    // Reduser ventetid til 500ms
-    vTaskDelay(100 / portTICK_PERIOD_MS);
+    // Gi tid til å vise WiFi-tilkoblingsstatus
+    vTaskDelay(500 / portTICK_PERIOD_MS);
     
     // Initialiser WiFi med optimaliserte innstillinger
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
@@ -1202,16 +1200,16 @@ static void wifi_init()
     // Deaktiver strømsparing for raskere tilkobling
     ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
     
-    // Bruk example_connect som før
-    ESP_ERROR_CHECK(example_connect());
+    // Bruk example_connect og håndter feil her
+    esp_err_t ret = example_connect();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "WiFi tilkobling feilet med kode %d", ret);
+        set_system_status(STATUS_ERROR_WIFI);
+        return;
+    }
     
-    // Etter tilkobling, oppdater status til server connecting
-    set_system_status(STATUS_SERVER_CONNECTING);
-
-    // Reduser ventetid til 500ms
-    vTaskDelay(100 / portTICK_PERIOD_MS);    
+    // Status blir oppdatert i event handler når tilkoblingen er ferdig
 }
-
 
 
 
@@ -1331,29 +1329,46 @@ void app_main(void)
             }
         }
 
+        
         // Sjekk sensorblokkeringsstatus - men kun når vi IKKE er i kalibrering
         if (!highpoint_search && active_sensors > 0) {
             uint32_t current_time = esp_timer_get_time() / 1000;
             
-            if (all_sensors_broken) {
-                // Første gang alle sensorer er brutt
+            // Tell antall brutte sensorer
+            int broken_sensors = 0;
+            for (int i = 0; i < NUM_SENSORS; i++) {
+                if (enabled[i] && sensor_break[i]) {
+                    broken_sensors++;
+                }
+            }
+            
+            // Logg for å se telleren
+            //ESP_LOGI(TAG, "Sensortelling: %d brutt av %d aktive (krav: %d for alarm)", 
+            //        broken_sensors, active_sensors, min_broken_sensors_for_alert);
+            
+            // Sjekk om nok sensorer er brutt
+            if (broken_sensors >= min_broken_sensors_for_alert) {
+                // Første gang nok sensorer er brutt
                 if (all_sensors_broken_start_time == 0) {
                     all_sensors_broken_start_time = current_time;
-                    ESP_LOGI(TAG, "Alle sensorer er brutt, starter timer");
+                    ESP_LOGI(TAG, "Minst %d sensorer er brutt, starter timer", min_broken_sensors_for_alert);
                 } 
                 // Sjekk om det har gått nok tid
                 else if (current_time - all_sensors_broken_start_time >= min_time_for_alert && 
-                         current_status != STATUS_ERROR_SENSORS_BLOCKED) {
-                    ESP_LOGI(TAG, "Alle sensorer har vært brutt i %d ms - aktiverer blinkemodus", min_time_for_alert);
+                        current_status != STATUS_ERROR_SENSORS_BLOCKED) {
+                    ESP_LOGI(TAG, "Minst %d sensorer har vært brutt i %d ms - aktiverer blinkemodus", 
+                            min_broken_sensors_for_alert, min_time_for_alert);
+                    blink_mode = true;  // Sett blink_mode direkte
                     set_system_status(STATUS_ERROR_SENSORS_BLOCKED);
                 }
             } else if (all_sensors_broken_start_time != 0) {
-                // Nullstill timer hvis ikke alle sensorer er brutt
-                ESP_LOGI(TAG, "Ikke alle sensorer er brutt lenger, nullstiller timer");
+                // Nullstill timer hvis ikke nok sensorer er brutt
+                ESP_LOGI(TAG, "Færre enn %d sensorer er brutt nå, nullstiller timer", min_broken_sensors_for_alert);
                 all_sensors_broken_start_time = 0;
                 
                 // Hvis vi er i feil-status, tilbakestill til READY
                 if (current_status == STATUS_ERROR_SENSORS_BLOCKED) {
+                    blink_mode = false;  // Stopp blink_mode direkte
                     set_system_status(STATUS_READY);
                 }
             }
