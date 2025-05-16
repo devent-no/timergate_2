@@ -180,6 +180,14 @@ static SemaphoreHandle_t ws_mutex;
 //
 //
 
+
+
+
+
+
+
+
+
 // Legg til en hjelpefunksjon for å liste filer i SPIFFS
 void list_spiffs_files(const char *path) {
     DIR *dir = opendir(path);
@@ -738,6 +746,17 @@ esp_err_t time_sync_handler(httpd_req_t *req) {
     
     ESP_LOGI(TAG, "time_sync_handler called, content_len: %d", remaining);
     
+    // Legg til CORS-headere først
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    //httpd_resp_set_hdr(req, "Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    //httpd_resp_set_hdr(req, "Access-Control-Allow-Headers", "Content-Type, Accept");
+    
+    // Hvis dette er en OPTIONS forespørsel (preflight), bare returner 200 OK med CORS-headere
+    if (req->method == HTTP_OPTIONS) {
+        httpd_resp_send(req, NULL, 0);
+        return ESP_OK;
+    }
+    
     if (remaining > sizeof(buf)) {
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Request too large");
         return ESP_FAIL;
@@ -807,12 +826,20 @@ esp_err_t time_sync_handler(httpd_req_t *req) {
     return ESP_OK;
 }
 
+
 // Funksjon for å håndtere time/check API (beholder den eksisterende implementasjonen)
 esp_err_t time_check_handler(httpd_req_t *req) {
     char buf[100];
     int ret, remaining = req->content_len;
     
     ESP_LOGI(TAG, "time_check_handler called, content_len: %d", remaining);
+    
+    
+    // Hvis dette er en OPTIONS forespørsel, bare returner 200 OK med CORS-headere
+    if (req->method == HTTP_OPTIONS) {
+        httpd_resp_send(req, NULL, 0);
+        return ESP_OK;
+    }
     
     if (remaining > sizeof(buf)) {
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Request too large");
@@ -830,7 +857,6 @@ esp_err_t time_check_handler(httpd_req_t *req) {
     ESP_LOGI(TAG, "Mottok data: %s", buf);
     
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
     httpd_resp_sendstr(req, "{\"status\":\"success\",\"diff\":0}");
     
     return ESP_OK;
@@ -2498,15 +2524,14 @@ httpd_handle_t start_webserver(void) {
         httpd_register_uri_handler(server_handle, &get_passage_config);
 
 
-     // All other URIs
-       httpd_uri_t common = {
-           .uri = "/*",
-           .method = HTTP_GET,
-           .handler = spiffs_get_handler,
-           .user_ctx = "/www"
-       };
-       httpd_register_uri_handler(server_handle, &common);
-
+        // All other URIs
+        httpd_uri_t common = {
+            .uri = "/*",
+            .method = HTTP_GET,
+            .handler = spiffs_get_handler,
+            .user_ctx = "/www"
+        };
+        httpd_register_uri_handler(server_handle, &common);
 
 
 

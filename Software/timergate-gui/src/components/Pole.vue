@@ -2,7 +2,6 @@
 export default {
   data() {
     return {
-      hostname: "timergate.local",
       enabled: [],
     };
   },
@@ -10,7 +9,7 @@ export default {
     async setBreaks() {
       var self = this;
       for (const [index, item] of this.values.entries()) {
-        await fetch("http://" + this.hostname + "/api/v1/pole/break", {
+        await fetch("http://" + this.serverAddress + "/api/v1/pole/break", {
           method: "POST",
           headers: {
             Accept: "application/json",
@@ -28,7 +27,7 @@ export default {
     async setEnabled(event) {
       console.log(event.srcElement.value)
       var self = this;
-      await fetch("http://" + this.hostname + "/api/v1/pole/enabled", {
+      await fetch("http://" + this.serverAddress + "/api/v1/pole/enabled", {
         method: "POST",
         headers: {
           Accept: "application/json",
@@ -79,30 +78,31 @@ export default {
     show_advanced: {
       type: Boolean,
       required: true,
+    },
+    // Legg til ny prop for serverAddress
+    serverAddress: {
+      type: String,
+      default: "timergate.local"
     }
   },
-    // I Pole.vue, legg til i script-delen:
-    mounted() {
-      console.log("Pole-komponent montert med data:", {
-        name: this.name,
-        mac: this.mac,
-        values: this.values,
-        broken: this.broken
-      });
-    },
-    watch: {
-      values: {
-        handler(newValues) {
-          //console.log("Pole-verdier oppdatert:", newValues);
-        },
-        deep: true
-      }
+  mounted() {
+    console.log("Pole-komponent montert med data:", {
+      name: this.name,
+      mac: this.mac,
+      values: this.values,
+      broken: this.broken,
+      serverAddress: this.serverAddress
+    });
+  },
+  watch: {
+    values: {
+      handler(newValues) {
+        //console.log("Pole-verdier oppdatert:", newValues);
+      },
+      deep: true
     }
-
+  }
 };
-
-
-
 </script>
 
 <template>

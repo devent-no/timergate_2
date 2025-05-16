@@ -113,7 +113,7 @@
 
 <script>
 export default {
-  props: {
+    props: {
     time: {
       type: String,
       default: null
@@ -126,12 +126,15 @@ export default {
       type: Array,
       default: () => []
     },
-    // Tilkoblingsstatus fra foreldre-komponenten
+    // Nye props
+    serverAddress: {
+      type: String,
+      default: "timergate.local"
+    },
     connected: {
       type: Boolean,
       default: true
     },
-    // Sensorer OK fra foreldre-komponenten
     sensorsOk: {
       type: Boolean,
       default: true

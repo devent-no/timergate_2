@@ -1,11 +1,17 @@
 <script>
 export default {
+  props: {
+    // Legg til serverAddress-prop
+    serverAddress: {
+      type: String,
+      default: "timergate.local"
+    }
+  },
   data() {
     return {
       debounceMs: 1000,
       minSensors: 2,
       timeoutMs: 5000,
-      hostname: "timergate.local",
       isSaving: false,
       saveMessage: "",
       saveStatus: ""
@@ -17,7 +23,7 @@ export default {
   methods: {
     async fetchCurrentConfig() {
       try {
-        const response = await fetch(`http://${this.hostname}/api/v1/config/passage`);
+        const response = await fetch(`http://${this.serverAddress}/api/v1/config/passage`);
         const data = await response.json();
         
         if (data.status === "success" && data.config) {
@@ -35,7 +41,7 @@ export default {
       this.saveStatus = "";
       
       try {
-        const response = await fetch(`http://${this.hostname}/api/v1/config/passage`, {
+        const response = await fetch(`http://${this.serverAddress}/api/v1/config/passage`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",

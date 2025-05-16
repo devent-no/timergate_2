@@ -9,7 +9,12 @@
       passages: {
         type: Array,
         default: () => []
-      }
+      },
+      // Legg til serverAddress-prop
+      serverAddress: {
+          type: String,
+          default: "timergate.local"
+        }
     },
     methods: {
       formatTime(timestamp) {
