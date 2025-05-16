@@ -1,47 +1,5 @@
 <script>
 export default {
-  data() {
-    return {
-      enabled: [],
-    };
-  },
-  methods: {
-    async setBreaks() {
-      var self = this;
-      for (const [index, item] of this.values.entries()) {
-        await fetch("http://" + this.serverAddress + "/api/v1/pole/break", {
-          method: "POST",
-          headers: {
-            Accept: "application/json",
-            "Content-Type": "application/json;charset=utf-8",
-            "Access-Control-Allow-Origin": "*",
-          },
-          body: JSON.stringify({
-            adc: index,
-            break: Math.max(item - 300, 100),
-            mac: self.mac,
-          }),
-        });
-      }
-    },
-    async setEnabled(event) {
-      console.log(event.srcElement.value)
-      var self = this;
-      await fetch("http://" + this.serverAddress + "/api/v1/pole/enabled", {
-        method: "POST",
-        headers: {
-          Accept: "application/json",
-          "Content-Type": "application/json;charset=utf-8",
-          "Access-Control-Allow-Origin": "*",
-        },
-        body: JSON.stringify({
-          sensor_nr: Number(event.srcElement.value),
-          enabled: event.srcElement.checked,
-          mac: self.mac,
-        }),
-      });
-    },
-  },
   props: {
     name: {
       type: String,
@@ -79,11 +37,79 @@ export default {
       type: Boolean,
       required: true,
     },
-    // Legg til ny prop for serverAddress
-    serverAddress: {
+    // Motta hostname som prop fra foreldrekomponenten
+    hostname: {
       type: String,
       default: "timergate.local"
     }
+  },
+  data() {
+    return {
+      enabled: [],
+    };
+  },
+  methods: {
+    // Henter hostname fra props eller fra URL-en
+    getServerHostname() {
+      if (this.hostname) {
+        return this.hostname;
+      }
+      
+      try {
+        // Hent gjeldende URL
+        const currentUrl = window.location.href;
+        
+        // Parse URL-en for å hente hostname
+        const url = new URL(currentUrl);
+        
+        // Returner hostname
+        return url.hostname;
+      } catch (error) {
+        console.error("Feil ved automatisk deteksjon av serveradresse i Pole.vue:", error);
+        // Bruk standard hostname hvis det oppstår en feil
+        return "timergate.local";
+      }
+    },
+    
+    async setBreaks() {
+      const serverHostname = this.getServerHostname();
+      console.log(`Sender break-konfigurasjon til: ${serverHostname}`);
+      
+      for (const [index, item] of this.values.entries()) {
+        await fetch(`http://${serverHostname}/api/v1/pole/break`, {
+          method: "POST",
+          headers: {
+            Accept: "application/json",
+            "Content-Type": "application/json;charset=utf-8",
+            "Access-Control-Allow-Origin": "*",
+          },
+          body: JSON.stringify({
+            adc: index,
+            break: Math.max(item - 300, 100),
+            mac: this.mac,
+          }),
+        });
+      }
+    },
+    
+    async setEnabled(event) {
+      console.log(event.srcElement.value);
+      const serverHostname = this.getServerHostname();
+      
+      await fetch(`http://${serverHostname}/api/v1/pole/enabled`, {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json;charset=utf-8",
+          "Access-Control-Allow-Origin": "*",
+        },
+        body: JSON.stringify({
+          sensor_nr: Number(event.srcElement.value),
+          enabled: event.srcElement.checked,
+          mac: this.mac,
+        }),
+      });
+    },
   },
   mounted() {
     console.log("Pole-komponent montert med data:", {
@@ -91,7 +117,7 @@ export default {
       mac: this.mac,
       values: this.values,
       broken: this.broken,
-      serverAddress: this.serverAddress
+      hostname: this.hostname || this.getServerHostname()
     });
   },
   watch: {

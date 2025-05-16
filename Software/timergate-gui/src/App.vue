@@ -4,7 +4,6 @@ import Pole from "./components/Pole.vue";
 import MainLayout from "./layouts/MainLayout.vue";
 import TimerView from "./views/TimerView.vue";
 
-
 export default {
   components: {
     BreakItem,
@@ -22,12 +21,6 @@ export default {
       settings: {},
       socket: null,
       socket_ready: false,
-      hostname: "timergate.local",
-      useIpAddress: false,
-      ipAddress: "192.168.4.1",
-      connectionSettings: {
-        visible: false
-      },
       interval: null,
       time: null,
       show_advanced: false,
@@ -37,27 +30,44 @@ export default {
     };
   },
   computed: {
-    // Beregn serveradresse basert på innstilling
+    // Beregn serveradresse basert på nettleserens URL
     serverAddress() {
-      return this.useIpAddress ? this.ipAddress : this.hostname;
+      // Hent hostname fra URL-en
+      return window.location.hostname;
+    },
+    
+    // Beregn WebSocket URL basert på nettleserens protokoll (HTTP/HTTPS)
+    wsProtocol() {
+      return window.location.protocol === 'https:' ? 'wss://' : 'ws://';
+    },
+    
+    // Komplett WebSocket URL
+    wsUrl() {
+      return `${this.wsProtocol}${this.serverAddress}${window.location.port ? ':' + window.location.port : ''}/ws`;
+    },
+    
+    // API base URL
+    apiBaseUrl() {
+      return `${window.location.protocol}//${this.serverAddress}${window.location.port ? ':' + window.location.port : ''}`;
     }
   },
   methods: {
     init() {
-      this.socket = new WebSocket("ws://" + this.serverAddress + "/ws");
+      console.log(`Kobler til WebSocket på ${this.wsUrl}`);
+      this.socket = new WebSocket(this.wsUrl);
       this.socket.onopen = this.onSocketOpen;
       this.socket.onmessage = this.onSocketMessage;
-      this.socket.onerror = this.onSockerError;
+      this.socket.onerror = this.onSocketError;
     },
     clearTimes() {
       this.breaks = {};
     },
     async syncTime() {
-      console.log(`Synkroniserer tid via ${this.serverAddress}...`);
+      console.log(`Synkroniserer tid via ${this.apiBaseUrl}...`);
       try {
         const timestamp = Math.floor(Date.now() / 1000);
         
-        const response = await fetch(`http://${this.serverAddress}/api/v1/time/sync`, {
+        const response = await fetch(`${this.apiBaseUrl}/api/v1/time/sync`, {
           method: "POST",
           headers: {
             "Accept": "application/json",
@@ -81,7 +91,7 @@ export default {
       }
     },
     async checkTime() {
-      await fetch("http://" + this.serverAddress + "/api/v1/time/check", {
+      await fetch(`${this.apiBaseUrl}/api/v1/time/check`, {
         method: "POST",
         headers: {
           Accept: "application/json",
@@ -94,7 +104,7 @@ export default {
       });
     },
     async hSearch() {
-      await fetch("http://" + this.serverAddress + "/api/v1/time/hsearch", {
+      await fetch(`${this.apiBaseUrl}/api/v1/time/hsearch`, {
         method: "POST",
         headers: {
           Accept: "application/json",
@@ -108,10 +118,13 @@ export default {
     },
     onSocketOpen(evt) {
       this.socket_ready = true;
+      console.log("WebSocket tilkobling etablert");
+      
+      // Automatisk synkronisering av tid når tilkoblingen er opprettet
+      this.syncTime();
     },
     onSocketMessage(evt) {
       var received = JSON.parse(evt.data);
-      //console.log("WebSocket melding mottatt:", new Date().toISOString(), received); // Debugging-utskrift
       
       if (!this.lookup.has(received.M)) {
         this.lookup.set(received.M, this.poles.length);
@@ -131,7 +144,6 @@ export default {
         this.poles[id].broken = received.B.map((x) =>
           x == 1 ? "#f87979" : "#087979"
         );
-        //console.log("Oppdatert ADC-verdier for stolpe", id, this.poles[id].values);
       } else if (received.K == 1) {
         // Sensor breaks
         if (!(received.M in this.breaks)) {
@@ -144,7 +156,6 @@ export default {
           filtered: !!received.F  // Sjekk om dette er et filtrert brudd
         };
         this.breaks[received.M].push(br);
-        //console.log("Registrert brudd for stolpe", received.M, br);
       } else if (received.K == 2) {
         // Settings. These are sent once, when the pole connects.
         this.poles[id].enabled = received.E.map((x) => (x == 1 ? true : false));
@@ -176,37 +187,22 @@ export default {
         
         this.passages.push(passage);
         console.log("📊 PASSAGES ARRAY ETTER OPPDATERING:", JSON.stringify(this.passages));
-        //console.log("Passering registrert:", passage);
       }
     },
-      
-    onSockerError(evt) {
+    onSocketError(evt) {
       this.socket_ready = false;
-      console.log("On Error");
+      console.error("WebSocket tilkoblingsfeil:", evt);
+      
+      // Forsøk å koble til på nytt etter 5 sekunder
+      setTimeout(() => {
+        console.log("Forsøker å koble til WebSocket på nytt...");
+        this.init();
+      }, 5000);
     },
     
     // Metode for å veksle mellom grensesnitt
     toggleInterface() {
       this.useNewInterface = !this.useNewInterface;
-    },
-    
-    // Nye metoder for tilkoblingsinnstillinger
-    toggleConnectionSettings() {
-      this.connectionSettings.visible = !this.connectionSettings.visible;
-    },
-    
-    saveConnectionSettings() {
-      this.connectionSettings.visible = false;
-      // Lagre innstillingene i localStorage for å huske dem
-      localStorage.setItem('timergate_useip', this.useIpAddress);
-      localStorage.setItem('timergate_ipaddress', this.ipAddress);
-      localStorage.setItem('timergate_hostname', this.hostname);
-      
-      // Koble til på nytt med nye innstillinger
-      if (this.socket && this.socket.readyState <= 1) {
-        this.socket.close();
-      }
-      this.init();
     }
   },
   mounted() {
@@ -214,19 +210,13 @@ export default {
   },
   beforeDestroy() {
     clearInterval(this.interval);
+    
+    // Lukk WebSocket-tilkoblingen
+    if (this.socket) {
+      this.socket.close();
+    }
   },
   created() {
-    // Last inn lagrede innstillinger hvis de finnes
-    if (localStorage.getItem('timergate_useip') !== null) {
-      this.useIpAddress = localStorage.getItem('timergate_useip') === 'true';
-    }
-    if (localStorage.getItem('timergate_ipaddress')) {
-      this.ipAddress = localStorage.getItem('timergate_ipaddress');
-    }
-    if (localStorage.getItem('timergate_hostname')) {
-      this.hostname = localStorage.getItem('timergate_hostname');
-    }
-    
     this.interval = setInterval(() => {
       this.time = Intl.DateTimeFormat("NO", {
         hour: "numeric",
@@ -244,51 +234,6 @@ export default {
     <button @click="toggleInterface" class="interface-toggle">
       {{ useNewInterface ? "Bytt til utviklingsvisning" : "Bytt til nytt grensesnitt" }}
     </button>
-    
-    <!-- Knapp for å vise tilkoblingsinnstillinger -->
-    <button @click="toggleConnectionSettings" class="settings-button">
-      <span class="settings-icon">⚙️</span>
-    </button>
-    
-    <!-- Tilkoblingsinnstillinger modal -->
-    <div v-if="connectionSettings.visible" class="connection-settings-modal">
-      <div class="connection-settings-content">
-        <h3>Tilkoblingsinnstillinger</h3>
-        
-        <div class="form-group">
-          <label>
-            <input type="radio" v-model="useIpAddress" :value="false">
-            Bruk hostname
-          </label>
-          <input 
-            type="text" 
-            v-model="hostname" 
-            :disabled="useIpAddress"
-            placeholder="f.eks. timergate.local"
-            class="input-field"
-          >
-        </div>
-        
-        <div class="form-group">
-          <label>
-            <input type="radio" v-model="useIpAddress" :value="true">
-            Bruk IP-adresse
-          </label>
-          <input 
-            type="text" 
-            v-model="ipAddress" 
-            :disabled="!useIpAddress"
-            placeholder="f.eks. 192.168.4.1"
-            class="input-field"
-          >
-        </div>
-        
-        <div class="buttons">
-          <button @click="saveConnectionSettings" class="save-button">Lagre</button>
-          <button @click="connectionSettings.visible = false" class="cancel-button">Avbryt</button>
-        </div>
-      </div>
-    </div>
     
     <!-- Nytt grensesnitt -->
     <main-layout 
@@ -377,111 +322,6 @@ export default {
 
 .interface-toggle:hover {
   background: #0063b1;
-}
-
-.settings-button {
-  position: fixed;
-  top: 70px; /* Under interface-toggle knappen */
-  right: 10px;
-  z-index: 1000;
-  padding: 8px;
-  background: #0078D7;
-  color: white;
-  border: none;
-  border-radius: 4px;
-  cursor: pointer;
-  font-weight: bold;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-}
-
-.settings-button:hover {
-  background: #0063b1;
-}
-
-.settings-icon {
-  font-size: 16px;
-}
-
-.connection-settings-modal {
-  position: fixed;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  background-color: rgba(0, 0, 0, 0.5);
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  z-index: 2000;
-}
-
-.connection-settings-content {
-  background-color: white;
-  border-radius: 8px;
-  padding: 20px;
-  width: 90%;
-  max-width: 400px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
-}
-
-.connection-settings-content h3 {
-  margin-top: 0;
-  margin-bottom: 16px;
-  color: #333;
-  border-bottom: 1px solid #eee;
-  padding-bottom: 8px;
-}
-
-.form-group {
-  margin-bottom: 16px;
-}
-
-.form-group label {
-  display: block;
-  margin-bottom: 8px;
-  font-weight: bold;
-}
-
-.input-field {
-  width: 100%;
-  padding: 8px;
-  border: 1px solid #ddd;
-  border-radius: 4px;
-  font-size: 14px;
-  margin-top: 6px;
-}
-
-.buttons {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-  margin-top: 20px;
-}
-
-.save-button {
-  background-color: #0078D7;
-  color: white;
-  border: none;
-  border-radius: 4px;
-  padding: 8px 16px;
-  cursor: pointer;
-}
-
-.save-button:hover {
-  background-color: #0063b1;
-}
-
-.cancel-button {
-  background-color: #f5f5f5;
-  color: #333;
-  border: 1px solid #ddd;
-  border-radius: 4px;
-  padding: 8px 16px;
-  cursor: pointer;
-}
-
-.cancel-button:hover {
-  background-color: #e5e5e5;
 }
 
 h1 {

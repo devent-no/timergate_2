@@ -7,6 +7,9 @@
       <div class="dashboard-panel time-panel">
         <h2>Gjeldende tid</h2>
         <div class="current-time">{{ time || "00:00" }}</div>
+        <div v-if="lastSyncTime" class="sync-status">
+          <span class="sync-icon">🔄</span> Sist synkronisert: {{ lastSyncTime }}
+        </div>
       </div>
       
       <!-- Statusoversikt -->
@@ -23,6 +26,10 @@
         <div class="status-item">
           <span class="status-label">Tidspunkt for siste passering:</span>
           <span class="status-value">{{ lastBreakTime }}</span>
+        </div>
+        <div class="status-item">
+          <span class="status-label">Server:</span>
+          <span class="status-value">{{ serverAddress }}</span>
         </div>
       </div>
       
@@ -75,6 +82,11 @@ export default {
     serverAddress: {
       type: String,
       default: "timergate.local"
+    },
+    // Legg til lastSyncTime-prop
+    lastSyncTime: {
+      type: String,
+      default: null
     }
   },
   data() {
@@ -126,8 +138,8 @@ export default {
       if (this.isSyncing) return;
       
       this.isSyncing = true;
-      this.statusMessage = "";
-      this.statusType = "success";
+      this.statusMessage = "Synkroniserer tid...";
+      this.statusType = "pending";
       
       try {
         console.log(`Dashboard: Synkroniserer tid via ${this.serverAddress}...`);
@@ -152,6 +164,7 @@ export default {
         const data = await response.json();
         this.statusMessage = "Tid synkronisert!";
         this.statusType = "success";
+        this.$emit('time-synced', new Date().toLocaleTimeString());
         console.log("Tidsynkronisering vellykket:", data);
       } catch (error) {
         console.error("Feil ved synkronisering av tid:", error);
@@ -162,7 +175,9 @@ export default {
         
         // Fjern statusmelding etter 3 sekunder
         setTimeout(() => {
-          this.statusMessage = "";
+          if (this.statusType === "success") {
+            this.statusMessage = "";
+          }
         }, 3000);
       }
     },
@@ -172,8 +187,8 @@ export default {
       if (this.isCalibrating) return;
       
       this.isCalibrating = true;
-      this.statusMessage = "";
-      this.statusType = "success";
+      this.statusMessage = "Starter kalibrering...";
+      this.statusType = "pending";
       
       try {
         console.log(`Kalibrerer sensorer via ${this.serverAddress}...`);
@@ -207,7 +222,9 @@ export default {
         
         // Fjern statusmelding etter 3 sekunder
         setTimeout(() => {
-          this.statusMessage = "";
+          if (this.statusType === "success") {
+            this.statusMessage = "";
+          }
         }, 3000);
       }
     },
@@ -259,6 +276,18 @@ h1 {
   text-align: center;
   margin: 20px 0;
   color: #0078D7;
+}
+
+.sync-status {
+  text-align: center;
+  color: #555;
+  font-size: 14px;
+  margin-top: -15px;
+  padding-bottom: 10px;
+}
+
+.sync-icon {
+  margin-right: 4px;
 }
 
 .status-item {
@@ -339,5 +368,11 @@ h1 {
   background-color: #f8d7da;
   color: #721c24;
   border: 1px solid #f5c6cb;
+}
+
+.status-message.pending {
+  background-color: #fff3cd;
+  color: #856404;
+  border: 1px solid #ffeeba;
 }
 </style>

@@ -1,10 +1,10 @@
 <script>
 export default {
   props: {
-    // Legg til serverAddress-prop
+    // Behold serverAddress-prop for konsistens med andre komponenter
     serverAddress: {
       type: String,
-      default: "timergate.local"
+      default: ""
     }
   },
   data() {
@@ -17,13 +17,19 @@ export default {
       saveStatus: ""
     };
   },
+  computed: {
+    // Bruk API base URL fra nettleserens lokasjon
+    apiBaseUrl() {
+      return `${window.location.protocol}//${this.serverAddress || window.location.host}`;
+    }
+  },
   mounted() {
     this.fetchCurrentConfig();
   },
   methods: {
     async fetchCurrentConfig() {
       try {
-        const response = await fetch(`http://${this.serverAddress}/api/v1/config/passage`);
+        const response = await fetch(`${this.apiBaseUrl}/api/v1/config/passage`);
         const data = await response.json();
         
         if (data.status === "success" && data.config) {
@@ -41,7 +47,7 @@ export default {
       this.saveStatus = "";
       
       try {
-        const response = await fetch(`http://${this.serverAddress}/api/v1/config/passage`, {
+        const response = await fetch(`${this.apiBaseUrl}/api/v1/config/passage`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",

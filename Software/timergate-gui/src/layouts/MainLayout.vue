@@ -30,10 +30,15 @@ export default {
       type: Array,
       default: () => []
     },
-    // Ny prop for serveradresse
+    // Serveradresse-prop
     serverAddress: {
       type: String,
       default: "timergate.local"
+    },
+    // Siste synkroniseringstid
+    lastSyncTime: {
+      type: String,
+      default: null
     }
   },
   data() {
@@ -44,6 +49,18 @@ export default {
   methods: {
     navigateTo(view) {
       this.currentView = view;
+    },
+    
+    // Handler for når hostname endres i ConfigView
+    onHostnameChanged(newHostname) {
+      console.log("MainLayout: Hostname endret til", newHostname);
+      this.$emit('hostname-changed', newHostname);
+    },
+    
+    // Handler for når tid synkroniseres i Dashboard
+    onTimeSynced(syncTime) {
+      console.log("MainLayout: Tid synkronisert på", syncTime);
+      this.$emit('time-synced', syncTime);
     }
   }
 };
@@ -105,6 +122,8 @@ export default {
         :poles="poles" 
         :breaks="breaks" 
         :serverAddress="serverAddress"
+        :lastSyncTime="lastSyncTime"
+        @time-synced="onTimeSynced"
       />
       <timer-view 
         v-else-if="currentView === 'timer'" 
@@ -122,6 +141,7 @@ export default {
       <config-view 
         v-else-if="currentView === 'config'" 
         :serverAddress="serverAddress"
+        @hostname-changed="onHostnameChanged"
       />
       <log-view 
         v-else-if="currentView === 'log'" 
