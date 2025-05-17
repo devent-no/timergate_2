@@ -37,10 +37,10 @@ export default {
       type: Boolean,
       required: true,
     },
-    // Motta hostname som prop fra foreldrekomponenten
-    hostname: {
+    // Beholder serverAddress prop for konsistens
+    serverAddress: {
       type: String,
-      default: "timergate.local"
+      default: ""
     }
   },
   data() {
@@ -48,35 +48,18 @@ export default {
       enabled: [],
     };
   },
+  computed: {
+    // Bruk serverAddress fra props, eller fall tilbake til window.location.hostname
+    apiBaseUrl() {
+      return `${window.location.protocol}//${this.serverAddress || window.location.hostname}`;
+    }
+  },
   methods: {
-    // Henter hostname fra props eller fra URL-en
-    getServerHostname() {
-      if (this.hostname) {
-        return this.hostname;
-      }
-      
-      try {
-        // Hent gjeldende URL
-        const currentUrl = window.location.href;
-        
-        // Parse URL-en for å hente hostname
-        const url = new URL(currentUrl);
-        
-        // Returner hostname
-        return url.hostname;
-      } catch (error) {
-        console.error("Feil ved automatisk deteksjon av serveradresse i Pole.vue:", error);
-        // Bruk standard hostname hvis det oppstår en feil
-        return "timergate.local";
-      }
-    },
-    
     async setBreaks() {
-      const serverHostname = this.getServerHostname();
-      console.log(`Sender break-konfigurasjon til: ${serverHostname}`);
+      console.log(`Sender break-konfigurasjon til: ${this.apiBaseUrl}`);
       
       for (const [index, item] of this.values.entries()) {
-        await fetch(`http://${serverHostname}/api/v1/pole/break`, {
+        await fetch(`${this.apiBaseUrl}/api/v1/pole/break`, {
           method: "POST",
           headers: {
             Accept: "application/json",
@@ -94,9 +77,8 @@ export default {
     
     async setEnabled(event) {
       console.log(event.srcElement.value);
-      const serverHostname = this.getServerHostname();
       
-      await fetch(`http://${serverHostname}/api/v1/pole/enabled`, {
+      await fetch(`${this.apiBaseUrl}/api/v1/pole/enabled`, {
         method: "POST",
         headers: {
           Accept: "application/json",
@@ -117,7 +99,7 @@ export default {
       mac: this.mac,
       values: this.values,
       broken: this.broken,
-      hostname: this.hostname || this.getServerHostname()
+      apiBaseUrl: this.apiBaseUrl
     });
   },
   watch: {

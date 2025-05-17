@@ -25,8 +25,8 @@ export default {
       time: null,
       show_advanced: false,
       
-      // Status for å veksle mellom grensesnitt
-      useNewInterface: false
+      // Fjernet veksling mellom grensesnitt - alltid bruk MainLayout som standard
+      showDevView: false
     };
   },
   computed: {
@@ -84,10 +84,8 @@ export default {
         
         const data = await response.json();
         console.log("Tidsynkronisering vellykket:", data);
-        alert("Tid synkronisert!");
       } catch (error) {
         console.error("Feil ved synkronisering av tid:", error);
-        alert(`Kunne ikke synkronisere tid: ${error.message}`);
       }
     },
     async checkTime() {
@@ -200,9 +198,9 @@ export default {
       }, 5000);
     },
     
-    // Metode for å veksle mellom grensesnitt
-    toggleInterface() {
-      this.useNewInterface = !this.useNewInterface;
+    // Håndter visning av utviklingsgrensesnittet
+    toggleDevView() {
+      this.showDevView = !this.showDevView;
     }
   },
   mounted() {
@@ -230,14 +228,9 @@ export default {
 
 <template>
   <div class="app-wrapper">
-    <!-- Knapp for å veksle mellom grensesnitt -->
-    <button @click="toggleInterface" class="interface-toggle">
-      {{ useNewInterface ? "Bytt til utviklingsvisning" : "Bytt til nytt grensesnitt" }}
-    </button>
-    
-    <!-- Nytt grensesnitt -->
+    <!-- Nytt grensesnitt som standard -->
     <main-layout 
-      v-if="useNewInterface" 
+      v-if="!showDevView" 
       :time="time" 
       :poles="poles" 
       :breaks="breaks"
@@ -247,11 +240,13 @@ export default {
       :clear-times="clearTimes"
       :h-search="hSearch"
       :check-time="checkTime"
+      @toggle-dev="toggleDevView"
     />
     
-    <!-- Eksisterende grensesnitt -->
+    <!-- Utviklingsgrensesnitt når trengt -->
     <main v-else>
-      <h1>Timergate</h1>
+      <h1>Timergate (Utviklingsvisning)</h1>
+      <button @click="toggleDevView" class="back-button">Tilbake til hovedgrensesnitt</button>
       <h3>Current time: {{ time }}</h3>
       <button @click="syncTime()">Sync Time</button>
       <button @click="clearTimes()">Clear Breaks</button>
@@ -305,23 +300,14 @@ export default {
   position: relative;
 }
 
-.interface-toggle {
-  position: fixed;
-  top: 10px;
-  right: 10px;
-  z-index: 1000;
-  padding: 8px 12px;
-  background: #0078D7;
+.back-button {
+  margin-bottom: 15px;
+  background-color: #0078D7;
   color: white;
   border: none;
   border-radius: 4px;
+  padding: 8px 12px;
   cursor: pointer;
-  font-weight: bold;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-}
-
-.interface-toggle:hover {
-  background: #0063b1;
 }
 
 h1 {

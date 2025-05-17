@@ -61,6 +61,11 @@ export default {
     onTimeSynced(syncTime) {
       console.log("MainLayout: Tid synkronisert på", syncTime);
       this.$emit('time-synced', syncTime);
+    },
+    
+    // Bytt til utviklingsvisning
+    switchToDevView() {
+      this.$emit('toggle-dev');
     }
   }
 };
@@ -110,6 +115,15 @@ export default {
         >
           <span class="icon">📋</span>
           <span class="label">Logg</span>
+        </button>
+        
+        <!-- Ny knapp for utviklingsvisning -->
+        <button 
+          @click="switchToDevView()" 
+          class="dev-button"
+        >
+          <span class="icon">🔧</span>
+          <span class="label">Dev</span>
         </button>
       </nav>
     </header>
@@ -210,6 +224,12 @@ export default {
 
 .main-nav .label {
   font-size: 12px;
+}
+
+/* Spesiell styling for Dev-knappen */
+.main-nav .dev-button {
+  margin-left: auto; /* Skyv til høyre */
+  background-color: rgba(0, 0, 0, 0.1);
 }
 
 .app-content {

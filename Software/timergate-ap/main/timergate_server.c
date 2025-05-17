@@ -1564,7 +1564,6 @@ bool process_break_for_passage_detection(const uint8_t *mac_addr, int32_t sensor
         }
     }
     
-    // ---- VIKTIG ENDRING HER ----
     // Sjekk om vi har en ny sekvens (telleren er 0) eller en eksisterende sekvens
     if (passage_detectors[detector_idx].unique_sensors_count == 0) {
         // Dette er første sensor i en ny sekvens
@@ -1572,7 +1571,7 @@ bool process_break_for_passage_detection(const uint8_t *mac_addr, int32_t sensor
         passage_detectors[detector_idx].first_break_micros = time_micros;
         passage_detectors[detector_idx].sequence_start_time = time_sec;
     } else {
-      // Vi har en eksisterende sekvens
+        // Vi har en eksisterende sekvens
         // Sjekk om vi kan bruke tid direkte fra sensoren for timeout
         uint32_t sensor_elapsed_time = 0;
         
@@ -1592,10 +1591,12 @@ bool process_break_for_passage_detection(const uint8_t *mac_addr, int32_t sensor
             } 
             else {
                 // Sensortid hopper bakover
-                ESP_LOGW(TAG, "Sensor-tid hopper bakover: %u -> %u", 
+                ESP_LOGW(TAG, "Sensor-tid hopper bakover: %u -> %u, ignorerer denne hendelsen", 
                         passage_detectors[detector_idx].last_sensor_time, time_sec);
-                 // Fortsett sekvensen uansett, bruk en kort relativ tid
-                sensor_elapsed_time = 200; // Anta ~100ms siden forrige        
+                
+                // Ikke oppdater last_sensor_time for å unngå gjentatte advarsler om samme hopp
+                xSemaphoreGive(passage_mutex);
+                return false; // Ignorer denne sensoren for passeringsdeteksjon
             }
         }
         
@@ -1620,8 +1621,6 @@ bool process_break_for_passage_detection(const uint8_t *mac_addr, int32_t sensor
             passage_detectors[detector_idx].sequence_start_time = time_sec;
         }
     }
-
-    // ---- SLUTT PÅ VIKTIG ENDRING ----
     
     // Registrer denne sensoren hvis den ikke allerede er registrert i gjeldende sekvens
     if (!passage_detectors[detector_idx].sensor_triggered[sensor_id]) {
@@ -1639,44 +1638,44 @@ bool process_break_for_passage_detection(const uint8_t *mac_addr, int32_t sensor
         ESP_LOGI(TAG, "Sensor %d registrert, nå %d unike sensorer utløst", 
                 sensor_id, passage_detectors[detector_idx].unique_sensors_count);
         
-// Sjekk om vi har nådd terskelen for en passering
-if (passage_detectors[detector_idx].unique_sensors_count >= min_sensors_for_passage) {
-    char mac_str[18];
-    sprintf(mac_str, "%02x:%02x:%02x:%02x:%02x:%02x", 
-            mac_addr[0], mac_addr[1], mac_addr[2],
-            mac_addr[3], mac_addr[4], mac_addr[5]);
-    
-        // Sjekk om denne passeringen allerede er sendt
-        if (is_passage_already_sent(mac_addr, 
-                                passage_detectors[detector_idx].first_break_time, 
-                                passage_detectors[detector_idx].first_break_micros, 
-                                passage_detectors[detector_idx].unique_sensors_count)) {
+        // Sjekk om vi har nådd terskelen for en passering
+        if (passage_detectors[detector_idx].unique_sensors_count >= min_sensors_for_passage) {
+            char mac_str[18];
+            sprintf(mac_str, "%02x:%02x:%02x:%02x:%02x:%02x", 
+                    mac_addr[0], mac_addr[1], mac_addr[2],
+                    mac_addr[3], mac_addr[4], mac_addr[5]);
             
-            ESP_LOGI(TAG, "DUPLIKAT: Ignorerer duplisert passering: MAC: %s, tidspunkt: %u.%06u", 
-                    mac_str, passage_detectors[detector_idx].first_break_time, 
-                    passage_detectors[detector_idx].first_break_micros);
-            
-            // Vi tilbakestiller fortsatt telleren for å være klar for neste sekvens
-            for (int i = 0; i < MAX_SENSORS_PER_POLE; i++) {
-                passage_detectors[detector_idx].sensor_triggered[i] = false;
+            // Sjekk om denne passeringen allerede er sendt
+            if (is_passage_already_sent(mac_addr, 
+                                    passage_detectors[detector_idx].first_break_time, 
+                                    passage_detectors[detector_idx].first_break_micros, 
+                                    passage_detectors[detector_idx].unique_sensors_count)) {
+                
+                ESP_LOGI(TAG, "DUPLIKAT: Ignorerer duplisert passering: MAC: %s, tidspunkt: %u.%06u", 
+                        mac_str, passage_detectors[detector_idx].first_break_time, 
+                        passage_detectors[detector_idx].first_break_micros);
+                
+                // Vi tilbakestiller fortsatt telleren for å være klar for neste sekvens
+                for (int i = 0; i < MAX_SENSORS_PER_POLE; i++) {
+                    passage_detectors[detector_idx].sensor_triggered[i] = false;
+                }
+                passage_detectors[detector_idx].unique_sensors_count = 0;
+                
+                xSemaphoreGive(passage_mutex);
+                return false; // Ingen ny passering å rapportere
             }
-            passage_detectors[detector_idx].unique_sensors_count = 0;
             
-            xSemaphoreGive(passage_mutex);
-            return false; // Ingen ny passering å rapportere
-        }
-        
             ESP_LOGI(TAG, "Passering detektert! MAC: %s, tidspunkt: %u.%06u, sensorer: %d", 
                 mac_str, passage_detectors[detector_idx].first_break_time, 
                 passage_detectors[detector_idx].first_break_micros, 
                 passage_detectors[detector_idx].unique_sensors_count);
-        
+            
             // Registrer denne passeringen som sendt
             register_sent_passage(mac_addr, 
                             passage_detectors[detector_idx].first_break_time, 
                             passage_detectors[detector_idx].first_break_micros, 
                             passage_detectors[detector_idx].unique_sensors_count);
-        
+            
             // Send passering til WebSocket-klienter
             char passage_msg[256];
             sprintf(passage_msg, 
@@ -1684,17 +1683,16 @@ if (passage_detectors[detector_idx].unique_sensors_count >= min_sensors_for_pass
                 mac_str, passage_detectors[detector_idx].first_break_time, 
                 passage_detectors[detector_idx].first_break_micros, 
                 passage_detectors[detector_idx].unique_sensors_count);
-        
+            
             // Lagre denne passeringens tidspunkt for debouncing
             passage_detectors[detector_idx].last_passage_time = passage_detectors[detector_idx].first_break_time;
             passage_detectors[detector_idx].last_passage_micros = passage_detectors[detector_idx].first_break_micros;
-        
+            
             // Tilbakestill tellere for neste sekvens
             for (int i = 0; i < MAX_SENSORS_PER_POLE; i++) {
                 passage_detectors[detector_idx].sensor_triggered[i] = false;
-           }
+            }
             passage_detectors[detector_idx].unique_sensors_count = 0;
-
 
             // Send til alle WebSocket-klienter
             httpd_ws_frame_t ws_pkt = {
@@ -1721,6 +1719,8 @@ if (passage_detectors[detector_idx].unique_sensors_count >= min_sensors_for_pass
     xSemaphoreGive(passage_mutex);
     return false; // Ingen passering detektert ennå
 }
+
+
 
 
 // Funksjon for å sjekke om et brudd skal ignoreres pga. debouncing
