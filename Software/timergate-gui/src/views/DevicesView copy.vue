@@ -267,6 +267,8 @@
   </div>
 </template>
 
+
+
 <script>
 export default {
   props: {
@@ -323,11 +325,12 @@ export default {
     },
     
     expandDevice(pole) {
-      this.expandedPoles = { ...this.expandedPoles, [pole.mac]: true };
-        },
-      collapseDevice(pole) {
-        this.expandedPoles = { ...this.expandedPoles, [pole.mac]: false };
-      },
+      this.$set(this.expandedPoles, pole.mac, true);
+    },
+    
+    collapseDevice(pole) {
+      this.$set(this.expandedPoles, pole.mac, false);
+    },
     
     countActiveSensors() {
       let count = 0;
@@ -508,8 +511,7 @@ export default {
     // Kalibrering
     async calibrateSensors(pole) {
       // Sett kalibreringsflagg
-      //this.$set(this.isCalibratingMap, pole.mac, true);
-      this.isCalibratingMap = { ...this.isCalibratingMap, [pole.mac]: true };
+      this.$set(this.isCalibratingMap, pole.mac, true);
       
       try {
         const response = await fetch(`http://${this.serverAddress}/api/v1/time/hsearch`, {
@@ -537,8 +539,7 @@ export default {
       } finally {
         // Fjern kalibreringsflagg etter en forsinkelse for å indikere at prosessen er i gang
         setTimeout(() => {
-          //this.$set(this.isCalibratingMap, pole.mac, false);
-          this.isCalibratingMap = { ...this.isCalibratingMap, [pole.mac]: false };
+          this.$set(this.isCalibratingMap, pole.mac, false);
         }, 2000);
       }
     },

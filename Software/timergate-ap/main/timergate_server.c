@@ -739,6 +739,107 @@ CLEAN_UP:
 // 
 // 
 
+
+// Handler for å restarte en målestolpe
+esp_err_t pole_restart_handler(httpd_req_t *req) {
+    char buf[100];
+    int ret, remaining = req->content_len;
+    
+    ESP_LOGI(TAG, "pole_restart_handler called, content_len: %d", remaining);
+    
+    // Legg til CORS-headere
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    
+    // Hvis dette er en OPTIONS forespørsel, bare returner 200 OK med CORS-headere
+    if (req->method == HTTP_OPTIONS) {
+        httpd_resp_send(req, NULL, 0);
+        return ESP_OK;
+    }
+    
+    if (remaining > sizeof(buf)) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Request too large");
+        return ESP_FAIL;
+    }
+    
+    if ((ret = httpd_req_recv(req, buf, MIN(remaining, sizeof(buf)))) <= 0) {
+        if (ret == HTTPD_SOCK_ERR_TIMEOUT) {
+            httpd_resp_send_408(req);
+        }
+        return ESP_FAIL;
+    }
+    
+    buf[ret] = '\0';
+    ESP_LOGI(TAG, "Mottok data: %s", buf);
+    
+    // Parse JSON data for MAC-adresse
+    char mac[18] = {0};
+    char *mac_start = strstr(buf, "\"mac\":\"");
+    if (mac_start) {
+        mac_start += 7; // Hopp over "mac":"
+        char *mac_end = strchr(mac_start, '\"');
+        if (mac_end && (mac_end - mac_start) < 18) {
+            strncpy(mac, mac_start, mac_end - mac_start);
+            mac[mac_end - mac_start] = '\0';
+        }
+    }
+    
+    // Parse restart-type (hvis angitt)
+    int restart_type = 0;  // Standard restart
+    char *type_start = strstr(buf, "\"type\":");
+    if (type_start) {
+        type_start += 7; // Hopp over "type":
+        restart_type = atoi(type_start);
+    }
+    
+    ESP_LOGI(TAG, "Restart forespørsel for MAC: %s, type: %d", mac, restart_type);
+    
+    if (strlen(mac) > 0) {
+        // Bygger kommandoen basert på restart-typen
+        char command[64];
+        
+        switch (restart_type) {
+            case 1:
+                // Myk restart (standard)
+                sprintf(command, "restart: soft\n");
+                break;
+            case 2:
+                // Hard restart
+                sprintf(command, "restart: hard\n");
+                break;
+            case 3:
+                // Factory reset (sletter lagrede innstillinger)
+                sprintf(command, "restart: factory\n");
+                break;
+            default:
+                // Standard restart
+                sprintf(command, "restart: soft\n");
+                break;
+        }
+        
+        // Send kommandoen til målestolpen
+        if (send_command_to_pole_by_mac(mac, command)) {
+            ESP_LOGI(TAG, "Restart-kommando sendt: %s", command);
+        } else {
+            ESP_LOGW(TAG, "Kunne ikke sende restart-kommando - målestolpe ikke tilkoblet");
+        }
+    } else {
+        ESP_LOGW(TAG, "Ugyldig MAC-adresse mottatt");
+    }
+    
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    httpd_resp_sendstr(req, "{\"status\":\"success\",\"message\":\"Restart command sent\"}");
+    
+    return ESP_OK;
+}
+
+
+
+
+
+
+
+
 // Funksjon for å håndtere tid-synkronisering API (oppdatert versjon)
 esp_err_t time_sync_handler(httpd_req_t *req) {
     char buf[100];
@@ -2522,6 +2623,24 @@ httpd_handle_t start_webserver(void) {
             .user_ctx = NULL
         };
         httpd_register_uri_handler(server_handle, &get_passage_config);
+
+
+        // Pole restart API
+        httpd_uri_t pole_restart = {
+            .uri = "/api/v1/pole/restart",
+            .method = HTTP_POST,
+            .handler = pole_restart_handler,
+            .user_ctx = NULL
+        };
+        httpd_register_uri_handler(server_handle, &pole_restart);
+
+
+
+
+
+
+
+
 
 
         // All other URIs

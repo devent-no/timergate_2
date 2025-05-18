@@ -1199,6 +1199,55 @@ static void check_socket()
                         publish_settings();    
                     }
                 }
+
+                
+                if (strncmp(command, "restart:", 8) == 0) {
+                    // Finn restart-typen
+                    char restart_type[10];
+                    sscanf(command + 8, " %s", restart_type);
+                    
+                    ESP_LOGI(TAG, "Mottok restart-kommando: %s", restart_type);
+                    
+                    if (strcmp(restart_type, "soft") == 0) {
+                        // Myk restart
+                        ESP_LOGI(TAG, "Utfører myk restart...");
+                        vTaskDelay(1000 / portTICK_PERIOD_MS); // Gi tid til å sende respons
+                        esp_restart();
+                    } 
+                    else if (strcmp(restart_type, "hard") == 0) {
+                        // Hard restart - som standard esp_restart() på ESP32
+                        ESP_LOGI(TAG, "Utfører hard restart...");
+                        vTaskDelay(1000 / portTICK_PERIOD_MS);
+                        esp_restart(); 
+                    }
+                    else if (strcmp(restart_type, "factory") == 0) {
+                        // Factory reset - slett NVS innhold før restart
+                        ESP_LOGI(TAG, "Utfører factory reset...");
+                        nvs_handle_t my_handle;
+                        esp_err_t err = nvs_open("storage", NVS_READWRITE, &my_handle);
+                        if (err == ESP_OK) {
+                            // Slett alle lagrede innstillinger
+                            err = nvs_erase_all(my_handle);
+                            if (err == ESP_OK) {
+                                ESP_LOGI(TAG, "NVS-innhold slettet. Committer endringer...");
+                                err = nvs_commit(my_handle);
+                            }
+                            nvs_close(my_handle);
+                        }
+                        vTaskDelay(1000 / portTICK_PERIOD_MS);
+                        esp_restart();
+                    }
+                    else {
+                        ESP_LOGW(TAG, "Ukjent restart-type: %s", restart_type);
+                    }
+                }
+
+
+
+
+
+
+
                 cmd_index = 0;
             }
             else
