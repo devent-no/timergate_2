@@ -138,7 +138,7 @@ static SemaphoreHandle_t sent_passages_mutex;
 // Konfigurasjon for passeringsdeteksjon
 static int passage_debounce_ms = 1000;   // Standard debounce-tid: 1 sekund
 static int min_sensors_for_passage = 2;  // Standard minimum antall sensorer
-static int sequence_timeout_ms = 5000;   // Timeout for sekvens: 5 sekunder
+static int sequence_timeout_ms = 250;   // Timeout for sekvens: 5 sekunder
 
 
 
@@ -964,6 +964,7 @@ esp_err_t time_check_handler(httpd_req_t *req) {
 }
 
 // Funksjon for å håndtere hsearch API (oppdatert for å sende til TCP-forbindelser)
+// Funksjon for å håndtere hsearch API (oppdatert for å sende til spesifikk målestolpe)
 esp_err_t time_hsearch_handler(httpd_req_t *req) {
     char buf[100];
     int ret, remaining = req->content_len;
@@ -987,35 +988,62 @@ esp_err_t time_hsearch_handler(httpd_req_t *req) {
     
     // Parse JSON data
     int channel = 0;
+    char mac[18] = {0};
+    
+    // Parse channel parameter
     char *channel_start = strstr(buf, "\"channel\":");
     if (channel_start) {
         channel_start += 10; // Hopp over "channel":
         channel = atoi(channel_start);
     }
     
-    // Send hsearch kommando til alle tilkoblede målestolper
-    xSemaphoreTake(tcp_poles_mutex, portMAX_DELAY);
-    
-    for (int i = 0; i < MAX_TCP_POLES; i++) {
-        if (tcp_poles[i].connected) {
-            // Bygg kommando
-            char command[64];
-            sprintf(command, "hsearch: %d\n", channel);
-            
-            // Send direkte til socket
-            int sock = tcp_poles[i].sock;
-            int to_write = strlen(command);
-            int res = send(sock, command, to_write, 0);
-            
-            if (res == to_write) {
-                ESP_LOGI(TAG, "Hsearch kommando sendt til målestolpe %d: %s", i, command);
-            } else {
-                ESP_LOGE(TAG, "Feil ved sending av hsearch kommando: %d (errno: %d)", res, errno);
-            }
+    // Parse MAC address parameter
+    char *mac_start = strstr(buf, "\"mac\":\"");
+    if (mac_start) {
+        mac_start += 7; // Hopp over "mac":":
+        char *mac_end = strchr(mac_start, '\"');
+        if (mac_end && (mac_end - mac_start) < 18) {
+            strncpy(mac, mac_start, mac_end - mac_start);
+            mac[mac_end - mac_start] = '\0';
         }
     }
     
-    xSemaphoreGive(tcp_poles_mutex);
+    ESP_LOGI(TAG, "Parsed: channel=%d, mac=\"%s\"", channel, mac);
+    
+    // Bygg kommandoen
+    char command[64];
+    sprintf(command, "hsearch: %d\n", channel);
+    
+    // Send kommando til spesifikk målestolpe hvis MAC er angitt
+    if (strlen(mac) > 0) {
+        if (send_command_to_pole_by_mac(mac, command)) {
+            ESP_LOGI(TAG, "Hsearch kommando sendt til målestolpe med MAC %s: %s", mac, command);
+        } else {
+            ESP_LOGE(TAG, "Kunne ikke sende hsearch kommando til MAC: %s", mac);
+        }
+    } 
+    else {
+        ESP_LOGI(TAG, "Ingen MAC angitt, sender til alle stolper");
+        // Hvis ingen MAC er oppgitt, send til alle tilkoblede målestolper
+        xSemaphoreTake(tcp_poles_mutex, portMAX_DELAY);
+        
+        for (int i = 0; i < MAX_TCP_POLES; i++) {
+            if (tcp_poles[i].connected) {
+                // Send direkte til socket
+                int sock = tcp_poles[i].sock;
+                int to_write = strlen(command);
+                int res = send(sock, command, to_write, 0);
+                
+                if (res == to_write) {
+                    ESP_LOGI(TAG, "Hsearch kommando sendt til målestolpe %d: %s", i, command);
+                } else {
+                    ESP_LOGE(TAG, "Feil ved sending av hsearch kommando: %d (errno: %d)", res, errno);
+                }
+            }
+        }
+        
+        xSemaphoreGive(tcp_poles_mutex);
+    }
     
     httpd_resp_set_type(req, "application/json");
     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
@@ -1023,6 +1051,8 @@ esp_err_t time_hsearch_handler(httpd_req_t *req) {
     
     return ESP_OK;
 }
+
+
 
 // Oppdatert versjon av pole_break_handler
 esp_err_t pole_break_handler(httpd_req_t *req) {
@@ -1432,6 +1462,18 @@ esp_err_t debug_handler(httpd_req_t *req) {
    }
    xSemaphoreGive(tcp_poles_mutex);
 
+
+
+    // I debug_handler eller en annen diagnose-funksjon:
+    ESP_LOGI(TAG, "Tilkoblede målestolper:");
+    for (int i = 0; i < MAX_TCP_POLES; i++) {
+        if (tcp_poles[i].connected) {
+            ESP_LOGI(TAG, "Stolpe %d: Socket=%d, MAC=%s, Nominell MAC=%s", 
+                    i, tcp_poles[i].sock, 
+                    tcp_poles[i].mac[0] ? tcp_poles[i].mac : "Ukjent", 
+                    tcp_poles[i].nominal_mac[0] ? tcp_poles[i].nominal_mac : "Ikke tildelt");
+        }
+    }
 
 
 

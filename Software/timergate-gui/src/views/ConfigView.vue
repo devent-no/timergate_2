@@ -11,7 +11,7 @@ export default {
     return {
       debounceMs: 1000,
       minSensors: 2,
-      timeoutMs: 5000,
+      timeoutMs: 250,
       isSaving: false,
       saveMessage: "",
       saveStatus: ""
@@ -102,9 +102,9 @@ export default {
             id="debounce-ms" 
             type="number" 
             v-model="debounceMs" 
-            min="0" 
-            max="10000" 
-            step="100"
+            min="500" 
+            max="15000" 
+            step="250"
           />
           <div class="description">
             Minimumstid mellom passeringer. Sensorbrudd i denne perioden etter en passering vil bli ignorert.
@@ -132,9 +132,9 @@ export default {
             id="timeout-ms" 
             type="number" 
             v-model="timeoutMs" 
-            min="1000" 
-            max="30000" 
-            step="1000"
+            min="100" 
+            max="1000" 
+            step="25"
           />
           <div class="description">
             Hvor lenge systemet venter på nok sensorer før sekvensen tilbakestilles.

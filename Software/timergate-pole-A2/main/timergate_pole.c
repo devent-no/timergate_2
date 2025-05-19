@@ -1669,37 +1669,36 @@ void app_main(void)
 
 
         // Håndter highpoint_search
-        if (highpoint_search)
-        {
+        if (highpoint_search) {
             // Sikre at statusen er satt til kalibrering
             if (current_status != STATUS_CALIBRATING) {
                 set_system_status(STATUS_CALIBRATING);
             }
 
-            // Vis status for kalibrering
-            set_system_status(STATUS_CALIBRATING);
+            // Vis gjeldende kanal som kalibreres
+            ESP_LOGI(TAG, "Kalibrerer kanal %d med offset %d", highpoint_channel, highpoint_offset);
             
             // Sett current_led til den sensoren som for øyeblikket kalibreres
             led_set(highpoint_channel, 1, 255, 0, 255); // Sett aktiv LED til lilla
             
             // Deaktiver andre sensorer midlertidig for å redusere interferens
-            // for (int i = 0; i < NUM_SENSORS; i++) {
-            //     if (i != highpoint_channel && enabled[i]) {
-            //         // Sett PWM til 0 for alle andre sensorer
-            //         ledc_set_duty(LEDC_MODE, rcv_channels[i], 0);
-            //         ledc_update_duty(LEDC_MODE, rcv_channels[i]);
-            //     }
-            // }
+            for (int i = 0; i < NUM_SENSORS; i++) {
+                if (i != highpoint_channel && enabled[i]) {
+                    // Sett PWM til 0 for alle andre sensorer
+                    ledc_set_duty(LEDC_MODE, rcv_channels[i], 0);
+                    ledc_update_duty(LEDC_MODE, rcv_channels[i]);
+                }
+            }
             
             // Gi tid til å stabilisere
-            vTaskDelay(5 / portTICK_PERIOD_MS);
+            vTaskDelay(50 / portTICK_PERIOD_MS);
             
             // Sett PWM for gjeldende sensor
             ledc_set_duty_with_hpoint(LEDC_MODE, rcv_channels[highpoint_channel], LEDC_DUTY, highpoint_offset);
             ledc_update_duty(LEDC_MODE, rcv_channels[highpoint_channel]);
             
-            // Gi tid til å stabilisere før måling
-            vTaskDelay(15 / portTICK_PERIOD_MS);
+            // Gi mer tid til å stabilisere før måling
+            vTaskDelay(100 / portTICK_PERIOD_MS);
             
             // Ta flere målinger og bruk gjennomsnitt for å redusere støy
             int sum_readings = 0;
@@ -1707,85 +1706,50 @@ void app_main(void)
             
             for (int j = 0; j < 3; j++) {
                 int current_reading = 0;
-                ESP_ERROR_CHECK(adc_oneshot_read(adc1_handle, adc_channel[highpoint_channel], &current_reading));
+                esp_err_t ret = adc_oneshot_read(adc1_handle, adc_channel[highpoint_channel], &current_reading);
                 
-                // Ignorer nullverdier og for lave verdier
-                if (current_reading > 100) {
+                if (ret == ESP_OK && current_reading > 10) {  // Ignorer veldig lave verdier
                     sum_readings += current_reading;
                     valid_readings++;
+                    ESP_LOGI(TAG, "ADC-lesing #%d: %d", j+1, current_reading);
+                } else {
+                    ESP_LOGW(TAG, "ADC-lesing #%d feilet eller ga lav verdi: %d, ret = %d", j+1, current_reading, ret);
                 }
                 
-                vTaskDelay(5 / portTICK_PERIOD_MS);  // Kort pause mellom målinger
+                vTaskDelay(20 / portTICK_PERIOD_MS);  // Kort pause mellom målinger
             }
             
             // Oppdater adc_raw med gjennomsnittlig verdi hvis vi har gyldige målinger
+            int avg_value = 0;
             if (valid_readings > 0) {
-                adc_raw[0][highpoint_channel] = sum_readings / valid_readings;
+                avg_value = sum_readings / valid_readings;
+                adc_raw[0][highpoint_channel] = avg_value;
                 
                 // Oppdater max hvis den nye verdien er høyere
-                if (adc_raw[0][highpoint_channel] > highpoint_max) {
+                if (avg_value > highpoint_max) {
                     // Logg betydelige nye høydepunkter
-                    if (adc_raw[0][highpoint_channel] > 1000) {
+                    if (avg_value > 500) {
                         ESP_LOGI(TAG, "Ny høyere verdi for sensor %d: %d ved offset %d", 
-                                highpoint_channel, adc_raw[0][highpoint_channel], highpoint_offset);
+                                highpoint_channel, avg_value, highpoint_offset);
                     }
                     
-                    highpoint_max = adc_raw[0][highpoint_channel];
+                    highpoint_max = avg_value;
                     highpoint_offset_max = highpoint_offset;
                 }
+            } else {
+                ESP_LOGW(TAG, "Ingen gyldige ADC-lesinger for kanal %d ved offset %d", 
+                        highpoint_channel, highpoint_offset);
             }
 
-
-        // Endre dette i highpoint_search-delen av koden
-            // Håndter highpoint_search
-            if (highpoint_search)
-            {
-                // Sikre at statusen er satt til kalibrering
-                if (current_status != STATUS_CALIBRATING) {
-                    set_system_status(STATUS_CALIBRATING);
-                }
-
-                // Vis status for kalibrering
-                set_system_status(STATUS_CALIBRATING);
-                
-                // Sett current_led til den sensoren som for øyeblikket kalibreres
-                led_set(highpoint_channel, 1, 255, 0, 255); // Sett aktiv LED til lilla
-                
-                // Sett PWM for gjeldende sensor
-                ledc_set_duty_with_hpoint(LEDC_MODE, rcv_channels[highpoint_channel], LEDC_DUTY, highpoint_offset);
-                ledc_update_duty(LEDC_MODE, rcv_channels[highpoint_channel]);
-                
-                // Gi tid til å stabilisere før måling
-                vTaskDelay(3 / portTICK_PERIOD_MS);
-                
-                // Ta en måling for grovsøket
-                int current_reading = 0;
-                ESP_ERROR_CHECK(adc_oneshot_read(adc1_handle, adc_channel[highpoint_channel], &current_reading));
-                
-                // Oppdater max hvis den nye verdien er høyere
-                if (current_reading > 100) {
-                    adc_raw[0][highpoint_channel] = current_reading;
-                    
-                    if (current_reading > highpoint_max) {
-                        // Logg betydelige nye høydepunkter
-                        if (current_reading > 1000) {
-                            ESP_LOGI(TAG, "Ny høyere verdi for sensor %d: %d ved offset %d", 
-                                    highpoint_channel, current_reading, highpoint_offset);
-                        }
+            // Sjekk om vi har nådd slutten av grovsøket
+            if (highpoint_offset >= 8092) {
+                ESP_LOGI(TAG, "Grovsøk ferdig for kanal %d, maks verdi: %d, offset: %d", 
+                        highpoint_channel, highpoint_max, highpoint_offset_max);
                         
-                        highpoint_max = current_reading;
-                        highpoint_offset_max = highpoint_offset;
-                    }
-                }
-
-                // Sjekk om vi har nådd slutten av grovsøket
-                if (highpoint_offset >= 8092) {
-                    ESP_LOGI(TAG, "Grovsøk ferdig for kanal %d, maks verdi: %d, offset: %d", 
-                            highpoint_channel, highpoint_max, highpoint_offset_max);
-                            
-                    // Start finsøk rundt funnet maksimum
-                    int start_fine_search = highpoint_offset_max - 500;
-                    int end_fine_search = highpoint_offset_max + 500;
+                // Start finsøk rundt funnet maksimum hvis vi fant en gyldig verdi
+                if (highpoint_max > 100) {
+                    int start_fine_search = highpoint_offset_max - 200;
+                    int end_fine_search = highpoint_offset_max + 200;
                     
                     // Sikre at vi holder oss innenfor gyldige grenser
                     if (start_fine_search < 0) start_fine_search = 0;
@@ -1799,22 +1763,35 @@ void app_main(void)
                     int prev_max = highpoint_max;
                     int prev_offset_max = highpoint_offset_max;
                     
-                    // Utfør finsøk
-                    for (int fine_offset = start_fine_search; fine_offset <= end_fine_search; fine_offset += 100) {
+                    // Utfør finsøk med mindre steg
+                    for (int fine_offset = start_fine_search; fine_offset <= end_fine_search; fine_offset += 50) {
                         // Sett finjustert offset
                         ledc_set_duty_with_hpoint(LEDC_MODE, rcv_channels[highpoint_channel], LEDC_DUTY, fine_offset);
                         ledc_update_duty(LEDC_MODE, rcv_channels[highpoint_channel]);
                         
                         // Gi tid til å stabilisere
-                        vTaskDelay(3 / portTICK_PERIOD_MS);
+                        vTaskDelay(70 / portTICK_PERIOD_MS);
                         
-                        // Mål ADC-verdi
-                        int current_reading = 0;
-                        ESP_ERROR_CHECK(adc_oneshot_read(adc1_handle, adc_channel[highpoint_channel], &current_reading));
+                        // Ta gjennomsnitt av flere lesinger
+                        int fine_sum = 0;
+                        int fine_valid = 0;
+                        
+                        for (int k = 0; k < 3; k++) {
+                            int fine_reading = 0;
+                            if (adc_oneshot_read(adc1_handle, adc_channel[highpoint_channel], &fine_reading) == ESP_OK 
+                                    && fine_reading > 10) {
+                                fine_sum += fine_reading;
+                                fine_valid++;
+                            }
+                            vTaskDelay(10 / portTICK_PERIOD_MS);
+                        }
+                        
+                        // Beregn gjennomsnitt
+                        int fine_avg = (fine_valid > 0) ? (fine_sum / fine_valid) : 0;
                         
                         // Oppdater maksimalverdi hvis vi finner høyere verdi
-                        if (current_reading > highpoint_max && current_reading > 100) {
-                            highpoint_max = current_reading;
+                        if (fine_avg > highpoint_max && fine_avg > 100) {
+                            highpoint_max = fine_avg;
                             highpoint_offset_max = fine_offset;
                             
                             // Logg bare hvis vi faktisk finner en bedre verdi
@@ -1830,80 +1807,103 @@ void app_main(void)
                     } else {
                         ESP_LOGI(TAG, "Finsøk ga ingen forbedring. Beholder grovsøk-verdier.");
                     }
-                    
-                    // Nå setter vi den endelige optimale offset-verdien
-                    ledc_set_duty_with_hpoint(LEDC_MODE, rcv_channels[highpoint_channel], LEDC_DUTY, highpoint_offset_max);
-                    ledc_update_duty(LEDC_MODE, rcv_channels[highpoint_channel]);
-                    
-                    // Gi tid til å stabilisere
-                    vTaskDelay(3 / portTICK_PERIOD_MS);
-                    
-                    // Verifiser at sensoren fungerer med ny offset
+                } else {
+                    ESP_LOGW(TAG, "Ingen gyldig maksverdi funnet under grovsøk, hopper over finsøk");
+                }
+                
+                // Nå setter vi den endelige optimale offset-verdien
+                ledc_set_duty_with_hpoint(LEDC_MODE, rcv_channels[highpoint_channel], LEDC_DUTY, highpoint_offset_max);
+                ledc_update_duty(LEDC_MODE, rcv_channels[highpoint_channel]);
+                
+                // Gi tid til å stabilisere
+                vTaskDelay(70 / portTICK_PERIOD_MS);
+                
+                // Verifiser at sensoren fungerer med ny offset
+                int verification_sum = 0;
+                int verification_count = 0;
+                
+                for (int v = 0; v < 3; v++) {
                     int verification_value = 0;
-                    ESP_ERROR_CHECK(adc_oneshot_read(adc1_handle, adc_channel[highpoint_channel], &verification_value));
+                    if (adc_oneshot_read(adc1_handle, adc_channel[highpoint_channel], &verification_value) == ESP_OK 
+                            && verification_value > 10) {
+                        verification_sum += verification_value;
+                        verification_count++;
+                    }
+                    vTaskDelay(20 / portTICK_PERIOD_MS);
+                }
+                
+                int verification_avg = (verification_count > 0) ? (verification_sum / verification_count) : 0;
+                ESP_LOGI(TAG, "Verifikasjonslesing for sensor %d: %d (gjennomsnitt av %d lesinger)", 
+                        highpoint_channel, verification_avg, verification_count);
+                
+                // Sett break_limit basert på highpoint_max
+                if (highpoint_max > 500 && verification_avg > 300) {
+                    // Sett grensen til 70% av maksimumsverdien for mer robusthet
+                    break_limit[highpoint_channel] = (uint16_t)(highpoint_max * 0.8);
+                    ESP_LOGI(TAG, "Satt ny break_limit for sensor %d: %d (70%% av maks %d)", 
+                            highpoint_channel, break_limit[highpoint_channel], highpoint_max);
+                } else {
+                    // Behold gjeldende break_limit hvis den finnes, ellers sett standardverdi
+                    if (break_limit[highpoint_channel] < 500) {
+                        break_limit[highpoint_channel] = 1000;  // Standard break-grense
+                    }
+                    ESP_LOGW(TAG, "Sensor %d har for lav maksverdi (%d), beholder eksisterende verdi: %d", 
+                            highpoint_channel, highpoint_max, break_limit[highpoint_channel]);
+                }
+                
+                // Lagre offset-verdien
+                offsets[highpoint_channel] = highpoint_offset_max;
+                
+                ESP_LOGI(TAG, "Kalibrering fullført for kanal %d, maks adc-verdi: %d, offset: %d, break_limit: %d", 
+                        highpoint_channel, highpoint_max, highpoint_offset_max, break_limit[highpoint_channel]);
+
+                // Gå til neste sensor eller avslutt kalibrering
+                if (highpoint_channel == 6) {
+                    highpoint_search = false;
                     
-                    // Sett break_limit basert på highpoint_max
-                    if (highpoint_max > 500 && verification_value > 300) {
-                        // Sett grensen til 90% av maksimumsverdien
-                        break_limit[highpoint_channel] = (uint16_t)(highpoint_max * 0.9);
-                        ESP_LOGI(TAG, "Satt ny break_limit for sensor %d: %d (90%% av maks %d)", 
-                                highpoint_channel, break_limit[highpoint_channel], highpoint_max);
-                    } else {
-                        // Behold gjeldende break_limit hvis den finnes, ellers sett standardverdi
-                        if (break_limit[highpoint_channel] < 500) {
-                            break_limit[highpoint_channel] = 1000;  // Standard break-grense
+                    // Resten av oppryddingen etter all kalibrering
+                    nvs_update_offsets();
+                    publish_settings();
+                    calibration_completed = true;
+                    auto_calibration_started = true;
+                    ESP_LOGI(TAG, "Kalibrering fullført!");
+
+                    all_sensors_broken_start_time = 0;
+                    blink_mode = false;
+
+                    ESP_LOGI(TAG, "Venter 0,5 sekunder for å stabilisere systemet etter kalibrering");
+                    vTaskDelay(500 / portTICK_PERIOD_MS);
+
+                    // Reaktiver alle sensorer
+                    for (int i = 0; i < NUM_SENSORS; i++) {
+                        if (enabled[i]) {
+                            ledc_set_duty_with_hpoint(LEDC_MODE, rcv_channels[i], LEDC_DUTY, offsets[i]);
+                            ledc_update_duty(LEDC_MODE, rcv_channels[i]);
                         }
-                        ESP_LOGW(TAG, "Sensor %d har for lav maksverdi (%d), beholder eksisterende verdi: %d", 
-                                highpoint_channel, highpoint_max, break_limit[highpoint_channel]);
                     }
-                    
-                    ESP_LOGI(TAG, "Kalibrering fullført for kanal %d, maks adc-verdi: %d, offset: %d, break_limit: %d", 
-                            highpoint_channel, highpoint_max, highpoint_offset_max, break_limit[highpoint_channel]);
 
-                    // Resten av koden er uendret
-                    if (highpoint_channel == 6) {
-                        highpoint_search = false;
-                        
-                        // Resten av oppryddingen etter all kalibrering
-                        nvs_update_offsets();
-                        publish_settings();
-                        calibration_completed = true;
-                        auto_calibration_started = true;
-                        ESP_LOGI(TAG, "Kalibrering fullført!");
-
-                        all_sensors_broken_start_time = 0;
-                        blink_mode = false;
-
-                        ESP_LOGI(TAG, "Venter 0,5 sekunder for å stabilisere systemet etter kalibrering");
-                        vTaskDelay(500 / portTICK_PERIOD_MS);
-
-                        // Nullstill sensorbrudd-status etter kalibrering
-                        for (int i = 0; i < NUM_SENSORS; i++) {
-                            if (enabled[i]) {
-                                sensor_break[i] = false;
-                            }
+                    // Nullstill sensorbrudd-status etter kalibrering
+                    for (int i = 0; i < NUM_SENSORS; i++) {
+                        if (enabled[i]) {
+                            sensor_break[i] = false;
                         }
-                        curr_broken = false;
-                        prev_broken = false;
+                    }
+                    curr_broken = false;
+                    prev_broken = false;
 
-                        set_system_status(STATUS_READY);
-                    }
-                    else {
-                        highpoint_channel++;
-                        highpoint_offset = 0;
-                        highpoint_max = 0;
-                    }
+                    set_system_status(STATUS_READY);
                 }
                 else {
-                    // Inkrementerer med 1000 for grovsøket
-                    highpoint_offset += 1000;
-                    vTaskDelay(3 / portTICK_PERIOD_MS);  // Kort pause mellom justeringene
+                    highpoint_channel++;
+                    highpoint_offset = 0;
+                    highpoint_max = 0;
                 }
             }
-                    
-            //highpoint_offset += 30;
-            highpoint_offset += 1000;
-            vTaskDelay(15 / portTICK_PERIOD_MS);  // Legg til en kort pause mellom justeringene
+            else {
+                // Inkrementerer med mindre steg for bedre oppløsning
+                highpoint_offset += 1000;  // Redusert fra 1000 til 500 for bedre oppløsning
+                vTaskDelay(30 / portTICK_PERIOD_MS);  // Legg til en kort pause mellom justeringene
+            }
         }
         else
         {
@@ -1914,5 +1914,8 @@ void app_main(void)
             }
             prev_broken = curr_broken;
         }
+
+
+
     }
 }
