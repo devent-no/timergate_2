@@ -1,4 +1,4 @@
-//20.05.2025 13:35
+//20.05.2025 15:36
 /* Timergate Pole for hardware revision A2 */
 #include <stdio.h>
 #include <stdlib.h>
@@ -1377,6 +1377,15 @@ static void pwm_setup(){
         ESP_LOGI(TAG, "Break for sensor %d = %d", i, (int)break_limit[i]);
         ESP_LOGI(TAG, "Sensor %d enabled = %d", i, (int)enabled[i]);
     }
+
+    // Logg PWM-kanalene for debugging
+    ESP_LOGI(TAG, "Sender-PWM: LEDC_CHANNEL_0 = %d på GPIO = %d", LEDC_CHANNEL_0, PWM_SEND_0);
+    for (int i = 0; i < NUM_SENSORS; i++) {
+        ESP_LOGI(TAG, "Sensor %d: mottaker-kanal = %d på GPIO = %d", 
+                i, rcv_channels[i], rcv_gpios[i]);
+    }
+
+
 }
 
 // Deklarasjon av WiFi-event handler
@@ -1437,21 +1446,11 @@ void app_main(void)
         vTaskDelay(10 / portTICK_PERIOD_MS);
     }
 
-    // Fortsett med kalibrering hvis systemet er klart
-    if (wifi_connected && connected) {
-        ESP_LOGI(TAG, "*** STARTER HIGHPOINT SEARCH ***");
-        // Resten av kalibreringskoden...
-    }
-
-
-
-
-
-
 
     // Sjekk om WiFi og server er tilkoblet før kalibrering startes
     if (wifi_connected && connected) {
         ESP_LOGI(TAG, "*** STARTER HIGHPOINT SEARCH MANUELT VED OPPSTART ***");
+        ESP_LOGI(TAG, "SENDER PWM: Bruker kanal %d på GPIO %d", LEDC_CHANNEL_0, PWM_SEND_0);
         highpoint_search = true;
         highpoint_offset = 0;
         highpoint_channel = 0;
@@ -1682,15 +1681,25 @@ void app_main(void)
             // Sett current_led til den sensoren som for øyeblikket kalibreres
             led_set(highpoint_channel, 1, 255, 0, 255); // Sett aktiv LED til lilla
             
-            // Deaktiver andre sensorer midlertidig for å redusere interferens
+            // Deaktiver andre sensorer midlertidig for å redusere interferens,
+            // men behold sender-PWM (LEDC_CHANNEL_0) aktiv
+            bool is_sender_pwm = false;
             for (int i = 0; i < NUM_SENSORS; i++) {
-                if (i != highpoint_channel && enabled[i]) {
-                    // Sett PWM til 0 for alle andre sensorer
+                // Sjekk om denne kanalen er sender-PWM-kanalen
+                is_sender_pwm = (rcv_channels[i] == LEDC_CHANNEL_0);
+                
+                if (i != highpoint_channel && enabled[i] && !is_sender_pwm) {
+                    // Sett PWM til 0 for alle andre sensorer unntatt sender-PWM
                     ledc_set_duty(LEDC_MODE, rcv_channels[i], 0);
                     ledc_update_duty(LEDC_MODE, rcv_channels[i]);
                 }
             }
-            
+
+            // Sikre at sender-PWM er aktivert
+            ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_0, LEDC_DUTY);
+            ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_0);
+
+                        
             // Gi tid til å stabilisere
             vTaskDelay(50 / portTICK_PERIOD_MS);
             
@@ -1700,6 +1709,27 @@ void app_main(void)
             
             // Gi mer tid til å stabilisere før måling
             vTaskDelay(100 / portTICK_PERIOD_MS);
+
+
+
+            // Test-lesing for å verifisere at sensoren gir verdier
+            int test_value = 0;
+            esp_err_t test_ret = adc_oneshot_read(adc1_handle, adc_channel[highpoint_channel], &test_value);
+            ESP_LOGI(TAG, "Test-lesing for sensor %d: %d, ret = %d", highpoint_channel, test_value, test_ret);
+
+            // Hvis vi fortsatt får 0-verdi, prøv å sikre at sender-PWM er aktiv
+            if (test_value == 0) {
+                ESP_LOGW(TAG, "Sensor %d gir 0-verdi, sikrer at sender-PWM er aktiv", highpoint_channel);
+                // Aktiver sender-PWM og vent litt lengre
+                ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_0, LEDC_DUTY);
+                ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_0);
+                vTaskDelay(200 / portTICK_PERIOD_MS);
+            }
+
+
+
+
+
             
             // Ta flere målinger og bruk gjennomsnitt for å redusere støy
             int sum_readings = 0;
@@ -1820,19 +1850,27 @@ void app_main(void)
                 vTaskDelay(70 / portTICK_PERIOD_MS);
                 
                 // Verifiser at sensoren fungerer med ny offset
+                // Sikre at sender-PWM er aktiv før verifikasjon
+                ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_0, LEDC_DUTY);
+                ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_0);
+                vTaskDelay(100 / portTICK_PERIOD_MS);
+
+                // Verifiser at sensoren fungerer med ny offset
                 int verification_sum = 0;
                 int verification_count = 0;
-                
-                for (int v = 0; v < 3; v++) {
+
+                for (int v = 0; v < 5; v++) {  // Øk antall verifikasjonslesinger fra 3 til 5
                     int verification_value = 0;
-                    if (adc_oneshot_read(adc1_handle, adc_channel[highpoint_channel], &verification_value) == ESP_OK 
-                            && verification_value > 10) {
+                    esp_err_t verify_ret = adc_oneshot_read(adc1_handle, adc_channel[highpoint_channel], &verification_value);
+                    ESP_LOGI(TAG, "Verifikasjonslesing #%d: %d, ret = %d", v+1, verification_value, verify_ret);
+                    
+                    if (verify_ret == ESP_OK && verification_value > 10) {
                         verification_sum += verification_value;
                         verification_count++;
                     }
                     vTaskDelay(20 / portTICK_PERIOD_MS);
                 }
-                
+                                
                 int verification_avg = (verification_count > 0) ? (verification_sum / verification_count) : 0;
                 ESP_LOGI(TAG, "Verifikasjonslesing for sensor %d: %d (gjennomsnitt av %d lesinger)", 
                         highpoint_channel, verification_avg, verification_count);
