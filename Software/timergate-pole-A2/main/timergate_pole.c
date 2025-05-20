@@ -1010,7 +1010,7 @@ static void publish_sensor()
             sensor_break[6]);
     sprintf(event, "{\"K\":0,\"M\":\"%s\",\"V\":%s,\"B\":%s}\n", mac_addr, adc_vals_s, broken_s);
     add_to_queue(event);
-    //ESP_LOGI(TAG, "%s", adc_vals_s); //MIDLERTIDIG for å ikke drukne loggen
+    ESP_LOGI(TAG, "%s", adc_vals_s); //MIDLERTIDIG for å ikke drukne loggen
 }
 
 static void publish_break(int broken)
