@@ -1,4 +1,3 @@
-//20.05.2025 09:38
 /* Timergate Pole for hardware revision A2 */
 #include <stdio.h>
 #include <stdlib.h>
@@ -67,8 +66,6 @@ char mac_addr[18];
 
 struct sockaddr_in dest_addr;
 
-static bool adc_verification_done = false;
-
 static int adc_raw[NUM_SENSORS][10];
 adc_oneshot_unit_handle_t adc1_handle;
 
@@ -76,10 +73,7 @@ static led_strip_handle_t led_strip;
 
 int32_t restart_counter;
 uint8_t led_val[NUM_SENSORS] = {0};
-//uint8_t adc_channel[NUM_SENSORS] = {ADC_CHANNEL_0, ADC_CHANNEL_1, ADC_CHANNEL_3, ADC_CHANNEL_4, ADC_CHANNEL_5, ADC_CHANNEL_6, ADC_CHANNEL_7}; //Opprinnelig fra Elias
-//uint8_t adc_channel[NUM_SENSORS] = {ADC_CHANNEL_0, ADC_CHANNEL_1, ADC_CHANNEL_2, ADC_CHANNEL_3, ADC_CHANNEL_4, ADC_CHANNEL_5, ADC_CHANNEL_6};
-uint8_t adc_channel[NUM_SENSORS] = {ADC_CHANNEL_1, ADC_CHANNEL_2, ADC_CHANNEL_3, ADC_CHANNEL_4, ADC_CHANNEL_5, ADC_CHANNEL_6, ADC_CHANNEL_7};
-
+uint8_t adc_channel[NUM_SENSORS] = {ADC_CHANNEL_0, ADC_CHANNEL_1, ADC_CHANNEL_3, ADC_CHANNEL_4, ADC_CHANNEL_5, ADC_CHANNEL_6, ADC_CHANNEL_7};
 uint16_t break_limit[NUM_SENSORS] = {1000, 1000, 1000, 1000, 1000, 1000, 1000};
 uint8_t rcv_gpios[NUM_SENSORS] = {PWM_RCV_0, PWM_RCV_1, PWM_RCV_2, PWM_RCV_3, PWM_RCV_4, PWM_RCV_5, PWM_RCV_6};
 ledc_channel_t rcv_channels[NUM_SENSORS] = {LEDC_CHANNEL_1, LEDC_CHANNEL_2, LEDC_CHANNEL_3, LEDC_CHANNEL_4, LEDC_CHANNEL_5, LEDC_CHANNEL_6, LEDC_CHANNEL_7};
@@ -144,12 +138,6 @@ static bool wifi_connected = false;
 static int wifi_reconnect_attempts = 0;
 static const int MAX_WIFI_RECONNECT_ATTEMPTS = 10; // Maksimalt antall forsøk før timeout
 static TaskHandle_t wifi_reconnect_task_handle = NULL;
-
-
-
-
-// Legg til denne linjen sammen med de andre funksjonserklæringene øverst i filen
-static void manual_calibrate_sensor(int sensor_id, uint16_t offset, uint16_t break_val);
 
 
 // LED-farger for de ulike tilstandene (R, G, B)
@@ -917,25 +905,14 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t e
 }
 
 
+
 static void adc_init()
 {
-    ESP_LOGI(TAG, "Initialiserer ADC med følgende konfigurering:");
-    for (int i = 0; i < NUM_SENSORS; i++) {
-        ESP_LOGI(TAG, "Sensor %d: ADC-kanal=%d, GPIO=%d, PWM-kanal=%d", 
-                i, adc_channel[i], rcv_gpios[i], rcv_channels[i]);
-    }
-
     //-------------ADC1 Init---------------//
     adc_oneshot_unit_init_cfg_t init_config1 = {
         .unit_id = ADC_UNIT_1,
     };
-    esp_err_t init_res = adc_oneshot_new_unit(&init_config1, &adc1_handle);
-    if (init_res != ESP_OK) {
-        ESP_LOGE(TAG, "Feil ved initialisering av ADC-enhet: %d (%s)", 
-                init_res, esp_err_to_name(init_res));
-    } else {
-        ESP_LOGI(TAG, "ADC-enhet initialisert vellykket");
-    }
+    ESP_ERROR_CHECK(adc_oneshot_new_unit(&init_config1, &adc1_handle));
 
     //-------------ADC1 Config---------------//
     adc_oneshot_chan_cfg_t config = {
@@ -943,201 +920,11 @@ static void adc_init()
         .atten = ADC_ATTEN_DB_12,
     };
 
-    ESP_LOGI(TAG, "Konfigurerer ADC-kanaler med bitwidth=%d, atten=%d", 
-           config.bitwidth, config.atten);
-
-    for (int i = 0; i < NUM_SENSORS; i++) {
-        esp_err_t config_err = adc_oneshot_config_channel(adc1_handle, adc_channel[i], &config);
-        if (config_err != ESP_OK) {
-            ESP_LOGE(TAG, "Feil ved konfigurering av ADC-kanal %d: %d (%s)", 
-                    i, config_err, esp_err_to_name(config_err));
-        } else {
-            ESP_LOGI(TAG, "ADC-kanal %d konfigurert vellykket", i);
-        }
+    for (int i = 0; i < 7; i++)
+    {
+        ESP_ERROR_CHECK(adc_oneshot_config_channel(adc1_handle, adc_channel[i], &config));
     }
 }
-
-
-
-// Funksjon for å diagnostisere ADC-kanaler
-static void diagnose_adc_channels() {
-    ESP_LOGI(TAG, "-------------------------------------------");
-    ESP_LOGI(TAG, "Starter diagnostisk test av ADC-kanaler...");
-    ESP_LOGI(TAG, "-------------------------------------------");
-    
-    // Skriv ut konfigurasjonen først
-    ESP_LOGI(TAG, "Konfigurerte ADC-kanaler:");
-    for (int i = 0; i < NUM_SENSORS; i++) {
-        ESP_LOGI(TAG, "Sensor %d: ADC-kanal=%d, GPIO=%d, PWM-kanal=%d, Enabled=%d", 
-                i, adc_channel[i], rcv_gpios[i], rcv_channels[i], enabled[i]);
-    }
-    
-    ESP_LOGI(TAG, "-------------------------------------------");
-    
-    // Slå av alle PWM-kanaler først for å redusere interferens
-    for (int i = 0; i < NUM_SENSORS; i++) {
-        if (enabled[i]) {
-            ledc_set_duty(LEDC_MODE, rcv_channels[i], 0);
-            ledc_update_duty(LEDC_MODE, rcv_channels[i]);
-        }
-    }
-    
-    // Gi tid til å stabilisere
-    vTaskDelay(100 / portTICK_PERIOD_MS);
-    
-    // Test hver ADC-kanal uten PWM først
-    ESP_LOGI(TAG, "Leser rå ADC-verdier (uten PWM):");
-    for (int i = 0; i < NUM_SENSORS; i++) {
-        if (!enabled[i]) {
-            ESP_LOGI(TAG, "Sensor %d: Deaktivert, hopper over", i);
-            continue;
-        }
-        
-        int raw_reading = 0;
-        esp_err_t ret = adc_oneshot_read(adc1_handle, adc_channel[i], &raw_reading);
-        
-        if (ret == ESP_OK) {
-            ESP_LOGI(TAG, "Sensor %d: Rå ADC-verdi = %d", i, raw_reading);
-        } else {
-            ESP_LOGE(TAG, "Sensor %d: Feil ved lesing av ADC: %d (%s)", 
-                   i, ret, esp_err_to_name(ret));
-        }
-    }
-    
-    ESP_LOGI(TAG, "-------------------------------------------");
-    
-    // Test hver sensor med forskjellige offset-verdier
-    ESP_LOGI(TAG, "Tester sensorer med forskjellige PWM-offset verdier:");
-    
-    uint16_t test_offsets[] = {1000, 3000, 5000, 7000};
-    
-    for (int offset_idx = 0; offset_idx < sizeof(test_offsets)/sizeof(test_offsets[0]); offset_idx++) {
-        uint16_t test_offset = test_offsets[offset_idx];
-        ESP_LOGI(TAG, "- Testing med offset=%d:", test_offset);
-        
-        for (int i = 0; i < NUM_SENSORS; i++) {
-            if (!enabled[i]) {
-                continue;
-            }
-            
-            // Sett PWM med testoffset bare for denne sensoren
-            for (int j = 0; j < NUM_SENSORS; j++) {
-                if (enabled[j]) {
-                    if (j == i) {
-                        ledc_set_duty_with_hpoint(LEDC_MODE, rcv_channels[j], LEDC_DUTY, test_offset);
-                    } else {
-                        ledc_set_duty(LEDC_MODE, rcv_channels[j], 0);
-                    }
-                    ledc_update_duty(LEDC_MODE, rcv_channels[j]);
-                }
-            }
-            
-            // Gi tid til å stabilisere
-            vTaskDelay(50 / portTICK_PERIOD_MS);
-            
-            // Les ADC-verdi med PWM på
-            int sum = 0;
-            int valid_readings = 0;
-            
-            for (int j = 0; j < 3; j++) {
-                int reading = 0;
-                esp_err_t ret = adc_oneshot_read(adc1_handle, adc_channel[i], &reading);
-                
-                if (ret == ESP_OK && reading > 0) {
-                    sum += reading;
-                    valid_readings++;
-                }
-                
-                vTaskDelay(10 / portTICK_PERIOD_MS);
-            }
-            
-            int avg = (valid_readings > 0) ? (sum / valid_readings) : 0;
-            
-            if (valid_readings > 0) {
-                ESP_LOGI(TAG, "  Sensor %d: ADC-verdi = %d (gjennomsnitt av %d lesinger)", 
-                        i, avg, valid_readings);
-            } else {
-                ESP_LOGW(TAG, "  Sensor %d: Ingen gyldige lesinger", i);
-            }
-        }
-    }
-    
-    ESP_LOGI(TAG, "-------------------------------------------");
-    
-    // Gjenopprett originale offset-verdier
-    ESP_LOGI(TAG, "Gjenoppretter originale offset-verdier:");
-    for (int i = 0; i < NUM_SENSORS; i++) {
-        if (enabled[i]) {
-            ESP_LOGI(TAG, "Sensor %d: Setter offset tilbake til %d", i, offsets[i]);
-            ledc_set_duty_with_hpoint(LEDC_MODE, rcv_channels[i], LEDC_DUTY, offsets[i]);
-            ledc_update_duty(LEDC_MODE, rcv_channels[i]);
-        }
-    }
-    
-    ESP_LOGI(TAG, "ADC-diagnostikk fullført");
-    ESP_LOGI(TAG, "-------------------------------------------");
-}
-
-
-
-
-// Legg til denne funksjonen etter adc_init()
-// static void test_adc_channels() {
-//     ESP_LOGI(TAG, "Starter diagnostisk test av alle ADC-kanaler...");
-    
-//     for (int i = 0; i < NUM_SENSORS; i++) {
-//         ESP_LOGI(TAG, "Tester ADC-kanal %d for sensor %d (GPIO %d):", 
-//                 adc_channel[i], i, rcv_gpios[i]);
-        
-//         // Les ADC-verdi direkte, uten PWM-justering
-//         int raw_reading = 0;
-//         esp_err_t ret = adc_oneshot_read(adc1_handle, adc_channel[i], &raw_reading);
-        
-//         if (ret == ESP_OK) {
-//             ESP_LOGI(TAG, "  Rå ADC-verdi: %d", raw_reading);
-//         } else {
-//             ESP_LOGE(TAG, "  Feil ved lesing av ADC-kanal: %d (%s)", 
-//                     ret, esp_err_to_name(ret));
-//         }
-        
-//         // Test med PWM på
-//         ledc_set_duty_with_hpoint(LEDC_MODE, rcv_channels[i], LEDC_DUTY, 4000); // Middels offset
-//         ledc_update_duty(LEDC_MODE, rcv_channels[i]);
-        
-//         // Gi tid til å stabilisere
-//         vTaskDelay(50 / portTICK_PERIOD_MS);
-        
-//         // Les ADC-verdi med PWM
-//         int pwm_reading = 0;
-//         ret = adc_oneshot_read(adc1_handle, adc_channel[i], &pwm_reading);
-        
-//         if (ret == ESP_OK) {
-//             ESP_LOGI(TAG, "  ADC-verdi med PWM (offset=4000): %d", pwm_reading);
-            
-//             // Vurder om verdien er brukbar for kalibrering
-//             if (pwm_reading < 100) {
-//                 ESP_LOGW(TAG, "  ADVARSEL: Svært lav verdi for sensor %d, kan indikere frakoblet sensor", i);
-//             }
-//         } else {
-//             ESP_LOGE(TAG, "  Feil ved lesing av ADC-kanal med PWM: %d (%s)", 
-//                     ret, esp_err_to_name(ret));
-//         }
-        
-//         // Tilbakestill PWM til lagret offset
-//         ledc_set_duty_with_hpoint(LEDC_MODE, rcv_channels[i], LEDC_DUTY, offsets[i]);
-//         ledc_update_duty(LEDC_MODE, rcv_channels[i]);
-        
-//         vTaskDelay(20 / portTICK_PERIOD_MS);
-//     }
-    
-//     ESP_LOGI(TAG, "ADC-kanaltest fullført");
-// }
-
-
-
-
-
-
 
 void tcp_setup(void)
 {
@@ -1413,32 +1200,6 @@ static void check_socket()
                     }
                 }
 
-                // Legg til ny håndtering av manual_cal kommando
-                if (strncmp(command, "manual_cal", 10) == 0)
-                {
-                    // Format: "manual_cal: <sensor_id> <offset> <break_limit>"
-                    int sensor_id = -1;
-                    int offset = -1;
-                    int break_val = -1;
-                    
-                    if (sscanf(command + 10, " %d %d %d", &sensor_id, &offset, &break_val) == 3) {
-                        if (sensor_id >= 0 && sensor_id < NUM_SENSORS && 
-                            offset >= 0 && offset <= 8092 && 
-                            break_val > 0 && break_val < 4096) {
-                                
-                            ESP_LOGI(TAG, "Mottok manuell kalibrerings-kommando: sensor=%d, offset=%d, break=%d", 
-                                  sensor_id, offset, break_val);
-                            
-                            // Kall manuell kalibreringsfunksjon
-                            manual_calibrate_sensor(sensor_id, offset, break_val);
-                        } else {
-                            ESP_LOGW(TAG, "Ugyldig parameter for manuell kalibrering: sensor=%d, offset=%d, break=%d", 
-                                  sensor_id, offset, break_val);
-                        }
-                    } else {
-                        ESP_LOGW(TAG, "Feil format for manual_cal kommando: %s", command);
-                    }
-                }
                 
                 if (strncmp(command, "restart:", 8) == 0) {
                     // Finn restart-typen
@@ -1481,6 +1242,12 @@ static void check_socket()
                     }
                 }
 
+
+
+
+
+
+
                 cmd_index = 0;
             }
             else
@@ -1490,121 +1257,6 @@ static void check_socket()
         }
     }
 }
-
-
-// Funksjon for manuell kalibrering av sensorer
-static void manual_calibrate_sensor(int sensor_id, uint16_t offset, uint16_t break_val) {
-    if (sensor_id < 0 || sensor_id >= NUM_SENSORS) {
-        ESP_LOGE(TAG, "Ugyldig sensor_id for manuell kalibrering: %d", sensor_id);
-        return;
-    }
-    
-    if (!enabled[sensor_id]) {
-        ESP_LOGW(TAG, "Forsøker å kalibrere deaktivert sensor %d", sensor_id);
-    }
-    
-    ESP_LOGI(TAG, "Starter manuell kalibrering for sensor %d: offset=%d, break_limit=%d", 
-             sensor_id, offset, break_val);
-    
-    // Slå av alle andre sensorer midlertidig for å redusere interferens
-    for (int i = 0; i < NUM_SENSORS; i++) {
-        if (i != sensor_id && enabled[i]) {
-            ledc_set_duty(LEDC_MODE, rcv_channels[i], 0);
-            ledc_update_duty(LEDC_MODE, rcv_channels[i]);
-        }
-    }
-    
-    // Sett ny offset
-    offsets[sensor_id] = offset;
-    ledc_set_duty_with_hpoint(LEDC_MODE, rcv_channels[sensor_id], LEDC_DUTY, offset);
-    ledc_update_duty(LEDC_MODE, rcv_channels[sensor_id]);
-    
-    // Gi tid til å stabilisere
-    vTaskDelay(100 / portTICK_PERIOD_MS);
-    
-    // Les ADC-verdi med ny offset for verifikasjon
-    int readings[5] = {0};
-    int valid_readings = 0;
-    int sum = 0;
-    
-    for (int i = 0; i < 5; i++) {
-        esp_err_t ret = adc_oneshot_read(adc1_handle, adc_channel[sensor_id], &readings[i]);
-        
-        if (ret == ESP_OK && readings[i] > 0) {
-            ESP_LOGI(TAG, "ADC-lesing #%d: %d", i+1, readings[i]);
-            sum += readings[i];
-            valid_readings++;
-        } else {
-            if (ret != ESP_OK) {
-                ESP_LOGE(TAG, "ADC-lesing #%d feilet med feilkode: %d (%s)", 
-                       i+1, ret, esp_err_to_name(ret));
-            } else {
-                ESP_LOGW(TAG, "ADC-lesing #%d ga nullverdi", i+1);
-            }
-        }
-        
-        vTaskDelay(20 / portTICK_PERIOD_MS);
-    }
-    
-    // Beregn gjennomsnitt hvis vi har gyldige lesinger
-    int avg_reading = (valid_readings > 0) ? (sum / valid_readings) : 0;
-    
-    // Logg resultat av testen
-    if (valid_readings > 0) {
-        ESP_LOGI(TAG, "Gjennomsnittlig ADC-verdi etter justering: %d (%d gyldige lesinger)", 
-                avg_reading, valid_readings);
-        
-        if (avg_reading < 100) {
-            ESP_LOGW(TAG, "ADVARSEL: Svært lav ADC-verdi selv etter justering");
-        } else if (avg_reading < 500) {
-            ESP_LOGW(TAG, "ADVARSEL: Lav ADC-verdi, kan gi redusert nøyaktighet");
-        } else if (avg_reading > 3500) {
-            ESP_LOGW(TAG, "ADVARSEL: Svært høy ADC-verdi, kan føre til metning");
-        } else {
-            ESP_LOGI(TAG, "ADC-verdi er innenfor anbefalt område (500-3500)");
-        }
-        
-        // Beregn anbefalt break_limit basert på faktisk verdi
-        uint16_t recommended_break = (uint16_t)(avg_reading * 0.8);
-        
-        if (break_val != recommended_break) {
-            ESP_LOGI(TAG, "Merk: Anbefalt break_limit basert på måling ville være: %d (80%% av %d)", 
-                    recommended_break, avg_reading);
-        }
-    } else {
-        ESP_LOGE(TAG, "Kunne ikke få gyldige ADC-verdier for sensor %d", sensor_id);
-        ESP_LOGE(TAG, "Mulige årsaker:");
-        ESP_LOGE(TAG, "1. Sensoren er ikke tilkoblet eller defekt");
-        ESP_LOGE(TAG, "2. ADC-kanal %d er feilkonfigurert", adc_channel[sensor_id]);
-        ESP_LOGE(TAG, "3. GPIO-pin %d støtter ikke ADC", rcv_gpios[sensor_id]);
-    }
-    
-    // Sett break_limit
-    break_limit[sensor_id] = break_val;
-    
-    // Lagre konfigurasjon til NVS
-    nvs_update_offsets();
-    
-    // Reaktiver alle sensorer
-    for (int i = 0; i < NUM_SENSORS; i++) {
-        if (i != sensor_id && enabled[i]) {
-            ledc_set_duty_with_hpoint(LEDC_MODE, rcv_channels[i], LEDC_DUTY, offsets[i]);
-            ledc_update_duty(LEDC_MODE, rcv_channels[i]);
-        }
-    }
-    
-    // Publiser oppdaterte innstillinger
-    publish_settings();
-    
-    ESP_LOGI(TAG, "Manuell kalibrering fullført for sensor %d", sensor_id);
-}
-
-
-
-
-
-
-
 
 static void tcp_client_task(void *pvParameters)
 {
@@ -1751,8 +1403,6 @@ void app_main(void)
     cmd = malloc(200);
 
     adc_init();
-    diagnose_adc_channels();
-    //test_adc_channels();
     wifi_init();
     tcp_setup();
     tcp_connect();
@@ -2018,29 +1668,6 @@ void app_main(void)
 
 
 
-        if (highpoint_search && !adc_verification_done) {  // Legg til en ny flagg-variabel
-            ESP_LOGI(TAG, "Verifiserer ADC-kanaler og GPIO-pinner før kalibrering:");
-            for (int i = 0; i < NUM_SENSORS; i++) {
-                ESP_LOGI(TAG, "Sensor %d: GPIO=%d (PWM_RCV_%d), ADC-kanal=%d", 
-                        i, rcv_gpios[i], i, adc_channel[i]);
-                
-                // Sjekk om GPIO-pinnen er gyldig for ADC
-                bool is_valid_adc_pin = false;
-                // Dette er en forenklet sjekk - du må tilpasse dette til din ESP32-modell
-                if (rcv_gpios[i] <= 19) {  // De fleste GPIO-pinner under 20 har ADC-funksjonalitet på ESP32
-                    is_valid_adc_pin = true;
-                }
-                
-                if (!is_valid_adc_pin) {
-                    ESP_LOGW(TAG, "ADVARSEL: GPIO %d er muligens ikke en gyldig ADC-pin!", rcv_gpios[i]);
-                }
-            }
-            adc_verification_done = true;  // Sett flagget så det bare kjøres én gang
-        }
-
-
-
-
         // Håndter highpoint_search
         if (highpoint_search) {
             // Sikre at statusen er satt til kalibrering
@@ -2086,20 +1713,7 @@ void app_main(void)
                     valid_readings++;
                     ESP_LOGI(TAG, "ADC-lesing #%d: %d", j+1, current_reading);
                 } else {
-                    // Mer detaljert feildiagnostikk
-                    if (ret != ESP_OK) {
-                        ESP_LOGE(TAG, "ADC-lesing #%d feilet med feilkode: %d (%s) for kanal %d", 
-                                j+1, ret, esp_err_to_name(ret), adc_channel[highpoint_channel]);
-                    } else {
-                        ESP_LOGW(TAG, "ADC-lesing #%d ga lav verdi: %d for kanal %d på GPIO %d", 
-                                j+1, current_reading, adc_channel[highpoint_channel], rcv_gpios[highpoint_channel]);
-                        
-                        // Sjekk om riktig PWM er aktivert
-                        uint32_t duty = 0;
-                        duty = ledc_get_duty(LEDC_MODE, rcv_channels[highpoint_channel]);
-                        ESP_LOGW(TAG, "PWM-status for kanal %d: duty=%lu, offset=%d", 
-                                highpoint_channel, duty, highpoint_offset);
-                    }
+                    ESP_LOGW(TAG, "ADC-lesing #%d feilet eller ga lav verdi: %d, ret = %d", j+1, current_reading, ret);
                 }
                 
                 vTaskDelay(20 / portTICK_PERIOD_MS);  // Kort pause mellom målinger
@@ -2222,33 +1836,21 @@ void app_main(void)
                 ESP_LOGI(TAG, "Verifikasjonslesing for sensor %d: %d (gjennomsnitt av %d lesinger)", 
                         highpoint_channel, verification_avg, verification_count);
                 
-                
                 // Sett break_limit basert på highpoint_max
                 if (highpoint_max > 500 && verification_avg > 300) {
-                    // Sett grensen til 80% av maksimumsverdien for mer robusthet
+                    // Sett grensen til 70% av maksimumsverdien for mer robusthet
                     break_limit[highpoint_channel] = (uint16_t)(highpoint_max * 0.8);
-                    ESP_LOGI(TAG, "Satt ny break_limit for sensor %d: %d (80%% av maks %d)", 
+                    ESP_LOGI(TAG, "Satt ny break_limit for sensor %d: %d (70%% av maks %d)", 
                             highpoint_channel, break_limit[highpoint_channel], highpoint_max);
                 } else {
                     // Behold gjeldende break_limit hvis den finnes, ellers sett standardverdi
                     if (break_limit[highpoint_channel] < 500) {
-                        break_limit[highpoint_channel] = 2000;  // Mer robust standardverdi
-                        ESP_LOGW(TAG, "Setter standard break_limit = 2000 for sensor %d", highpoint_channel);
+                        break_limit[highpoint_channel] = 1000;  // Standard break-grense
                     }
-                    
-                    ESP_LOGW(TAG, "Sensor %d har for lav maksverdi (%d), beholder justert verdi: %d", 
+                    ESP_LOGW(TAG, "Sensor %d har for lav maksverdi (%d), beholder eksisterende verdi: %d", 
                             highpoint_channel, highpoint_max, break_limit[highpoint_channel]);
-                    
-                    // Logg mulige årsaker til kalibreringsfeil
-                    ESP_LOGW(TAG, "Mulige årsaker til kalibreringsfeil for sensor %d:", highpoint_channel);
-                    ESP_LOGW(TAG, "1. Sensoren er ikke tilkoblet eller defekt");
-                    ESP_LOGW(TAG, "2. ADC-kanal %d er feilkonfigurert", adc_channel[highpoint_channel]);
-                    ESP_LOGW(TAG, "3. GPIO-pin %d støtter ikke ADC", rcv_gpios[highpoint_channel]);
-                    ESP_LOGW(TAG, "4. PWM-kanal %d er ikke aktivert riktig", rcv_channels[highpoint_channel]);
                 }
-
-
-
+                
                 // Lagre offset-verdien
                 offsets[highpoint_channel] = highpoint_offset_max;
                 
@@ -2259,45 +1861,12 @@ void app_main(void)
                 if (highpoint_channel == 6) {
                     highpoint_search = false;
                     
-                    // Sjekk om minst én sensor ble kalibrert vellykket
-                    bool any_sensor_calibrated = false;
-                    int working_sensors = 0;
-                    
-                    ESP_LOGI(TAG, "Kalibrering fullført, evaluerer resultater:");
-                    for (int i = 0; i < NUM_SENSORS; i++) {
-                        if (enabled[i]) {
-                            // Sjekk om sensoren har en rimelig break_limit verdi etter kalibrering
-                            if (break_limit[i] > 500 && break_limit[i] < 3500) {
-                                working_sensors++;
-                                ESP_LOGI(TAG, " - Sensor %d: OK (break_limit=%d, offset=%d)", 
-                                        i, break_limit[i], offsets[i]);
-                                any_sensor_calibrated = true;
-                            } else {
-                                ESP_LOGW(TAG, " - Sensor %d: Mulig problematisk (break_limit=%d, offset=%d)", 
-                                        i, break_limit[i], offsets[i]);
-                            }
-                        } else {
-                            ESP_LOGI(TAG, " - Sensor %d: Deaktivert", i);
-                        }
-                    }
-                    
-                    if (!any_sensor_calibrated) {
-                        ESP_LOGE(TAG, "ADVARSEL: Ingen sensorer ble kalibrert vellykket!");
-                        ESP_LOGE(TAG, "Systemet vil fungere med standardinnstillinger, men dette kan påvirke nøyaktigheten.");
-                        
-                        // Send advarsel til server
-                        char *warning_msg = malloc(140);
-                        sprintf(warning_msg, "{\"K\":3,\"M\":\"%s\",\"cmd\":\"warning: calibration_failed\"}\n", mac_addr);
-                        xQueueSendToBack(xQueueBreak, &warning_msg, portMAX_DELAY);
-                    } else {
-                        ESP_LOGI(TAG, "Kalibrering fullført med %d fungerende sensorer", working_sensors);
-                    }
-                    
                     // Resten av oppryddingen etter all kalibrering
                     nvs_update_offsets();
                     publish_settings();
                     calibration_completed = true;
                     auto_calibration_started = true;
+                    ESP_LOGI(TAG, "Kalibrering fullført!");
 
                     all_sensors_broken_start_time = 0;
                     blink_mode = false;
