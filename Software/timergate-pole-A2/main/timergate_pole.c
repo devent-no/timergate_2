@@ -1,3 +1,4 @@
+//20.05.2025 13:35
 /* Timergate Pole for hardware revision A2 */
 #include <stdio.h>
 #include <stdlib.h>
