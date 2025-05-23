@@ -1275,8 +1275,130 @@ static void check_socket()
                         ESP_LOGW(TAG, "Ukjent power kommando: '%s'", command);
                     }
                 }
-
-
+                else if (strncmp(command, "restart:", 8) == 0)
+                {
+                    // Finn restart-typen
+                    char restart_type[10] = {0};
+                    sscanf(command + 8, " %s", restart_type);
+                    
+                    ESP_LOGI(TAG, "Mottok restart-kommando: '%s'", restart_type);
+                    
+                    // Send bekreftelse tilbake til server før restart
+                    char response_msg[100];
+                    snprintf(response_msg, sizeof(response_msg), 
+                             "{\"K\":3,\"cmd\":\"restart_%s_initiated\"}\n", restart_type);
+                    
+                    if (connected) {
+                        send(sock, response_msg, strlen(response_msg), 0);
+                        vTaskDelay(100 / portTICK_PERIOD_MS); // Gi tid til å sende respons
+                    }
+                    
+                    if (strcmp(restart_type, "soft") == 0)
+                    {
+                        // Myk restart - normal restart som beholder alle innstillinger
+                        ESP_LOGI(TAG, "Utfører myk restart...");
+                        
+                        // Vis visuell indikasjon (blå blinking)
+                        normal_led_control = false;
+                        for (int i = 0; i < 3; i++) {
+                            set_all_leds(1, 0, 0, 255);  // Blå for myk restart
+                            vTaskDelay(200 / portTICK_PERIOD_MS);
+                            set_all_leds(0, 0, 0, 0);
+                            vTaskDelay(200 / portTICK_PERIOD_MS);
+                        }
+                        
+                        // Lukk TCP-forbindelse på en ren måte
+                        if (connected) {
+                            tcp_close();
+                            connected = false;
+                        }
+                        
+                        vTaskDelay(500 / portTICK_PERIOD_MS);
+                        esp_restart();
+                    } 
+                    else if (strcmp(restart_type, "hard") == 0)
+                    {
+                        // Hard restart - mer aggressiv restart
+                        ESP_LOGI(TAG, "Utfører hard restart...");
+                        
+                        // Vis visuell indikasjon (oransje blinking)
+                        normal_led_control = false;
+                        for (int i = 0; i < 5; i++) {
+                            set_all_leds(1, 255, 165, 0);  // Oransje for hard restart
+                            vTaskDelay(150 / portTICK_PERIOD_MS);
+                            set_all_leds(0, 0, 0, 0);
+                            vTaskDelay(150 / portTICK_PERIOD_MS);
+                        }
+                        
+                        // Ikke prøv å lukke TCP-forbindelse pent - bare restart
+                        vTaskDelay(300 / portTICK_PERIOD_MS);
+                        esp_restart();
+                    }
+                    else if (strcmp(restart_type, "factory") == 0)
+                    {
+                        // Factory reset - slett NVS innhold før restart
+                        ESP_LOGI(TAG, "Utfører factory reset...");
+                        
+                        // Vis visuell advarsel (rød blinking)
+                        normal_led_control = false;
+                        for (int i = 0; i < 10; i++) {
+                            set_all_leds(1, 255, 0, 0);  // Rød for factory reset
+                            vTaskDelay(100 / portTICK_PERIOD_MS);
+                            set_all_leds(0, 0, 0, 0);
+                            vTaskDelay(100 / portTICK_PERIOD_MS);
+                        }
+                        
+                        // Slett alle NVS-innstillinger
+                        nvs_handle_t my_handle;
+                        esp_err_t err = nvs_open("storage", NVS_READWRITE, &my_handle);
+                        if (err == ESP_OK) {
+                            ESP_LOGI(TAG, "Sletter alle NVS-innstillinger...");
+                            err = nvs_erase_all(my_handle);
+                            if (err == ESP_OK) {
+                                ESP_LOGI(TAG, "NVS-innhold slettet. Committer endringer...");
+                                err = nvs_commit(my_handle);
+                                if (err == ESP_OK) {
+                                    ESP_LOGI(TAG, "NVS-endringer committed vellykket");
+                                } else {
+                                    ESP_LOGE(TAG, "Feil ved commit av NVS-endringer: %s", esp_err_to_name(err));
+                                }
+                            } else {
+                                ESP_LOGE(TAG, "Feil ved sletting av NVS: %s", esp_err_to_name(err));
+                            }
+                            nvs_close(my_handle);
+                        } else {
+                            ESP_LOGE(TAG, "Kunne ikke åpne NVS for factory reset: %s", esp_err_to_name(err));
+                        }
+                        
+                        // Lukk TCP-forbindelse
+                        if (connected) {
+                            tcp_close();
+                            connected = false;
+                        }
+                        
+                        // Vis siste advarsel før restart
+                        for (int i = 0; i < 3; i++) {
+                            set_all_leds(1, 255, 0, 0);
+                            vTaskDelay(200 / portTICK_PERIOD_MS);
+                            set_all_leds(0, 0, 0, 0);
+                            vTaskDelay(200 / portTICK_PERIOD_MS);
+                        }
+                        
+                        ESP_LOGI(TAG, "Factory reset fullført. Restarter...");
+                        vTaskDelay(500 / portTICK_PERIOD_MS);
+                        esp_restart();
+                    }
+                    else
+                    {
+                        ESP_LOGW(TAG, "Ukjent restart-type: '%s'", restart_type);
+                        
+                        // Send feilmelding tilbake
+                        const char *error_msg = "{\"K\":3,\"cmd\":\"restart_error_unknown_type\"}\n";
+                        if (connected) {
+                            send(sock, error_msg, strlen(error_msg), 0);
+                        }
+                    }
+                }
                 else
                 {
                     ESP_LOGW(TAG, "Ukjent kommando: '%s'", command);
