@@ -835,7 +835,105 @@ esp_err_t pole_restart_handler(httpd_req_t *req) {
 
 
 
-
+// Handler for å kontrollere strømtilstand til en målestolpe
+esp_err_t pole_power_handler(httpd_req_t *req) {
+    char buf[100];
+    int ret, remaining = req->content_len;
+    
+    ESP_LOGI(TAG, "pole_power_handler called, content_len: %d", remaining);
+    
+    // Legg til CORS-headere
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    
+    // Hvis dette er en OPTIONS forespørsel, bare returner 200 OK med CORS-headere
+    if (req->method == HTTP_OPTIONS) {
+        httpd_resp_send(req, NULL, 0);
+        return ESP_OK;
+    }
+    
+    if (remaining > sizeof(buf)) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Request too large");
+        return ESP_FAIL;
+    }
+    
+    if ((ret = httpd_req_recv(req, buf, MIN(remaining, sizeof(buf)))) <= 0) {
+        if (ret == HTTPD_SOCK_ERR_TIMEOUT) {
+            httpd_resp_send_408(req);
+        }
+        return ESP_FAIL;
+    }
+    
+    buf[ret] = '\0';
+    ESP_LOGI(TAG, "Mottok data: %s", buf);
+    
+    // Parse JSON data for MAC-adresse og strømtilstand
+    char mac[18] = {0};
+    char power_state[4] = {0};  // "on" eller "off"
+    
+    // Hent MAC-adresse
+    char *mac_start = strstr(buf, "\"mac\":\"");
+    if (mac_start) {
+        mac_start += 7; // Hopp over "mac":"
+        char *mac_end = strchr(mac_start, '\"');
+        if (mac_end && (mac_end - mac_start) < 18) {
+            strncpy(mac, mac_start, mac_end - mac_start);
+            mac[mac_end - mac_start] = '\0';
+        }
+    }
+    
+    // Hent strømtilstand
+    char *power_start = strstr(buf, "\"power\":\"");
+    if (power_start) {
+        power_start += 9; // Hopp over "power":"
+        char *power_end = strchr(power_start, '\"');
+        if (power_end && (power_end - power_start) < 4) {
+            strncpy(power_state, power_start, power_end - power_start);
+            power_state[power_end - power_start] = '\0';
+        }
+    }
+    
+    ESP_LOGI(TAG, "Strømkontroll for MAC: %s, tilstand: %s", mac, power_state);
+    
+    if (strlen(mac) > 0 && strlen(power_state) > 0) {
+        // Bygger kommandoen basert på ønsket strømtilstand
+        char command[32];
+        
+        if (strcmp(power_state, "on") == 0) {
+            sprintf(command, "power: on\n");
+        } else if (strcmp(power_state, "off") == 0) {
+            sprintf(command, "power: off\n");
+        } else {
+            ESP_LOGW(TAG, "Ugyldig strømtilstand: %s", power_state);
+            httpd_resp_set_type(req, "application/json");
+            httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+            httpd_resp_sendstr(req, "{\"status\":\"error\",\"message\":\"Ugyldig strømtilstand\"}");
+            return ESP_OK;
+        }
+        
+        // Send kommandoen til målestolpen
+        if (send_command_to_pole_by_mac(mac, command)) {
+            ESP_LOGI(TAG, "Strømkommando sendt: %s", command);
+        } else {
+            ESP_LOGW(TAG, "Kunne ikke sende strømkommando - målestolpe ikke tilkoblet");
+            httpd_resp_set_type(req, "application/json");
+            httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+            httpd_resp_sendstr(req, "{\"status\":\"error\",\"message\":\"Målestolpe ikke tilkoblet\"}");
+            return ESP_OK;
+        }
+    } else {
+        ESP_LOGW(TAG, "Ugyldig forespørsel - mangler data");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_sendstr(req, "{\"status\":\"error\",\"message\":\"Mangler MAC eller strømtilstand\"}");
+        return ESP_OK;
+    }
+    
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    httpd_resp_sendstr(req, "{\"status\":\"success\",\"message\":\"Strømkommando sendt\"}");
+    
+    return ESP_OK;
+}
 
 
 
@@ -2677,7 +2775,14 @@ httpd_handle_t start_webserver(void) {
         httpd_register_uri_handler(server_handle, &pole_restart);
 
 
-
+        // Pole power API (av/på-funksjonalitet)
+        httpd_uri_t pole_power = {
+            .uri = "/api/v1/pole/power",
+            .method = HTTP_POST,
+            .handler = pole_power_handler,
+            .user_ctx = NULL
+        };
+        httpd_register_uri_handler(server_handle, &pole_power);
 
 
 

@@ -38,6 +38,8 @@
 #include "esp_log.h"
 #include "esp_timer.h"  // For esp_timer_get_time()
 
+#include "esp_sleep.h"
+
 /* Constants that aren't configurable in menuconfig */
 #define HOST_IP_ADDR "192.168.4.1"
 #define PORT 3333
@@ -701,6 +703,12 @@ void nvs_read()
             sprintf(var_s, "offset_%d", i);
             err |= nvs_get_u16(my_handle, var_s, &offsets[i]);
             
+            if (err != ESP_OK || offsets[i] == 0) {
+                offsets[i] = 4000;  // fallback-verdi
+                ESP_LOGW(TAG, "Setter offset[%d] til fallback-verdi: %d", i, offsets[i]);
+                err = ESP_OK;  // Unngå at én feil blokkerer alle
+            }
+            
             sprintf(var_s, "break_limit_%d", i);
             err |= nvs_get_u16(my_handle, var_s, &break_limit[i]);
 
@@ -1054,7 +1062,7 @@ static void publish_settings()
             break_limit[4],
             break_limit[5],
             break_limit[6]);
-    sprintf(event, "{\"K\":2,\"M\":\"%s\",\"E\":%s,\"O\":%s,\"B\":%s}\n", mac_addr, enabled_s, offset_s, break_s);
+    sprintf(event, "{\"K\":2,\"M\":\"%s\",\"E\":%s,\"O\":%s,\"B\":%s,\"P\":true}\n", mac_addr, enabled_s, offset_s, break_s);
     ESP_LOGI(TAG, "%s", event);
     xQueueSendToBack(xQueueBreak, &event, portMAX_DELAY);
 }
@@ -1132,6 +1140,7 @@ static esp_err_t example_espnow_init(void)
     return ESP_OK;
 }
 
+
 static void check_socket()
 {
     char rx_buffer[128];
@@ -1153,6 +1162,10 @@ static void check_socket()
             if (rx_buffer[i] == '\n')
             {
                 command[cmd_index] = 0;
+                
+                // Logg mottatt kommando for debugging
+                ESP_LOGI(TAG, "Prosesserer kommando: '%s'", command);
+                
                 if (strncmp(command, "break", 5) == 0)
                 {
                     int adc_nr = (uint8_t)atoi(command + 6);
@@ -1168,13 +1181,13 @@ static void check_socket()
                         publish_settings();
                     }
                 }
-                if (strncmp(command, "time", 4) == 0)
+                else if (strncmp(command, "time", 4) == 0)
                 {
                     timestamp = strtol(command + 5, NULL, 10);
                     ESP_LOGI(TAG, "Got timestamp: %lld", timestamp);
                     example_espnow_init();
                 }
-                if (strncmp(command, "hsearch", 7) == 0)
+                else if (strncmp(command, "hsearch", 7) == 0)
                 {
                     int channel = strtol(command + 8, NULL, 10);
                     ESP_LOGI(TAG, "Hsearch channel: %d", channel);
@@ -1186,7 +1199,7 @@ static void check_socket()
                     // Sett status til kalibrering når hsearch starter
                     set_system_status(STATUS_CALIBRATING);
                 }
-                if (strncmp(command, "enabled", 7) == 0)
+                else if (strncmp(command, "enabled", 7) == 0)
                 {
                     int sensor_nr = (uint8_t)atoi(command + 8);
                     bool is_enabled = (bool)atoi(command + 11);
@@ -1199,6 +1212,76 @@ static void check_socket()
                         publish_settings();    
                     }
                 }
+                else if (strncmp(command, "power", 5) == 0)
+                {
+                    ESP_LOGI(TAG, "Mottok power kommando: '%s'", command);
+                    
+                    if (strncmp(command + 7, "off", 3) == 0)  // Endret fra +6 til +7 for å hoppe over mellomrom
+                    {
+                        ESP_LOGI(TAG, "Mottok power off kommando - setter ESP32 i deep sleep");
+                        
+                        // Vis visuell indikasjon på at enheten skal soves
+                        normal_led_control = false;
+                        for (int i = 0; i < 3; i++) {
+                            set_all_leds(1, 255, 0, 0);  // Rød for avstengning
+                            vTaskDelay(200 / portTICK_PERIOD_MS);
+                            set_all_leds(0, 0, 0, 0);
+                            vTaskDelay(200 / portTICK_PERIOD_MS);
+                        }
+                        
+                        // Lukk TCP-forbindelse på en ren måte
+                        if (connected) {
+                            const char *shutdown_msg = "{\"K\":3,\"cmd\":\"powering_off\"}\n";
+                            send(sock, shutdown_msg, strlen(shutdown_msg), 0);
+                            vTaskDelay(100 / portTICK_PERIOD_MS);
+                            tcp_close();
+                            connected = false;
+                        }
+                        
+                        // Slå av alle LED-er før deep sleep
+                        set_all_leds(0, 0, 0, 0);
+                        
+                        ESP_LOGI(TAG, "Går inn i deep sleep modus");
+                        vTaskDelay(500 / portTICK_PERIOD_MS);
+                        
+                        // Sett deep sleep med timer wakeup (f.eks. hver 30 sekund for å sjekke om vi skal våkne)
+                        //esp_sleep_enable_timer_wakeup(30 * 1000000); // 30 sekunder i mikrosekunder, ønsker ikke automatisk opvåking fra deepsleep, må gjøres fysisk
+                        esp_deep_sleep_start();
+                    }
+                    else if (strncmp(command + 7, "on", 2) == 0)  // Endret fra +6 til +7 for å hoppe over mellomrom
+                    {
+                        ESP_LOGI(TAG, "Mottok power on kommando - enheten er allerede våken");
+                        
+                        // Vis visuell indikasjon på at enheten er aktiv
+                        normal_led_control = false;
+                        for (int i = 0; i < 3; i++) {
+                            set_all_leds(1, 0, 255, 0);  // Grønn for aktivering
+                            vTaskDelay(200 / portTICK_PERIOD_MS);
+                            set_all_leds(0, 0, 0, 0);
+                            vTaskDelay(200 / portTICK_PERIOD_MS);
+                        }
+                        
+                        // Send bekreftelse tilbake til server
+                        const char *response_msg = "{\"K\":3,\"cmd\":\"power_on_confirmed\"}\n";
+                        if (connected) {
+                            send(sock, response_msg, strlen(response_msg), 0);
+                        }
+                        
+                        // Gjenoppta normal drift
+                        set_system_status(STATUS_READY);
+                    }
+                    else
+                    {
+                        ESP_LOGW(TAG, "Ukjent power kommando: '%s'", command);
+                    }
+                }
+
+
+                else
+                {
+                    ESP_LOGW(TAG, "Ukjent kommando: '%s'", command);
+                }
+
                 cmd_index = 0;
             }
             else
@@ -1208,6 +1291,12 @@ static void check_socket()
         }
     }
 }
+
+
+
+
+
+
 
 static void tcp_client_task(void *pvParameters)
 {
@@ -1311,23 +1400,28 @@ static void wifi_init()
 
 
 
-
-
-
-
-static void pwm_setup(){
+static void pwm_setup()
+{
+    // Initialiser senderkanal
     pwm_init(LEDC_TIMER_0, PWM_0_FREQUENCY, LEDC_CHANNEL_0, PWM_SEND_0, 0);
-    for (int i = 0; i < NUM_SENSORS; i++)
-    {
-        ESP_LOGI(TAG, "Offset for sensor %d = %d", i, (int)offsets[i]);
-        pwm_init(LEDC_TIMER_1, PWM_0_FREQUENCY, rcv_channels[i], rcv_gpios[i], offsets[i]);
 
+    // Initialiser mottakerkanaler
+    for (int i = 0; i < NUM_SENSORS; i++) {
+        pwm_init(LEDC_TIMER_1, PWM_0_FREQUENCY, rcv_channels[i], rcv_gpios[i], offsets[i]);
+    }
+
+    // Aktiver duty MED offset (hpoint) for alle mottakerkanaler
+    for (int i = 0; i < NUM_SENSORS; i++) {
         ledc_set_duty_with_hpoint(LEDC_MODE, rcv_channels[i], LEDC_DUTY, offsets[i]);
         ledc_update_duty(LEDC_MODE, rcv_channels[i]);
-        ESP_LOGI(TAG, "Break for sensor %d = %d", i, (int)break_limit[i]);
-        ESP_LOGI(TAG, "Sensor %d enabled = %d", i, (int)enabled[i]);
     }
+
+    // Aktiver duty for senderkanal
+    ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_0, LEDC_DUTY);
+    ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_0);
 }
+
+
 
 // Deklarasjon av WiFi-event handler
 static void wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data); 
@@ -1340,7 +1434,48 @@ void app_main(void)
     // Initialiser komponenter
     nvs_setup();
     nvs_read();
+
+
+
+    // Sjekk oppvåkningsårsak etter deep sleep
+    esp_sleep_wakeup_cause_t wakeup_reason = esp_sleep_get_wakeup_cause();
+    bool should_stay_awake = false;
+
+    switch(wakeup_reason) {
+        // case ESP_SLEEP_WAKEUP_TIMER:
+        //     ESP_LOGI(TAG, "Våknet fra deep sleep på grunn av timer");
+            
+        //     // Prøv å koble til nettverk for å sjekke om det er en "power on"-kommando
+        //     // Dette er en forenklet tilnærming - i praksis kan vi implementere mer sofistikert logikk
+        //     should_stay_awake = true; // For nå, anta at vi skal forbli våkne
+        //     break;
+            
+        case ESP_SLEEP_WAKEUP_UNDEFINED:
+        default:
+            ESP_LOGI(TAG, "Normal oppstart (ikke fra deep sleep)");
+            should_stay_awake = true;
+            break;
+    }
+
+    // Hvis vi ikke skal forbli våkne, gå tilbake til deep sleep
+    if (!should_stay_awake) {
+        ESP_LOGI(TAG, "Går tilbake til deep sleep");
+        esp_sleep_enable_timer_wakeup(30 * 1000000); // 30 sekunder
+        esp_deep_sleep_start();
+    }
+
+
+
+
     pwm_setup();
+    // for (int i = 0; i < NUM_SENSORS; i++) {
+    //     //ledc_set_duty(LEDC_MODE, rcv_channels[i], LEDC_DUTY);
+    //     ledc_update_duty(LEDC_MODE, rcv_channels[i]);
+    // }
+
+
+
+
     bool system_busy = false; 
 
 
@@ -1669,10 +1804,37 @@ void app_main(void)
                 vTaskDelay(5 / portTICK_PERIOD_MS);  // Kort pause mellom målinger
             }
             
+
+
+            //vTaskDelay(pdMS_TO_TICKS(10));  // Settling time etter offset-endring
+            vTaskDelay(pdMS_TO_TICKS(2));  // Settling time etter offset-endring
+
+            // Ekstra ADC-stabilisering: mål 8 ganger og ta snitt
+            int stabilized_sum = 0;
+            for (int i = 0; i < 8; ++i) {
+                stabilized_sum += adc_raw[0][highpoint_channel];
+                vTaskDelay(pdMS_TO_TICKS(2));
+            }
+            adc_raw[0][highpoint_channel] = stabilized_sum / 8;
+
+
+
+
+
             // Oppdater adc_raw med gjennomsnittlig verdi hvis vi har gyldige målinger
             if (valid_readings > 0) {
-                adc_raw[0][highpoint_channel] = sum_readings / valid_readings;
-                
+                //adc_raw[0][highpoint_channel] = sum_readings / valid_readings;
+
+                vTaskDelay(pdMS_TO_TICKS(10));  // Settling time etter offset-endring
+
+                // Ekstra ADC-stabilisering: ny gjennomsnittsberegning over 8 målinger
+                int stabilized_sum = 0;
+                for (int i = 0; i < 8; ++i) {
+                    stabilized_sum += sum_readings / valid_readings;
+                    vTaskDelay(pdMS_TO_TICKS(2));
+                }
+                adc_raw[0][highpoint_channel] = stabilized_sum / 8;
+
                 // Oppdater max hvis den nye verdien er høyere
                 if (adc_raw[0][highpoint_channel] > highpoint_max) {
                     // Logg betydelige nye høydepunkter
@@ -1703,7 +1865,7 @@ void app_main(void)
             // Sett break_limit basert på highpoint_max (robust versjon)
             if (highpoint_max > 500 && verification_value > 300) {  // Krev at både max OG verifikasjon er bra
                 // Sett grensen til 80% av maksimumsverdien
-                break_limit[highpoint_channel] = (uint16_t)(highpoint_max * 0.9);
+                break_limit[highpoint_channel] = (uint16_t)(highpoint_max * 0.8);
                 ESP_LOGI(TAG, "Satt ny break_limit for sensor %d: %d (80%% av maks %d)", 
                         highpoint_channel, break_limit[highpoint_channel], highpoint_max);
             } else {
@@ -1795,7 +1957,9 @@ void app_main(void)
                     
             //highpoint_offset += 30;
             highpoint_offset += 1000;
-            vTaskDelay(15 / portTICK_PERIOD_MS);  // Legg til en kort pause mellom justeringene
+            //vTaskDelay(15 / portTICK_PERIOD_MS);  // Legg til en kort pause mellom justeringene
+            vTaskDelay(5 / portTICK_PERIOD_MS);  // Legg til en kort pause mellom justeringene
+
         }
         else
         {

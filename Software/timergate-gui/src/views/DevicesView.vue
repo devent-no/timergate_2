@@ -92,6 +92,10 @@
                   <span class="icon">✏️</span>
                   Endre navn
                 </button>
+                <button @click="openPowerModal(pole)" class="action-button power" :class="{ 'power-off': !isPowerOn(pole) }">
+                  <span class="icon">{{ isPowerOn(pole) ? '🔌' : '💤' }}</span>
+                  {{ isPowerOn(pole) ? 'Slå av enhet' : 'Slå på enhet' }}
+                </button>
               </div>
             </div>
             
@@ -253,6 +257,45 @@
         </div>
       </div>
     </div>
+
+
+    <!-- Power Off Modal -->
+    <div v-if="showPowerModal" class="modal-overlay">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h2>Slå av enhet</h2>
+          <button @click="cancelPowerOff" class="close-button">×</button>
+        </div>
+        
+        <div class="modal-body">
+          <div class="warning-message">
+            <strong>⚠️ Advarsel:</strong> Dette vil sette enheten i deep sleep-modus.
+          </div>
+          
+          <p>Er du sikker på at du vil slå av <strong>{{ selectedPole ? selectedPole.name : '' }}</strong>?</p>
+          
+          <div class="power-off-info">
+            <h4>Viktig informasjon:</h4>
+            <ul>
+              <li>Enheten vil gå i deep sleep og bruke minimal strøm</li>
+              <li>Enheten vil <strong>ikke</strong> motta nettverkskommandoer</li>
+              <li>Du må <strong>fysisk trykke reset-knappen</strong> på enheten for å slå den på igjen</li>
+              <li>All nettverkstilkobling vil bli brutt</li>
+            </ul>
+          </div>
+        </div>
+        
+        <div class="modal-footer">
+          <button @click="cancelPowerOff" class="cancel-button">Avbryt</button>
+          <button @click="confirmPowerOff" class="confirm-button power-off" :disabled="isPoweringOff">
+            {{ isPoweringOff ? 'Slår av...' : 'Slå av enhet' }}
+          </button>
+        </div>
+      </div>
+    </div>
+
+
+
     
     <!-- Toast notifications -->
     <div class="toast-container">
@@ -283,6 +326,10 @@ export default {
     return {
       // Expanded state
       expandedPoles: {},
+
+      // Power modal
+      showPowerModal: false,
+      isPoweringOff: false,
       
       // Restart modal
       showRestartModal: false,
@@ -293,6 +340,8 @@ export default {
       // Rename modal
       showRenameModal: false,
       newDeviceName: "",
+
+      powerStatus: {}, // Holder styr på strømstatus for hver enhet (indeksert etter MAC)
       
       // Logs modal
       showLogsModal: false,
@@ -306,6 +355,7 @@ export default {
       isScanning: false,
       isCalibratingMap: {},
       isDiagnosticsRunning: false,
+
     };
   },
   computed: {
@@ -318,6 +368,16 @@ export default {
   },
   methods: {
     // Hjelpefunksjoner
+
+    isPowerOn(pole) {
+      // Sjekk om vi har en registrert status for denne enheten
+      if (pole.mac in this.powerStatus) {
+        return this.powerStatus[pole.mac];
+      }
+      // Anta at enheten er på hvis det ikke er en eksplisitt status
+      return true;
+    },
+
     isExpanded(pole) {
       return !!this.expandedPoles[pole.mac];
     },
@@ -479,7 +539,168 @@ export default {
         this.isRestarting = false;
       }
     },
+
+
+    // Power Modal
+    openPowerModal(pole) {
+      const currentStatus = this.isPowerOn(pole);
+      
+      if (currentStatus) {
+        // Enheten er på, vis warning for power off
+        this.selectedPole = pole;
+        this.showPowerModal = true;
+      } else {
+        // Enheten er av, vis informasjon om reset
+        this.showToast('info', `${pole.name} er i deep sleep. Trykk reset-knappen på enheten for å slå den på igjen.`);
+      }
+    },
+
+    cancelPowerOff() {
+      this.showPowerModal = false;
+      this.selectedPole = null;
+    },
+
+    async confirmPowerOff() {
+      if (!this.selectedPole) return;
+      
+      this.isPoweringOff = true;
+      
+      try {
+        this.showToast('info', `Slår av ${this.selectedPole.name}...`);
+        
+        const response = await fetch(`http://${this.serverAddress}/api/v1/pole/power`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Accept": "application/json"
+          },
+          body: JSON.stringify({
+            mac: this.selectedPole.mac,
+            power: "off"
+          })
+        });
+        
+        const data = await response.json();
+        
+        if (data.status === "success") {
+          // Oppdater strømstatusen i lokal tilstand
+          this.powerStatus = {
+            ...this.powerStatus,
+            [this.selectedPole.mac]: false
+          };
+          
+          this.showToast('success', `${this.selectedPole.name} går nå i deep sleep. Trykk reset-knappen på enheten for å slå den på igjen.`);
+          
+          // Lukk modal
+          this.showPowerModal = false;
+          this.selectedPole = null;
+        } else {
+          this.showToast('error', `Kunne ikke slå av ${this.selectedPole.name}: ${data.message || 'Ukjent feil'}`);
+        }
+      } catch (error) {
+        console.error("Feil ved strømkontroll:", error);
+        this.showToast('error', 'Feil ved kommunikasjon med serveren');
+      } finally {
+        this.isPoweringOff = false;
+      }
+    },
+
+
+
+
+
+
+
     
+    // async togglePower(pole) {
+    //   try {
+    //     const currentStatus = this.isPowerOn(pole);
+    //     const newStatus = !currentStatus;
+        
+    //     // Spesiell håndtering for "slå på" kommando
+    //     if (newStatus === true) {
+    //       // Enheten er av (i deep sleep) og kan ikke motta kommandoer
+    //       this.showToast('info', `${pole.name} er i deep sleep. Trykk reset-knappen på enheten for å slå den på igjen.`);
+    //       return; // Ikke send API-kall
+    //     }
+        
+    //     // Vis at handlingen er i gang (kun for "slå av")
+    //     this.showToast('info', `Slår av ${pole.name}...`);
+        
+    //     const response = await fetch(`http://${this.serverAddress}/api/v1/pole/power`, {
+    //       method: "POST",
+    //       headers: {
+    //         "Content-Type": "application/json",
+    //         "Accept": "application/json"
+    //       },
+    //       body: JSON.stringify({
+    //         mac: pole.mac,
+    //         power: "off"
+    //       })
+    //     });
+        
+    //     const data = await response.json();
+        
+    //     if (data.status === "success") {
+    //       // Oppdater strømstatusen i lokal tilstand
+    //       this.powerStatus = {
+    //         ...this.powerStatus,
+    //         [pole.mac]: false
+    //       };
+          
+    //       this.showToast('success', `${pole.name} går nå i deep sleep. Trykk reset-knappen på enheten for å slå den på igjen.`);
+    //     } else {
+    //       this.showToast('error', `Kunne ikke slå av ${pole.name}: ${data.message || 'Ukjent feil'}`);
+    //     }
+    //   } catch (error) {
+    //     console.error("Feil ved strømkontroll:", error);
+    //     this.showToast('error', 'Feil ved kommunikasjon med serveren');
+    //   }
+    // },
+
+
+    // async togglePower(pole) {
+    //   try {
+    //     const currentStatus = this.isPowerOn(pole);
+    //     const newStatus = !currentStatus;
+        
+    //     // Vis at handlingen er i gang
+    //     this.showToast('info', `${newStatus ? 'Slår på' : 'Slår av'} ${pole.name}...`);
+        
+    //       const response = await fetch(`http://${this.serverAddress}/api/v1/pole/power`, {
+    //       method: "POST",
+    //       headers: {
+    //         "Content-Type": "application/json",
+    //         "Accept": "application/json"
+    //       },
+    //       body: JSON.stringify({
+    //         mac: pole.mac,
+    //         power: newStatus ? "on" : "off"
+    //       })
+    //     });
+        
+    //     const data = await response.json();
+        
+    //     if (data.status === "success") {
+    //       // Oppdater strømstatusen i lokal tilstand
+    //       this.powerStatus = {
+    //         ...this.powerStatus,
+    //         [pole.mac]: newStatus
+    //       };
+          
+    //       this.showToast('success', `${pole.name} er nå ${newStatus ? 'slått på' : 'slått av'}`);
+    //     } else {
+    //       this.showToast('error', `Kunne ikke ${newStatus ? 'slå på' : 'slå av'} ${pole.name}: ${data.message || 'Ukjent feil'}`);
+    //     }
+    //   } catch (error) {
+    //     console.error("Feil ved strømkontroll:", error);
+    //     this.showToast('error', 'Feil ved kommunikasjon med serveren');
+    //   }
+    // },
+
+
+
+
     // Rename Modal
     openRenameModal(pole) {
       this.selectedPole = pole;
@@ -635,6 +856,28 @@ export default {
     
     dismissToast(index) {
       this.toasts.splice(index, 1);
+    },
+    mounted() {
+      // Initialiser strømstatus for alle målestolper
+      this.poles.forEach(pole => {
+        if (!(pole.mac in this.powerStatus)) {
+          this.powerStatus[pole.mac] = true; // Anta at alle er på ved oppstart
+        }
+      });
+    },
+    watch: {
+      poles: {
+        handler(newPoles) {
+          // Oppdater strømstatus for nye målestolper
+          newPoles.forEach(pole => {
+            if (!(pole.mac in this.powerStatus)) {
+              this.powerStatus[pole.mac] = true; // Anta at nye enheter er på
+            }
+          });
+        },
+        deep: true,
+        immediate: true
+      }
     }
   }
 };
@@ -953,6 +1196,25 @@ h2, h3 {
   background-color: #fff3e0;
   color: #e65100;
 }
+
+.action-button.power {
+  background-color: #ffebee;
+  color: #c62828;
+}
+
+.action-button.power:hover {
+  background-color: #f89ba4;
+}
+
+.action-button.power-off {
+  background-color: #e0e0e0;
+  color: #616161;
+}
+
+.action-button.power-off:hover {
+  background-color: #bdbdbd;
+}
+
 
 .action-button.rename:hover {
   background-color: #ffe0b2;
@@ -1346,4 +1608,43 @@ h2, h3 {
     width: 100%;
   }
 }
+
+
+
+.power-off-info {
+  background-color: #fff3e0;
+  border-left: 4px solid #ff9800;
+  padding: 12px 16px;
+  margin-top: 16px;
+}
+
+.power-off-info h4 {
+  margin-top: 0;
+  margin-bottom: 8px;
+  color: #ef6c00;
+}
+
+.power-off-info ul {
+  margin: 0;
+  padding-left: 20px;
+}
+
+.power-off-info li {
+  margin-bottom: 4px;
+  color: #bf360c;
+}
+
+.confirm-button.power-off {
+  background-color: #d32f2f;
+}
+
+.confirm-button.power-off:hover:not(:disabled) {
+  background-color: #b71c1c;
+}
+
+
+
+
+
+
 </style>
