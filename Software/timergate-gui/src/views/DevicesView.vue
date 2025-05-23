@@ -5,7 +5,7 @@
     <div class="devices-container">
       <div class="status-summary">
         <div class="status-card">
-          <div class="status-value">{{ poles.length }}</div>
+          <div class="status-value">{{ connectedPoles.length }}</div>
           <div class="status-label">Tilkoblede enheter</div>
         </div>
         <div class="status-card">
@@ -18,8 +18,8 @@
         </button>
       </div>
       
-      <div v-if="poles.length > 0" class="devices-list">
-        <div v-for="pole in poles" :key="pole.id" class="device-card">
+      <div v-if="connectedPoles.length > 0" class="devices-list">
+        <div v-for="pole in connectedPoles" :key="pole.id" class="device-card">
           <div class="device-header">
             <div class="device-title">
               <h2>{{ pole.name }}</h2>
@@ -359,6 +359,27 @@ export default {
     };
   },
   computed: {
+    // Filtrer kun aktive/tilkoblede enheter
+    connectedPoles() {
+      return this.poles.filter(pole => {
+        // Sjekk om pole har verdier og at minst én verdi er større enn 0
+        const hasValues = pole.values && Array.isArray(pole.values) && pole.values.length > 0;
+        const hasValidValues = hasValues && pole.values.some(value => 
+          value !== undefined && value !== null && value > 0
+        );
+        
+        // Sjekk også om pole eksplisitt er markert som tilkoblet
+        const isConnected = pole.connected !== false;
+        
+        // Debug-logging for å se hva som skjer
+        if (!hasValidValues && pole.mac) {
+          console.log(`Filtrerer bort pole ${pole.mac}: hasValues=${hasValues}, values=`, pole.values);
+        }
+        
+        return hasValidValues && isConnected;
+      });
+    },
+    
     filteredLogs() {
       if (this.logLevel === "all") {
         return this.deviceLogs;
@@ -366,8 +387,16 @@ export default {
       return this.deviceLogs.filter(log => log.level.toLowerCase() === this.logLevel);
     }
   },
+
   methods: {
-    // Hjelpefunksjoner
+    countActiveSensors() {
+      let count = 0;
+      // Bruk connectedPoles i stedet for poles
+      this.connectedPoles.forEach(pole => {
+        count += this.countPoleActiveSensors(pole);
+      });
+      return count;
+    },
 
     isPowerOn(pole) {
       // Sjekk om vi har en registrert status for denne enheten
