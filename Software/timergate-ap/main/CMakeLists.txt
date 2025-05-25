@@ -1,4 +1,4 @@
-idf_component_register(SRCS "timergate_server.c" "mongoose.c"
+idf_component_register(SRCS "før_fiks_2405_timergate_server.c" "timergate_server.c" "mongoose.c"
                            
                     INCLUDE_DIRS ".")
 

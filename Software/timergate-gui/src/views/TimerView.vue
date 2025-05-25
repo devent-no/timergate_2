@@ -1,110 +1,128 @@
 <template>
   <div class="timer-container">
-    <!-- Status og hovedklokke -->
-    <div class="status-indicator" :class="statusClass">
+    <!-- Status-indikator - kun ved feil -->
+    <div v-if="status === 'error'" class="status-indicator" :class="statusClass">
       {{ statusText }}
     </div>
 
-    <div class="timer-display" :class="statusClass">
-      <div class="time">{{ formattedTime }}</div>
-      <div class="penalties" v-if="!isEliminated">
-        <div class="penalty-badge faults" v-if="faults > 0">
-          <div class="fault-icon">✋</div>
-          <div class="penalty-count">{{ faults }}</div>
+    <!-- Hovedinnhold: Timer til venstre, Logg til høyre -->
+    <div class="main-content">
+      <!-- Timer-seksjon -->
+      <div class="timer-section">
+        <div class="timer-display" :class="statusClass">
+          <div class="time">{{ formattedTime }}</div>
+          <div class="penalties" v-if="!isEliminated">
+            <div class="penalty-badge faults" v-if="faults > 0">
+              <div class="fault-icon">✋</div>
+              <div class="penalty-count">{{ faults }}</div>
+            </div>
+            <div class="penalty-badge refusals" v-if="refusals > 0">
+              <div class="refusal-icon">✊</div>
+              <div class="penalty-count">{{ refusals }}</div>
+            </div>
+          </div>
+          <div class="eliminated-banner" v-if="isEliminated">
+            DISQUALIFIED
+          </div>
         </div>
-        <div class="penalty-badge refusals" v-if="refusals > 0">
-          <div class="refusal-icon">✊</div>
-          <div class="penalty-count">{{ refusals }}</div>
+
+        <!-- Store touch-vennlige penalty-kontroller -->
+        <div class="penalty-controls-touch">
+          <!-- Faults -->
+          <div class="penalty-group-touch">
+            <div class="penalty-header-touch">
+              <div class="fault-icon-large">✋</div>
+              <span class="penalty-label-large">Faults</span>
+            </div>
+            <div class="penalty-buttons-touch">
+              <button @click="decreaseFaults" class="penalty-button-touch minus" :disabled="faults <= 0">
+                <span class="button-symbol">−</span>
+              </button>
+              <div class="penalty-value-large">{{ faults }}</div>
+              <button @click="increaseFaults" class="penalty-button-touch plus">
+                <span class="button-symbol">+</span>
+              </button>
+            </div>
+          </div>
+          
+          <!-- Refusals -->
+          <div class="penalty-group-touch">
+            <div class="penalty-header-touch">
+              <div class="refusal-icon-large">✊</div>
+              <span class="penalty-label-large">Refusals</span>
+            </div>
+            <div class="penalty-buttons-touch">
+              <button @click="decreaseRefusals" class="penalty-button-touch minus" :disabled="refusals <= 0">
+                <span class="button-symbol">−</span>
+              </button>
+              <div class="penalty-value-large">{{ refusals }}</div>
+              <button @click="increaseRefusals" class="penalty-button-touch plus">
+                <span class="button-symbol">+</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Disqualification -->
+          <div class="penalty-group-touch">
+            <div class="penalty-header-touch">
+              <div class="disqualify-icon-large">🙅</div>
+            </div>
+            <button 
+              @click="toggleElimination" 
+              class="eliminate-button-touch"
+              :class="{ 'eliminated': isEliminated }"
+            >
+              {{ isEliminated ? 'REMOVE DQ' : 'DISQUALIFY' }}
+            </button>
+          </div>
         </div>
-      </div>
-      <div class="eliminated-banner" v-if="isEliminated">
-        DISQUALIFIED
-      </div>
-    </div>
 
-    <!-- Kontrollpanel -->
-    <div class="control-panel">
-      <button @click="resetTimer" class="reset-button">
-        <span class="button-icon">↺</span>
-        <span class="button-text">RESET</span>
-      </button>
-      <!--<button v-if="status !== 'ready'" @click="calibrateSensors" class="calibrate-button">-->
-        <button v-if="false" @click="calibrateSensors" class="calibrate-button">
-        <span class="button-icon">⚙️</span>
-        <span class="button-text">CALIBRATE</span>
-      </button>
-    </div>
-
-    <!-- Straffepoeng kontroller -->
-    <div class="penalty-controls">
-      <div class="penalty-group">
-        <div class="penalty-header">
-          <div class="fault-icon">✋</div>
-          <span class="penalty-label">Faults</span>
-        </div>
-        <div class="penalty-buttons">
-          <button @click="decreaseFaults" class="penalty-button minus" :disabled="faults <= 0">−</button>
-          <span class="penalty-value">{{ faults }}</span>
-          <button @click="increaseFaults" class="penalty-button plus">+</button>
-        </div>
-      </div>
-      
-      <div class="penalty-group">
-        <div class="penalty-header">
-          <div class="refusal-icon">✊</div>
-          <span class="penalty-label">Refusals</span>
-        </div>
-        <div class="penalty-buttons">
-          <button @click="decreaseRefusals" class="penalty-button minus" :disabled="refusals <= 0">−</button>
-          <span class="penalty-value">{{ refusals }}</span>
-          <button @click="increaseRefusals" class="penalty-button plus">+</button>
-        </div>
-      </div>
-      
-
-      <div class="penalty-group">
-      <div class="penalty-header">
-        <div class="disqualify-icon">🙅</div>
-        <span class="penalty-label"></span>
-      </div>
-      <button 
-        @click="toggleElimination" 
-        class="eliminate-button"
-        :class="{ 'eliminated': isEliminated }"
-      >
-        <span class="button-text">{{ isEliminated ? 'REMOVE DQ' : 'DISQUALIFIED' }}</span>
-      </button>
-    </div>
-
-
-    </div>
-
-    <!-- Siste tider -->
-    <div class="recent-times">
-      <h3>Previous results</h3>
-      <div class="times-list">
-
-      <div v-for="(time, index) in recentTimes" :key="index" class="time-entry">
-        <span class="time-number">{{ index + 1 }}</span>
-        <div class="time-value-container">
-          <span class="time-of-day">{{ time.timeOfDay }}</span>
-          <span class="time-separator"> | </span>
-          <span class="time-value">{{ formatTime(time.time) }}</span>
-        </div>
-        <div class="time-penalties-container">
-          <span class="time-penalty-item" v-if="time.faults">
-            <span class="fault-icon small">✋</span> {{ time.faults }}
-          </span>
-          <span class="time-penalty-item" v-if="time.refusals">
-            <span class="refusal-icon small">✊</span> {{ time.refusals }}
-          </span>
-          <span class="time-eliminated" v-if="time.eliminated">DQ</span>
+        <!-- Kompakt reset-knapp -->
+        <div class="control-panel-compact">
+          <button @click="resetTimer" class="reset-button-compact">
+            <span class="button-icon-small">↺</span>
+            <span class="button-text-small">RESET</span>
+          </button>
         </div>
       </div>
 
+      <!-- Logg-seksjon -->
+      <div class="log-section">
+        <div class="log-header">
+          <h3>Siste resultater</h3>
+          <div class="log-controls">
+            <button @click="clearAllResults" class="log-button clear-all" :disabled="recentTimes.length === 0">
+              <span class="icon">🗑️</span>
+              Tøm alle
+            </button>
+          </div>
+        </div>
+        <div class="times-list-compact">
+          <div v-for="(time, index) in recentTimes" :key="time.id" class="time-entry-compact">
+            <div class="time-details-compact">
+              <div class="time-main-info">
+                <span class="time-of-day">{{ time.timeOfDay }}</span>
+                <span class="time-value-large">{{ formatTime(time.time) }}</span>
+              </div>
+              <div class="time-penalties-row">
+                <span class="simple-delete" @click="removeResult(index)">🗑️</span>
+                <div class="time-penalties">
+                  <span class="penalty-item" v-if="time.faults">
+                    <span class="fault-icon small">✋</span> {{ time.faults }}
+                  </span>
+                  <span class="penalty-item" v-if="time.refusals">
+                    <span class="refusal-icon small">✊</span> {{ time.refusals }}
+                  </span>
+                  <span class="eliminated-indicator" v-if="time.eliminated">DQ</span>
+                  <span v-if="!time.faults && !time.refusals && !time.eliminated" class="clean-run">Clean</span>
+                </div>
+              </div>
+            </div>
+          </div>
 
-        <div v-if="recentTimes.length === 0" class="no-times">
-          Ingen resultater registrert ennå
+          <div v-if="recentTimes.length === 0" class="no-times">
+            Ingen resultater registrert ennå
+          </div>
         </div>
       </div>
     </div>
@@ -113,7 +131,7 @@
 
 <script>
 export default {
-    props: {
+  props: {
     time: {
       type: String,
       default: null
@@ -126,7 +144,6 @@ export default {
       type: Array,
       default: () => []
     },
-    // Nye props
     serverAddress: {
       type: String,
       default: "timergate.local"
@@ -142,31 +159,27 @@ export default {
   },
   data() {
     return {
-      status: 'ready', // 'ready', 'running', 'finished', 'error'
+      status: 'ready',
       currentTime: 0,
       timerRunning: false,
       faults: 0,
       refusals: 0,
       isEliminated: false,
-      recentTimes: [], // Array av {time, faults, refusals, eliminated}
+      recentTimes: [],
       timerStartTime: 0,
       lastPassageTime: 0,
-      lastKnownPassagesLength: 0  // Legg til denne linjen
+      lastKnownPassagesLength: 0,
+      nextResultId: 1 // For å gi hver result en unik ID
     };
   },
   computed: {
     statusText() {
       switch (this.status) {
-        case 'ready':
-          return 'READY';
-        case 'running':
-          return 'RUNNING';
-        case 'finished':
-          return 'FINISHED';
-        case 'error':
-          return 'ERROR!';
-        default:
-          return 'READY';
+        case 'ready': return 'READY';
+        case 'running': return 'RUNNING';
+        case 'finished': return 'FINISHED';
+        case 'error': return 'ERROR!';
+        default: return 'READY';
       }
     },
     statusClass() {
@@ -188,21 +201,10 @@ export default {
       const hundredths = Math.floor((totalMs % 1000) / 10);
       
       return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}.${hundredths.toString().padStart(2, '0')}`;
-    },
-    // Beregn de 5 siste tidene fra passages-prop
-    lastTimes() {
-      if (!this.passages || this.passages.length === 0) {
-        return [];
-      }
-      
-      return [...this.passages]
-        .sort((a, b) => b.time - a.time)
-        .slice(0, 5);
     }
   },
 
   watch: {
-    // Observatør for passages - oppdaterer timer og siste tider når nye passeringer registreres
     passages: {
       handler(newPassages) {
         console.log("🕒 TIMER WATCH:", { 
@@ -211,13 +213,10 @@ export default {
           status: this.status
         });
         
-        // Sjekk om lengden har økt (nye passeringer er lagt til)
         if (newPassages.length > this.lastKnownPassagesLength) {
-          // Antall nye passeringer
           const numNewPassages = newPassages.length - this.lastKnownPassagesLength;
           console.log(`🔔 ${numNewPassages} NYE PASSERINGER DETEKTERT`);
           
-          // Få den nyeste passeringen
           const latestPassage = newPassages[newPassages.length - 1];
           
           if (this.status === 'running') {
@@ -235,15 +234,13 @@ export default {
             this.status = 'running';
           }
           
-          // Oppdater sist kjente lengde
           this.lastKnownPassagesLength = newPassages.length;
         }
       },
       deep: true,
       immediate: true
     },
-    
-    // Overvåk tilkoblingsstatus
+
     connected(isConnected) {
       if (!isConnected && this.status !== 'error') {
         this.status = 'error';
@@ -251,8 +248,7 @@ export default {
         this.status = this.timerRunning ? 'running' : 'ready';
       }
     },
-    
-    // Overvåk sensorstatus
+
     sensorsOk(areOk) {
       if (!areOk && this.status !== 'error') {
         this.status = 'error';
@@ -260,31 +256,25 @@ export default {
         this.status = this.timerRunning ? 'running' : 'ready';
       }
     },
-    
-    // Nye watches for straffer
+
     faults(newValue) {
-      // Oppdater siste resultat hvis vi er i 'finished' tilstand
       if (this.status === 'finished' && this.recentTimes.length > 0) {
         this.recentTimes[0].faults = newValue;
       }
     },
-    
+
     refusals(newValue) {
-      // Oppdater siste resultat hvis vi er i 'finished' tilstand
       if (this.status === 'finished' && this.recentTimes.length > 0) {
         this.recentTimes[0].refusals = newValue;
       }
     },
-    
+
     isEliminated(newValue) {
-      // Oppdater siste resultat hvis vi er i 'finished' tilstand
       if (this.status === 'finished' && this.recentTimes.length > 0) {
         this.recentTimes[0].eliminated = newValue;
       }
     }
   },
-
-
 
   methods: {
     startTimer() {
@@ -292,7 +282,7 @@ export default {
       this.timerInterval = setInterval(() => {
         const now = Date.now();
         this.currentTime = now - this.timerStartTime;
-      }, 10); // Oppdater hvert 10ms for smooth visning
+      }, 10);
     },
     
     stopTimer() {
@@ -305,21 +295,12 @@ export default {
       this.currentTime = 0;
       this.resetPenalties();
       this.status = 'ready';
-      //this.status = this.connected && this.sensorsOk ? 'ready' : 'error';
-      // Emit en hendelse for å informere foreldre-komponenten
-      //this.$emit('reset');
     },
     
     resetPenalties() {
       this.faults = 0;
       this.refusals = 0;
       this.isEliminated = false;
-    },
-    
-    calibrateSensors() {
-      // Emit en hendelse som foreldre-komponenten kan lytte etter
-      this.$emit('calibrate');
-      this.status = 'ready';
     },
     
     increaseFaults() {
@@ -347,40 +328,76 @@ export default {
     },
     
     addCompletedTime() {
-      // Vi må først hente den siste passeringen fra props.passages
       if (this.passages && this.passages.length > 0) {
         const latestPassage = this.passages[this.passages.length - 1];
-        
-        // Lag et dato-objekt fra passeringstidspunktet
         const passageDate = new Date(latestPassage.time);
         
-        // Henter timer, minutter og sekunder og formaterer dem riktig
         const hours = passageDate.getHours().toString().padStart(2, '0');
         const minutes = passageDate.getMinutes().toString().padStart(2, '0');
         const seconds = passageDate.getSeconds().toString().padStart(2, '0');
-        
-        // Kombinerer til timeOfDay-streng
         const timeOfDay = `${hours}:${minutes}:${seconds}`;
         
-        console.log("Original timestamp:", latestPassage.time);
-        console.log("Formatert klokkeslett:", timeOfDay);
-        
-        // Legg til gjeldende tid og feil i listen over siste tider
-        this.recentTimes.unshift({
+        const newResult = {
+          id: this.nextResultId++,
           time: this.currentTime,
           faults: this.faults,
           refusals: this.refusals,
           eliminated: this.isEliminated,
-          timeOfDay: timeOfDay
-        });
+          timeOfDay: timeOfDay,
+          timestamp: Date.now()
+        };
         
-        // Behold bare de 5 siste tidene
-        if (this.recentTimes.length > 5) {
+        this.recentTimes.unshift(newResult);
+        
+        // Behold maks 15 resultater
+        if (this.recentTimes.length > 15) {
           this.recentTimes.pop();
         }
+        
+        // Lagre til localStorage for persistens
+        this.saveResultsToStorage();
       }
-    }
-    ,
+    },
+    
+    removeResult(index) {
+      this.recentTimes.splice(index, 1);
+      this.saveResultsToStorage();
+    },
+    
+    clearAllResults() {
+      if (confirm('Er du sikker på at du vil fjerne alle resultater fra loggen?')) {
+        this.recentTimes = [];
+        this.saveResultsToStorage();
+      }
+    },
+    
+    saveResultsToStorage() {
+      try {
+        localStorage.setItem('timergate_results', JSON.stringify(this.recentTimes));
+        localStorage.setItem('timergate_next_id', this.nextResultId.toString());
+      } catch (error) {
+        console.warn('Kunne ikke lagre resultater til localStorage:', error);
+      }
+    },
+    
+    loadResultsFromStorage() {
+      try {
+        const savedResults = localStorage.getItem('timergate_results');
+        const savedNextId = localStorage.getItem('timergate_next_id');
+        
+        if (savedResults) {
+          this.recentTimes = JSON.parse(savedResults);
+        }
+        
+        if (savedNextId) {
+          this.nextResultId = parseInt(savedNextId, 10);
+        }
+      } catch (error) {
+        console.warn('Kunne ikke laste resultater fra localStorage:', error);
+        this.recentTimes = [];
+        this.nextResultId = 1;
+      }
+    },
     
     formatTime(ms) {
       const minutes = Math.floor(ms / 60000);
@@ -390,34 +407,26 @@ export default {
       return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}.${hundredths.toString().padStart(2, '0')}`;
     }
   },
+
   mounted() {
     console.log("🔧 TIMERVIEW MONTERT MED PASSAGES:", {
       passagesLength: this.passages?.length,
       passages: this.passages
     });
     
-    // Sjekk om det finnes passeringer ved oppstart
+    // Last inn lagrede resultater
+    this.loadResultsFromStorage();
+    
     if (this.passages && this.passages.length > 0) {
       console.log("⚠️ PASSAGES FINNES ALLEREDE VED OPPSTART, MEN WATCH IKKE TRIGGET");
     }
     
     this.checkInterval = setInterval(() => {
-      // tidligere console.log her – nå er funksjonen tom
+      // Check interval placeholder
     }, 5000);
-    
-  
-    /*
-    this.checkInterval = setInterval(() => {
-      console.log("🔍 PASSAGES SJEKK:", {
-        length: this.passages?.length, 
-        lastPassage: this.passages?.length > 0 ? this.passages[this.passages.length - 1] : null
-      });
-    }, 5000); // Sjekk hvert 5. sekund
-    */
-    
-  }
- ,
- beforeDestroy() {
+  },
+
+  beforeDestroy() {
     if (this.timerInterval) {
       clearInterval(this.timerInterval);
     }
@@ -425,9 +434,6 @@ export default {
       clearInterval(this.checkInterval);
     }
   }
-  
-
-
 };
 </script>
 
@@ -435,27 +441,27 @@ export default {
 .timer-container {
   display: flex;
   flex-direction: column;
-  align-items: center;
   width: 100%;
-  max-width: 800px;
-  margin: 0 auto;
+  height: 100vh;
   padding: 1rem;
   font-family: 'Arial', sans-serif;
   color: #333;
+  box-sizing: border-box;
 }
 
-/* Status-indikator */
+/* Status-indikator - kun ved feil */
 .status-indicator {
-  font-size: 1.5rem;
+  font-size: 1.8rem;
   font-weight: bold;
-  padding: 0.5rem 2rem;
-  border-radius: 6px;
+  padding: 0.8rem 2rem;
+  border-radius: 8px;
   margin-bottom: 1.5rem;
   text-align: center;
-  max-width: 200px;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  max-width: 300px;
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15);
   text-transform: uppercase;
-  letter-spacing: 1px;
+  letter-spacing: 2px;
+  align-self: center;
 }
 
 .status-ready {
@@ -481,296 +487,407 @@ export default {
 
 @keyframes pulse {
   0% { box-shadow: 0 0 0 0 rgba(244, 67, 54, 0.7); }
-  70% { box-shadow: 0 0 0 6px rgba(244, 67, 54, 0); }
+  70% { box-shadow: 0 0 0 10px rgba(244, 67, 54, 0); }
   100% { box-shadow: 0 0 0 0 rgba(244, 67, 54, 0); }
 }
 
-/* Timer-display */
-.timer-display {
-  width: 100%;
-  text-align: center;
-  padding: 2rem;
-  margin-bottom: 1.5rem;
-  border-radius: 8px;
-  border: 1px solid #E0E0E0;
+/* Hovedinnhold: Timer til venstre, Logg til høyre */
+.main-content {
+  display: flex;
+  flex: 1;
+  gap: 2rem;
+  height: 100%;
+  min-height: 0;
+}
+
+.timer-section {
+  flex: 2.5;
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.log-section {
+  flex: 1;
+  max-width: 350px;
+  display: flex;
+  flex-direction: column;
   background-color: #FFFFFF;
-  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.1);
+  border: 1px solid #E0E0E0;
+  border-radius: 12px;
+  padding: 1.5rem;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  min-height: 0;
+}
+
+/* Timer display */
+.timer-display {
+  background-color: #FFFFFF;
+  border: 2px solid #E0E0E0;
+  border-radius: 16px;
+  padding: 2rem;
+  text-align: center;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.1);
 }
 
 .timer-display .time {
-  font-size: 5rem;
+  font-size: 6rem;
   font-weight: bold;
   font-family: 'Roboto Mono', monospace;
   margin-bottom: 1rem;
   color: #333;
-  letter-spacing: 2px;
+  letter-spacing: 3px;
+  line-height: 1;
 }
 
 .timer-display .penalties {
   display: flex;
   justify-content: center;
-  gap: 1.5rem;
-  min-height: 4rem; /* Fast høyde for penalty-området */
+  gap: 2rem;
+  min-height: 4rem;
 }
 
 .timer-display .eliminated-banner {
-  min-height: 4rem; /* Samme høyde som penalties */
+  min-height: 4rem;
   display: flex;
   align-items: center;
   justify-content: center;
+  background-color: #FFEBEE;
+  color: #C62828;
+  border: 2px solid #FFCDD2;
+  padding: 1rem 2rem;
+  border-radius: 8px;
+  font-size: 1.8rem;
+  font-weight: bold;
+  margin-top: 1rem;
 }
 
 .penalty-badge {
   display: flex;
   align-items: center;
-  padding: 0.5rem 1rem;
-  border-radius: 20px;
-  font-size: 1.2rem;
+  padding: 0.8rem 1.5rem;
+  border-radius: 25px;
+  font-size: 1.5rem;
 }
 
 .penalty-badge.faults {
   background-color: #FFF3E0;
   color: #E65100;
-  border: 1px solid #FFE0B2;
+  border: 2px solid #FFE0B2;
 }
 
 .penalty-badge.refusals {
   background-color: #E3F2FD;
   color: #0D47A1;
-  border: 1px solid #BBDEFB;
+  border: 2px solid #BBDEFB;
 }
 
 .fault-icon, .refusal-icon {
-  font-size: 1.4rem;
-  margin-right: 6px;
+  font-size: 1.8rem;
+  margin-right: 8px;
 }
 
 .penalty-count {
-  font-size: 1.4rem;
+  font-size: 1.8rem;
   font-weight: bold;
 }
 
-.eliminated-banner {
-  background-color: #FFEBEE;
-  color: #C62828;
-  border: 1px solid #FFCDD2;
-  padding: 0.8rem 1.5rem;
-  border-radius: 6px;
-  font-size: 1.5rem;
-  font-weight: bold;
-  margin-top: 0.5rem;
-}
-
-/* Kontrollpanel */
-.control-panel {
+/* Touch-optimerade penalty-kontroller */
+.penalty-controls-touch {
   display: flex;
-  justify-content: center;
-  gap: 1.5rem;
-  margin-bottom: 2rem;
-  width: 100%;
+  justify-content: space-around;
+  gap: 1rem;
+  background-color: #F8F9FA;
+  padding: 1.5rem;
+  border-radius: 16px;
+  border: 1px solid #E0E0E0;
 }
 
-.reset-button, .calibrate-button {
+.penalty-group-touch {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  flex: 1;
+}
+
+.penalty-header-touch {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  margin-bottom: 1rem;
+}
+
+.fault-icon-large, .refusal-icon-large, .disqualify-icon-large {
+  font-size: 3rem;
+  margin-bottom: 0.5rem;
+}
+
+.penalty-label-large {
+  font-weight: bold;
+  font-size: 1.2rem;
+  color: #424242;
+}
+
+.penalty-buttons-touch {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.penalty-button-touch {
+  width: 4rem;
+  height: 4rem;
+  font-size: 2rem;
+  font-weight: bold;
+  border: 2px solid;
+  border-radius: 50%;
+  cursor: pointer;
+  transition: all 0.2s ease;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
-  font-size: 1rem;
+  /* Touch-optimized tap target */
+  min-width: 44px;
+  min-height: 44px;
+}
+
+.penalty-button-touch.minus {
+  background-color: #FFEBEE;
+  color: #C62828;
+  border-color: #FFCDD2;
+}
+
+.penalty-button-touch.plus {
+  background-color: #E8F5E9;
+  color: #2E7D32;
+  border-color: #C8E6C9;
+}
+
+.penalty-button-touch:hover:not(:disabled) {
+  transform: scale(1.05);
+}
+
+.penalty-button-touch.minus:hover:not(:disabled) {
+  background-color: #FFCDD2;
+}
+
+.penalty-button-touch.plus:hover:not(:disabled) {
+  background-color: #C8E6C9;
+}
+
+.penalty-button-touch:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.penalty-value-large {
+  width: 3rem;
+  text-align: center;
+  font-size: 2.5rem;
   font-weight: bold;
-  padding: 0.8rem 1.5rem;
-  border: none;
-  border-radius: 6px;
+  color: #333;
+}
+
+.button-symbol {
+  font-size: 2.5rem;
+  line-height: 1;
+}
+
+.eliminate-button-touch {
+  width: 100%;
+  max-width: 200px;
+  height: 4rem;
+  background-color: #FFFFFF;
+  color: #424242;
+  border: 2px solid #E0E0E0;
+  font-weight: bold;
+  font-size: 1.1rem;
+  border-radius: 8px;
   cursor: pointer;
   transition: all 0.2s ease;
+  /* Touch-optimized tap target */
+  min-height: 44px;
 }
 
-.reset-button {
+.eliminate-button-touch:hover {
+  background-color: #f1e2e2;
+  transform: translateY(-2px);
+}
+
+.eliminate-button-touch.eliminated {
+  background-color: #FFEBEE;
+  color: #C62828;
+  border-color: #FFCDD2;
+}
+
+.eliminate-button-touch.eliminated:hover {
+  background-color: #FFCDD2;
+}
+
+/* Kompakt kontrollpanel */
+.control-panel-compact {
+  display: flex;
+  justify-content: center;
+}
+
+.reset-button-compact {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0.8rem 2rem;
   background-color: #F44336;
   color: white;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  font-weight: bold;
+  font-size: 1rem;
+  /* Touch-optimized tap target */
+  min-height: 44px;
 }
 
-.reset-button:hover {
+.reset-button-compact:hover {
   background-color: #D32F2F;
   transform: translateY(-2px);
   box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
 }
 
-.calibrate-button {
-  background-color: #2196F3;
-  color: white;
-}
-
-.calibrate-button:hover {
-  background-color: #1976D2;
-  transform: translateY(-2px);
-  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
-}
-
-.button-icon {
+.button-icon-small {
   font-size: 1.2rem;
 }
 
-/* Straffepoeng kontroller */
-.penalty-controls {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
-  gap: 1rem;
-  margin-bottom: 2rem;
-  width: 100%;
+.button-text-small {
+  font-size: 1rem;
 }
 
-.penalty-group {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  padding: 1rem;
-  background-color: #FFFFFF;
-  border: 1px solid #E0E0E0;
-  border-radius: 8px;
-  min-width: 140px;
-}
-
-.penalty-header {
-  display: flex;
-  align-items: center;
-  margin-bottom: 0.8rem;
-}
-
-.penalty-label {
-  font-weight: bold;
-  font-size: 1.1rem;
-  margin-left: 6px;
+/* Logg-seksjon */
+.log-section h3 {
+  font-size: 1.5rem;
+  margin: 0 0 1rem 0;
   color: #424242;
+  text-align: center;
 }
 
-.penalty-buttons {
+.log-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1rem;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.log-header h3 {
+  margin: 0;
+  text-align: left;
+  flex: 1;
+}
+
+.log-controls {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.log-button {
   display: flex;
   align-items: center;
-  gap: 10px;
-}
-
-.penalty-button {
-  width: 2rem;
-  height: 2rem;
-  font-size: 1.2rem;
-  font-weight: bold;
-  border: none;
-  border-radius: 50%;
+  gap: 0.3rem;
+  padding: 0.4rem 0.8rem;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  background-color: white;
+  color: #666;
   cursor: pointer;
   transition: all 0.2s ease;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  font-size: 0.8rem;
+  /* Touch-optimized tap target */
+  min-height: 36px;
 }
 
-.penalty-button.minus {
-  background-color: #FFEBEE;
-  color: #C62828;
+.log-button:hover:not(:disabled) {
+  background-color: #f5f5f5;
+  border-color: #ccc;
 }
 
-.penalty-button.plus {
-  background-color: #E8F5E9;
-  color: #2E7D32;
-}
-
-.penalty-button:hover:not(:disabled) {
-  transform: scale(1.1);
-}
-
-.penalty-button.minus:hover:not(:disabled) {
-  background-color: #FFCDD2;
-}
-
-.penalty-button.plus:hover:not(:disabled) {
-  background-color: #C8E6C9;
-}
-
-.penalty-button:disabled {
+.log-button:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
 
-.penalty-value {
-  width: 1.5rem;
-  text-align: center;
-  font-size: 1.5rem;
-  font-weight: bold;
+.log-button.clear-all {
+  color: #d32f2f;
+  border-color: #ffcdd2;
 }
 
-.eliminate-button {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  background-color: #FFFFFF; /* Endre dette til #FFFFFF for hvit bakgrunn */
-  color: #424242;
-  border: 1px solid #E0E0E0;
-  font-weight: bold;
-  font-size: 0.9rem;
-  padding: 0.8rem 1.2rem;
-  border-radius: 6px;
-  cursor: pointer;
-  transition: all 0.2s ease;
+.log-button.clear-all:hover:not(:disabled) {
+  background-color: #ffebee;
+  border-color: #d32f2f;
 }
 
-.eliminate-button:hover {
-  background-color: #f1e2e2;
-  transform: translateY(-2px);
-}
-
-.eliminate-button.eliminated {
-  background-color: #FFFFFF; /* Endre dette til #FFFFFF for hvit bakgrunn */
-  color: #7d2e2e;
-  border-color: #e6c8c8;
-}
-
-.eliminate-button.eliminated:hover {
-  background-color: #FFFFFF;
-}
-
-/* Siste tider */
-.recent-times {
-  width: 100%;
-  margin-top: 1rem;
-  background-color: #FFFFFF;
-  border: 1px solid #E0E0E0;
-  border-radius: 8px;
-  overflow: hidden;
-}
-
-.recent-times h3 {
-  font-size: 1.2rem;
-  margin: 0;
-  padding: 0.8rem;
-  text-align: center;
-  background-color: #F5F5F5;
-  border-bottom: 1px solid #E0E0E0;
-  color: #424242;
-}
-
-.times-list {
-  width: 100%;
-  max-height: 250px;
+.times-list-compact {
+  flex: 1;
   overflow-y: auto;
+  min-height: 0;
 }
 
-.time-entry {
+.time-entry-compact {
   display: flex;
   align-items: center;
-  padding: 0.7rem 1rem;
+  padding: 1rem;
   border-bottom: 1px solid #EEEEEE;
   transition: background-color 0.2s;
+  position: relative;
 }
 
-.time-entry:hover {
+.time-entry-compact:hover {
   background-color: #FAFAFA;
 }
 
-.time-number {
-  width: 2rem;
-  height: 2rem;
-  font-size: 0.9rem;
+.time-entry-compact:hover .remove-button {
+  opacity: 1;
+}
+
+.remove-button {
+  position: absolute;
+  right: 0.5rem;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: 50%;
+  background-color: #ffebee;
+  color: #d32f2f;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  opacity: 0;
+  /* Touch-optimized tap target */
+  min-width: 32px;
+  min-height: 32px;
+}
+
+.remove-button:hover {
+  background-color: #ffcdd2;
+  transform: translateY(-50%) scale(1.1);
+}
+
+/* På touch-enheter, vis remove-knappen alltid */
+@media (hover: none) {
+  .remove-button {
+    opacity: 0.7;
+  }
+}
+
+.time-number-large {
+  width: 3rem;
+  height: 3rem;
+  font-size: 1.2rem;
   font-weight: bold;
   background-color: #F5F5F5;
   color: #424242;
@@ -778,127 +895,166 @@ export default {
   display: flex;
   align-items: center;
   justify-content: center;
-  margin-right: 0.8rem;
+  margin-right: 1rem;
+  flex-shrink: 0;
 }
 
-.time-value {
+.time-details-compact {
   flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.time-main-info {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
+
+.time-of-day {
+  font-size: 0.9rem;
+  color: #666;
+}
+
+.time-value-large {
   font-family: 'Roboto Mono', monospace;
-  font-size: 1.2rem;
+  font-size: 1.4rem;
   font-weight: bold;
   color: #333;
 }
 
-.time-penalties-container {
+.simple-delete {
+  font-size: 1rem;
+  cursor: pointer;
+  padding: 0.3rem 0.5rem;
+  opacity: 0.5;
+  transition: all 0.2s ease;
+  border-radius: 4px;
+  background-color: transparent;
+  color: #d32f2f;
+  /* Touch-optimized tap target */
+  min-width: 32px;
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.simple-delete:hover {
+  opacity: 1;
+  background-color: #ffebee;
+  transform: scale(1.05);
+}
+
+/* På touch-enheter, vis delete-knappen tydligere */
+@media (hover: none) {
+  .simple-delete {
+    opacity: 0.7;
+  }
+}
+
+.time-penalties-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+}
+
+.time-penalties {
   display: flex;
   gap: 0.8rem;
   align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
-.time-penalty-item {
+.penalty-item {
   display: flex;
   align-items: center;
   gap: 4px;
   font-size: 0.9rem;
   background-color: #F5F5F5;
-  padding: 3px 6px;
-  border-radius: 4px;
+  padding: 3px 8px;
+  border-radius: 6px;
+}
+
+.clean-run {
+  font-size: 0.9rem;
+  color: #4CAF50;
+  font-weight: 500;
+  font-style: italic;
+}
+
+.penalty-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.9rem;
+  background-color: #F5F5F5;
+  padding: 3px 8px;
+  border-radius: 6px;
 }
 
 .fault-icon.small, .refusal-icon.small {
-  font-size: 0.9rem;
+  font-size: 1rem;
 }
 
-.time-eliminated {
+.eliminated-indicator {
   background-color: #FFEBEE;
   color: #C62828;
-  padding: 3px 6px;
-  border-radius: 4px;
+  padding: 3px 8px;
+  border-radius: 6px;
   font-weight: bold;
-  font-size: 0.8rem;
+  font-size: 0.9rem;
 }
 
 .no-times {
   text-align: center;
   color: #757575;
-  padding: 1.5rem;
+  padding: 2rem;
   font-style: italic;
 }
 
-/* Responsive styling */
+/* Responsiv design för iPad */
+@media (max-width: 1024px) {
+  .main-content {
+    flex-direction: column;
+    gap: 1rem;
+  }
+  
+  .timer-section {
+    flex: none;
+  }
+  
+  .log-section {
+    flex: none;
+    max-height: 300px;
+  }
+  
+  .timer-display .time {
+    font-size: 4.5rem;
+  }
+  
+  .penalty-controls-touch {
+    flex-direction: column;
+    gap: 1.5rem;
+  }
+}
+
 @media (max-width: 768px) {
   .timer-display .time {
     font-size: 3.5rem;
   }
   
-  .control-panel {
-    flex-direction: column;
-    align-items: center;
-    gap: 0.8rem;
+  .penalty-button-touch {
+    width: 3.5rem;
+    height: 3.5rem;
+    font-size: 1.8rem;
   }
   
-  .reset-button, .calibrate-button {
-    width: 100%;
-    max-width: 250px;
+  .penalty-value-large {
+    font-size: 2rem;
   }
-  
-  .penalty-controls {
-    flex-direction: column;
-    align-items: center;
-  }
-  
-  .penalty-group {
-    width: 100%;
-    max-width: 250px;
-  }
-}
-
-@media (max-width: 480px) {
-  .timer-display .time {
-    font-size: 2.8rem;
-  }
-  
-  .status-indicator {
-    font-size: 1.2rem;
-    padding: 0.4rem 1rem;
-  }
-  
-  .eliminated-banner {
-    font-size: 1.2rem;
-    padding: 0.5rem 1rem;
-  }
-}
-
-.disqualify-icon {
-  font-size: 1.4rem;
-  display: flex;
-  justify-content: center;
-  margin-bottom: 8px;
-  width: 100%;
-  text-align: center;
-}
-
-.penalty-group {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  padding: 1rem;
-  background-color: #FFFFFF;
-  border: 1px solid #E0E0E0;
-  border-radius: 8px;
-  min-width: 140px;
-}
-
-.eliminate-button {
-  background-color: #FFFFFF; /* Hvit bakgrunn */
-  color: #424242;
-  border: 1px solid #E0E0E0;
-  font-weight: bold;
-  font-size: 0.9rem;
-  padding: 0.8rem 1.2rem;
-  border-radius: 6px;
-  cursor: pointer;
-  transition: all 0.2s ease;
-  /* Fjern flex-relaterte egenskaper som tidligere var her */
 }
 </style>
