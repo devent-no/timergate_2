@@ -135,6 +135,10 @@ uint32_t ready_start_time = 0;
 bool auto_calibration_started = false;
 
 
+// For å holde styr på forrige tilstand per sensor
+bool prev_sensor_break[NUM_SENSORS] = {false}; 
+
+
 // Nye variabler for WiFi-gjenoppkobling
 static bool wifi_connected = false;
 static int wifi_reconnect_attempts = 0;
@@ -1021,15 +1025,19 @@ static void publish_sensor()
     //ESP_LOGI(TAG, "%s", adc_vals_s); //MIDLERTIDIG for å ikke drukne loggen
 }
 
-static void publish_break(int broken)
+
+static void publish_break(int sensor_id, int broken)
 {
     char *event = malloc(140);
     struct timeval tv_now;
     gettimeofday(&tv_now, NULL);
-    ESP_LOGI(TAG, "Break state change: %d @ %lld", curr_broken, tv_now.tv_sec);
-    sprintf(event, "{\"K\":1,\"M\":\"%s\",\"B\":%d,\"T\":%lld, \"U\":%ld}\n", mac_addr, broken, tv_now.tv_sec, tv_now.tv_usec);
+    ESP_LOGI(TAG, "Break state change sensor %d: %d @ %lld", sensor_id, broken, tv_now.tv_sec);
+    sprintf(event, "{\"K\":1,\"M\":\"%s\",\"S\":%d,\"B\":%d,\"T\":%lld, \"U\":%ld}\n", 
+            mac_addr, sensor_id, broken, tv_now.tv_sec, tv_now.tv_usec);
     xQueueSendToBack(xQueueBreak, &event, portMAX_DELAY);
 }
+
+
 
 static void publish_settings()
 {
@@ -2098,12 +2106,24 @@ void app_main(void)
         }
         else
         {
-            // Send event hvis det er en endring i tilstand
-            if (curr_broken != prev_broken)
-            {
-                publish_break(curr_broken);
+
+            // Sjekk hver sensor individuelt for endringer og send break-events
+            for (int i = 0; i < NUM_SENSORS; i++) {
+                if (enabled[i] && !highpoint_search) {
+                    bool current_sensor_break = (adc_raw[0][i] < break_limit[i]);
+                    
+                    // Send event hvis denne sensoren har endret tilstand
+                    if (current_sensor_break != prev_sensor_break[i]) {
+                        publish_break(i, current_sensor_break ? 1 : 0);
+                        prev_sensor_break[i] = current_sensor_break;
+                        
+                        ESP_LOGI(TAG, "Sensor %d endret tilstand: %s (ADC: %d, limit: %d)", 
+                                i, current_sensor_break ? "BRUTT" : "OK", 
+                                adc_raw[0][i], break_limit[i]);
+                    }
+                }
             }
-            prev_broken = curr_broken;
+
         }
     }
 }

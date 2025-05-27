@@ -450,14 +450,18 @@ void tcp_client_handler(void *arg) {
                     }
                    
                    
+
                     else if (strncmp(command, "{\"K\":1,", 7) == 0) {
-                        // Parse JSON-strengen
+                        // Parse JSON-strengen for K=1 (sensor break events)
                         char mac_str[18] = {0};
                         int32_t break_value = -1;
+                        int32_t sensor_id = -1;
                         uint32_t time_sec = 0;
                         uint32_t time_usec = 0;
                         
-                        // Finn MAC
+                        ESP_LOGI(TAG, "Mottat K=1 JSON: %s", command);
+                        
+                        // Finn MAC-adresse
                         char *mac_start = strstr(command, "\"M\":\"");
                         if (mac_start) {
                             mac_start += 5; // Hopp over "M":"
@@ -468,49 +472,82 @@ void tcp_client_handler(void *arg) {
                             }
                         }
                         
-                        // Finn break-verdien
+                        // Finn sensor ID (S-feltet)
+                        char *sensor_start = strstr(command, "\"S\":");
+                        if (sensor_start) {
+                            sensor_start += 4; // Hopp over "S":
+                            sensor_id = atoi(sensor_start);
+                        }
+                        
+                        // Finn break-verdien (B-feltet)
                         char *break_start = strstr(command, "\"B\":");
                         if (break_start) {
                             break_start += 4; // Hopp over "B":
                             break_value = atoi(break_start);
                         }
                         
-                        // Finn tidspunktet
+                        // Finn tidspunktet (T-feltet)
                         char *time_start = strstr(command, "\"T\":");
                         if (time_start) {
                             time_start += 4; // Hopp over "T":
                             time_sec = atoi(time_start);
                         }
                         
+                        // Finn mikrosekunder (U-feltet)
                         char *usec_start = strstr(command, "\"U\":");
                         if (usec_start) {
                             usec_start += 4; // Hopp over "U":
                             time_usec = atoi(usec_start);
                         }
                         
-                        // Viktig: Vi må bare behandle brudd-hendelser (B=1), ikke gjenopprettinger (B=0)
-                        if (break_value == 1 && strlen(mac_str) > 0) {
+                        ESP_LOGI(TAG, "JSON-parsing resultat: MAC=%s, sensor_id=%d, break_value=%d, time_sec=%u, time_usec=%u",
+                                mac_str, sensor_id, break_value, time_sec, time_usec);
+                        
+                        // Valider at vi har nødvendige data og at det er et faktisk brudd
+                        if (break_value == 1 && strlen(mac_str) > 0 && sensor_id >= 0 && sensor_id < MAX_SENSORS_PER_POLE) {
                             // Konverter MAC-adressen til bytes
                             uint8_t mac_bytes[ESP_NOW_ETH_ALEN];
                             sscanf(mac_str, "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx", 
                                 &mac_bytes[0], &mac_bytes[1], &mac_bytes[2],
                                 &mac_bytes[3], &mac_bytes[4], &mac_bytes[5]);
                             
-                            // Logg for debugging
-                            ESP_LOGI(TAG, "Parsert sensorbrudd fra JSON (K=1): MAC=%s, time=%u.%06u",
-                                    mac_str, time_sec, time_usec);
-                                    
-                            // Når vi får K=1 med B=1, antar vi at det er sensor med ID=0
-                            // Dette er en midlertidig løsning inntil vi får faktisk sensor_id
-                            int32_t sensor_id = 0;
+                            ESP_LOGI(TAG, "Sensorbrudd mottatt: MAC=%s, sensor_id=%d, break_value=%d, tid=%u.%06u",
+                                    mac_str, sensor_id, break_value, time_sec, time_usec);
                             
-                            // Denne loggen viser spesifikt hva vi sender til passeringsdeteksjonen
-                            ESP_LOGI(TAG, "Kaller process_break_for_passage_detection med sensor_id=%d", sensor_id);
+                            // Send alltid rådata til WebSocket først
+                            send_break_to_websocket(mac_bytes, time_sec, time_usec, sensor_id, false);
                             
-                            // Process break_value som sensor_id=0 for passeringsdeteksjon
-                            process_break_for_passage_detection(mac_bytes, sensor_id, time_sec, time_usec);
+                            // Bruk GJELDENDE SERVERTID i stedet for målestolpe-tid for å unngå tidsproblemer
+                            struct timeval tv_now;
+                            gettimeofday(&tv_now, NULL);
+                            uint32_t current_time_sec = tv_now.tv_sec;
+                            uint32_t current_time_usec = tv_now.tv_usec;
+                            
+                            ESP_LOGI(TAG, "Bruker servertid for passeringsdeteksjon: %u.%06u (i stedet for målestolpe-tid: %u.%06u)",
+                                    current_time_sec, current_time_usec, time_sec, time_usec);
+                            
+                            // Send til passeringsdeteksjon med server-tid
+                            ESP_LOGI(TAG, "Sender til passeringsdeteksjon: sensor_id=%d", sensor_id);
+                            bool passage_detected = process_break_for_passage_detection(mac_bytes, sensor_id, current_time_sec, current_time_usec);
+                            
+                            if (passage_detected) {
+                                ESP_LOGI(TAG, "🎯 PASSERING DETEKTERT fra sensor %d på MAC %s", sensor_id, mac_str);
+                            }
+                        } else {
+                            // Forbedret logging for debugging
+                            if (break_value == 0) {
+                                ESP_LOGI(TAG, "Ignorerer sensor-gjenoppretting: sensor_id=%d, mac=%s", sensor_id, mac_str);
+                            } else if (sensor_id < 0) {
+                                ESP_LOGW(TAG, "JSON parsing feilet - sensor_id ikke funnet! JSON: %s", command);
+                            } else {
+                                ESP_LOGW(TAG, "Ugyldig break-melding: break_value=%d, sensor_id=%d, mac_length=%d", 
+                                        break_value, sensor_id, strlen(mac_str));
+                            }
                         }
                     }
+
+
+
 
 
                     else if (strncmp(command, "{\"K\":0,", 7) == 0 && strstr(command, "\"B\":[") != NULL) {
