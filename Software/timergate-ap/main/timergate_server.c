@@ -32,9 +32,6 @@
 
 
 
-static void ws_send_passering_json(const char *mac, double timestamp, int sensors[], int count);
-static esp_err_t ws_passering_handler(httpd_req_t *req);
-
 // Definer MIN-makroen
 #ifndef MIN
 #define MIN(a, b) (((a) < (b)) ? (a) : (b))
@@ -145,8 +142,25 @@ static SemaphoreHandle_t sent_passages_mutex;
 // Konfigurasjon for passeringsdeteksjon
 static int passage_debounce_ms = 1000;   // Standard debounce-tid: 1 sekund
 static int min_sensors_for_passage = 2;  // Standard minimum antall sensorer
-static int sequence_timeout_ms = 250;   // Timeout for sekvens: 5 sekunder
+static int sequence_timeout_ms = 500;   // Timeout for sekvens: 5 sekunder
 
+
+
+// Datastruktur for passeringshistorikk
+typedef struct {
+    uint8_t mac[ESP_NOW_ETH_ALEN];
+    uint32_t timestamp_sec;
+    uint32_t timestamp_usec;
+    int sensors_count;
+    int sensor_ids[MAX_SENSORS_PER_POLE];  // Hvilke sensorer som utløste
+    uint32_t time_since_previous_ms;       // Tid siden forrige i millisekunder
+} passage_history_t;
+
+#define MAX_PASSAGE_HISTORY 20
+static passage_history_t passage_history[MAX_PASSAGE_HISTORY];
+static int passage_history_count = 0;
+static uint32_t total_passages = 0;
+static SemaphoreHandle_t passage_history_mutex;
 
 
 
@@ -172,7 +186,6 @@ static void log_event_passering(const char *mac, int sensor_id, const char *stat
             printf("%d%s", sensors_used[i], (i < sensor_count - 1) ? "," : "");
         }
         printf("]\n");
-        ws_send_passering_json(mac, timestamp, sensors_used, sensor_count);
     } else if (strcmp(status, "TIMEOUT") == 0) {
         ESP_LOGW(TAG, "⏱️ TIMEOUT: MAC=%s, sensor=%d, tid=%.3f, sensorer utløst=%d",
                  mac, sensor_id, timestamp, count);
@@ -198,8 +211,46 @@ esp_err_t websocket_test_page_handler(httpd_req_t *req);
 bool should_ignore_break(const uint8_t *mac, int32_t sensor_id, uint32_t time_sec, uint32_t time_micros);
 void send_break_to_websocket(const uint8_t *mac_addr, uint32_t time_sec, uint32_t time_micros, int32_t sensor_id, bool filtered);
 bool process_break_for_passage_detection(const uint8_t *mac_addr, int32_t sensor_id, uint32_t time_sec, uint32_t time_micros);
-int triggered_count = 0;
-int triggered_sensors[MAX_SENSORS_PER_POLE];
+
+
+// Funksjon for å legge til passering i historikk
+void add_to_passage_history(const uint8_t *mac, uint32_t time_sec, uint32_t time_usec, 
+                           int *sensor_ids, int sensor_count) {
+    xSemaphoreTake(passage_history_mutex, portMAX_DELAY);
+    
+    // Beregn tid siden forrige passering
+    uint32_t time_since_previous_ms = 0;
+    if (passage_history_count > 0) {
+        uint64_t current_time_ms = (uint64_t)time_sec * 1000 + time_usec / 1000;
+        uint64_t last_time_ms = (uint64_t)passage_history[0].timestamp_sec * 1000 + 
+                               passage_history[0].timestamp_usec / 1000;
+        time_since_previous_ms = (uint32_t)(current_time_ms - last_time_ms);
+    }
+    
+    // Flytt eksisterende data ned
+    for (int i = MIN(passage_history_count, MAX_PASSAGE_HISTORY - 1); i > 0; i--) {
+        passage_history[i] = passage_history[i-1];
+    }
+    
+    // Legg til ny passering øverst
+    memcpy(passage_history[0].mac, mac, ESP_NOW_ETH_ALEN);
+    passage_history[0].timestamp_sec = time_sec;
+    passage_history[0].timestamp_usec = time_usec;
+    passage_history[0].sensors_count = sensor_count;
+    passage_history[0].time_since_previous_ms = time_since_previous_ms;
+    
+    for (int i = 0; i < sensor_count && i < MAX_SENSORS_PER_POLE; i++) {
+        passage_history[0].sensor_ids[i] = sensor_ids[i];
+    }
+    
+    if (passage_history_count < MAX_PASSAGE_HISTORY) {
+        passage_history_count++;
+    }
+    total_passages++;
+    
+    xSemaphoreGive(passage_history_mutex);
+}
+
 
 // Nye funksjonsdeklarasjoner for håndtering av sendte passeringer
 bool is_passage_already_sent(const uint8_t *mac, uint32_t time_sec, uint32_t time_micros, int sensors_count);
@@ -208,7 +259,6 @@ void clean_old_passages(void *pvParameters);
 
 
 static httpd_handle_t global_server = NULL;
-static int ws_client_fd = -1;  // Kun én klient støttes foreløpig
 static httpd_handle_t server = NULL;
 static int ws_clients[MAX_WS_CLIENTS];
 static SemaphoreHandle_t ws_mutex;
@@ -568,7 +618,7 @@ void tcp_client_handler(void *arg) {
                             
                             // Send til passeringsdeteksjon med server-tid
                             ESP_LOGI(TAG, "Sender til passeringsdeteksjon: sensor_id=%d", sensor_id);
-                            bool passage_detected = process_break_for_passage_detection(mac_bytes, sensor_id, current_time_sec, current_time_usec);
+                            process_break_for_passage_detection(mac_bytes, sensor_id, current_time_sec, current_time_usec);
                             
                             // if (passage_detected) {
                             //     ESP_LOGI(TAG, "🎯 PASSERING DETEKTERT fra sensor %d på MAC %s", sensor_id, mac_str);
@@ -1653,13 +1703,86 @@ esp_err_t debug_handler(httpd_req_t *req) {
     }
 
 
-
-
-   
+  
    // Avslutt responsen med en tom chunk
    httpd_resp_sendstr_chunk(req, NULL);
    return ESP_OK;
 }
+
+
+esp_err_t passages_monitor_handler(httpd_req_t *req) {
+    ESP_LOGI(TAG, "Passages monitor handler called");
+    
+    httpd_resp_set_type(req, "text/plain; charset=utf-8");
+    
+    // Auto-refresh header
+    httpd_resp_set_hdr(req, "Refresh", "2");
+    
+    char buffer[512];
+    
+    // Header
+    httpd_resp_sendstr_chunk(req, "Timergate - Passeringsovervåkning\n");
+    httpd_resp_sendstr_chunk(req, "Automatisk refresh hver 2 sekund\n\n");
+    
+    snprintf(buffer, sizeof(buffer), "Siste passeringer (%d nyeste):\n\n", 
+             MIN(passage_history_count, MAX_PASSAGE_HISTORY));
+    httpd_resp_sendstr_chunk(req, buffer);
+    
+    xSemaphoreTake(passage_history_mutex, portMAX_DELAY);
+    
+    if (passage_history_count == 0) {
+        httpd_resp_sendstr_chunk(req, "Ingen passeringer registrert ennå.\n");
+    } else {
+        for (int i = 0; i < passage_history_count; i++) {
+            // Tidsstempel
+            time_t timestamp = passage_history[i].timestamp_sec;
+            struct tm *tm_info = localtime(&timestamp);
+            snprintf(buffer, sizeof(buffer), 
+                    "[%04d-%02d-%02d %02d:%02d:%02d.%03" PRIu32 "] MAC: %02x:%02x:%02x:%02x:%02x:%02x\n",
+                    tm_info->tm_year + 1900, tm_info->tm_mon + 1, tm_info->tm_mday,
+                    tm_info->tm_hour, tm_info->tm_min, tm_info->tm_sec,
+                    passage_history[i].timestamp_usec / 1000,
+                    passage_history[i].mac[0], passage_history[i].mac[1], 
+                    passage_history[i].mac[2], passage_history[i].mac[3],
+                    passage_history[i].mac[4], passage_history[i].mac[5]);
+            httpd_resp_sendstr_chunk(req, buffer);
+            
+            // Sensorer
+            httpd_resp_sendstr_chunk(req, "  Sensorer utløst: [");
+            for (int j = 0; j < passage_history[i].sensors_count; j++) {
+                snprintf(buffer, sizeof(buffer), "%d%s", 
+                        passage_history[i].sensor_ids[j],
+                        (j < passage_history[i].sensors_count - 1) ? ", " : "");
+                httpd_resp_sendstr_chunk(req, buffer);
+            }
+            snprintf(buffer, sizeof(buffer), "] (%d av 7 sensorer)\n",
+                    passage_history[i].sensors_count);
+            httpd_resp_sendstr_chunk(req, buffer);
+            
+            // Tid siden forrige
+            if (passage_history[i].time_since_previous_ms > 0) {
+                snprintf(buffer, sizeof(buffer), "  Tid siden forrige: %.3f sekunder\n\n",
+                        passage_history[i].time_since_previous_ms / 1000.0);
+                httpd_resp_sendstr_chunk(req, buffer);
+            } else {
+                httpd_resp_sendstr_chunk(req, "  Tid siden forrige: N/A (første passering)\n\n");
+            }
+        }
+    }
+    
+    // Statistikk
+    snprintf(buffer, sizeof(buffer), 
+            "\nStatistikk:\n  Total passeringer: %" PRIu32 "\n", total_passages);
+    httpd_resp_sendstr_chunk(req, buffer);
+    
+    xSemaphoreGive(passage_history_mutex);
+    
+    httpd_resp_sendstr_chunk(req, NULL); // Avslutt response
+    return ESP_OK;
+}
+
+
+
 
 esp_err_t spiffs_get_handler(httpd_req_t *req) {
    char filepath[FILE_PATH_MAX];
@@ -1999,6 +2122,9 @@ bool process_break_for_passage_detection(const uint8_t *mac_addr, int32_t sensor
             //     passage_detectors[detector_idx].first_break_micros, 
             //     passage_detectors[detector_idx].unique_sensors_count);
 
+
+
+            // Bygg liste over utløste sensorer
             int sensors_used[MAX_SENSORS_PER_POLE];
             int used_count = 0;
             for (int i = 0; i < MAX_SENSORS_PER_POLE; i++) {
@@ -2007,25 +2133,24 @@ bool process_break_for_passage_detection(const uint8_t *mac_addr, int32_t sensor
                 }
             }
 
-            // Legg til brukte sensorer
-            triggered_sensors[0] = passage_detectors[detector_idx].first_sensor_id_candidate;
-            triggered_sensors[1] = sensor_id;
-            triggered_count = 2;
-
             log_event_passering(mac_str, sensor_id, "PASSERING",
                 passage_detectors[detector_idx].first_break_time +
                 (passage_detectors[detector_idx].first_break_micros / 1000000.0),
-                triggered_count, 0,
-                triggered_sensors,
-                triggered_count);
+                used_count, 0, sensors_used, used_count);
 
-            
+                        
             // Registrer denne passeringen som sendt
             register_sent_passage(mac_addr, 
                             passage_detectors[detector_idx].first_break_time, 
                             passage_detectors[detector_idx].first_break_micros, 
                             passage_detectors[detector_idx].unique_sensors_count);
             
+            // Lagre i passage history
+            add_to_passage_history(mac_addr,
+                      passage_detectors[detector_idx].first_break_time,
+                      passage_detectors[detector_idx].first_break_micros,
+                      sensors_used, used_count);
+
             // Send passering til WebSocket-klienter
             char passage_msg[256];
             sprintf(passage_msg, 
@@ -2726,17 +2851,6 @@ httpd_handle_t start_webserver(void) {
    if (httpd_start(&server_handle, &config) == ESP_OK) {
         global_server = server_handle;
 
-        // WebSocket handler for /ws_passering
-        static httpd_uri_t ws_passering_uri = {
-            .uri       = "/ws_passering",
-            .method    = HTTP_GET,
-            .handler   = ws_passering_handler,
-            .is_websocket = true,
-            .user_ctx  = NULL
-        };
-        httpd_register_uri_handler(server_handle, &ws_passering_uri);
-
-
 
        // WebSocket handler
        httpd_uri_t ws = {
@@ -2756,6 +2870,17 @@ httpd_handle_t start_webserver(void) {
            .user_ctx = "/www"
        };
        httpd_register_uri_handler(server_handle, &debug);
+
+
+        // Passages monitor handler
+        httpd_uri_t passages = {
+            .uri = "/passages",
+            .method = HTTP_GET,
+            .handler = passages_monitor_handler,
+            .user_ctx = NULL
+        };
+        httpd_register_uri_handler(server_handle, &passages);
+
        
        // Spesifikk handler for JS-filer
        httpd_uri_t js_files = {
@@ -2934,63 +3059,6 @@ httpd_handle_t start_webserver(void) {
 
 
 
-// WebSocket-handler for passeringer
-static esp_err_t ws_passering_handler(httpd_req_t *req)
-{
-    if (req->method == HTTP_GET) {
-        return ESP_OK; // WebSocket-handshake fullført
-    }
-
-    httpd_ws_frame_t ws_pkt;
-    memset(&ws_pkt, 0, sizeof(httpd_ws_frame_t));
-    ws_pkt.type = HTTPD_WS_TYPE_TEXT;
-    ws_pkt.len = req->content_len;
-
-    if (ws_pkt.len) {
-        char *buf = malloc(ws_pkt.len + 1);
-        if (!buf) return ESP_ERR_NO_MEM;
-        ws_pkt.payload = (uint8_t *)buf;
-        httpd_ws_recv_frame(req, &ws_pkt, ws_pkt.len);
-        buf[ws_pkt.len] = 0;
-        ESP_LOGI("ws", "Mottatt fra klient: %s", buf);
-        free(buf);
-    }
-
-    ws_client_fd = httpd_req_to_sockfd(req); // lagre aktiv tilkobling
-    return ESP_OK;
-}
-
-
-static void ws_send_passering_json(const char *mac, double timestamp, int sensors[], int count) {
-    if (global_server == NULL || ws_client_fd < 0) return;
-
-    cJSON *root = cJSON_CreateObject();
-    cJSON_AddStringToObject(root, "event", "PASSERING");
-    cJSON_AddStringToObject(root, "mac", mac);
-    cJSON_AddNumberToObject(root, "timestamp", timestamp);
-    cJSON *arr = cJSON_AddArrayToObject(root, "sensors");
-    for (int i = 0; i < count; i++) {
-        cJSON_AddItemToArray(arr, cJSON_CreateNumber(sensors[i]));
-    }
-
-    char *out = cJSON_PrintUnformatted(root);
-    ESP_LOGI(TAG, "Sender WS-json: %s", out);
-    cJSON_Delete(root);
-
-    httpd_ws_frame_t ws_pkt = {
-        .type = HTTPD_WS_TYPE_TEXT,
-        .final = true,
-        .payload = (uint8_t *)out,
-        .len = strlen(out)
-    };
-
-    httpd_ws_send_frame_async(global_server, ws_client_fd, &ws_pkt);
-    free(out);
-}
-
-
-
-
 // 
 // 
 //--------------- Del 9: Main-funksjon ---------------- 
@@ -3018,7 +3086,7 @@ wifi_config_t wifi_config = {
         .ssid_len = strlen("Timergate"),
         .channel = 6,
         .password = "12345678",  // Tomt passord
-        .max_connection = 4,
+        .max_connection = 8,
         .authmode = WIFI_AUTH_WPA_WPA2_PSK
     }
 };
@@ -3040,6 +3108,9 @@ wifi_config_t wifi_config = {
     tcp_poles_mutex = xSemaphoreCreateMutex();
     passage_mutex = xSemaphoreCreateMutex();
     sent_passages_mutex = xSemaphoreCreateMutex();
+    passage_history_mutex = xSemaphoreCreateMutex();
+
+
 
     
     // Initialiser arrays
