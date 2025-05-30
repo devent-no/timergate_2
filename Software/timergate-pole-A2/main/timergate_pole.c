@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include "driver/ledc.h"
 #include "esp_err.h"
@@ -536,22 +537,23 @@ void handle_status_animation() {
         
         case STATUS_READY: {
             // Standard grønn pulsering hver 30. sekund for kalibrert system
-            uint32_t pulse_cycle = 30000; // 30 sekunder mellom hver pulsering
-            uint32_t pulse_duration = 200; // 200ms pulsering
+            uint32_t pulse_cycle = 60000; // 30 sekunder mellom hver pulsering
+            uint32_t pulse_duration = 100; // 200ms pulsering
             
             uint32_t time_in_cycle = elapsed_time % pulse_cycle;
             bool pulse_on = time_in_cycle < pulse_duration;
             
             if (pulse_on) {
-                // Vis kort pulsering (grønn)
-                set_all_leds(1, 
-                        STATUS_COLORS[STATUS_READY][0],
-                        STATUS_COLORS[STATUS_READY][1],
-                        STATUS_COLORS[STATUS_READY][2]);
+                // Vis kort pulsering (grønn) bare i sensor 0 med dempet lys
+                if (enabled[0]) {
+                    led_set(0, 1, 0, 100, 0);  // Dempet grønn (100 i stedet for 255)
+                }
                 normal_led_control = false;
             } else if (time_in_cycle < pulse_duration + 50) {
                 // Slå av LED-er umiddelbart etter pulsering
-                set_all_leds(0, 0, 0, 0);
+                if (enabled[0]) {
+                    led_set(0, 0, 0, 0, 0);
+                }
                 normal_led_control = false;
             } else {
                 // Resten av tiden, aktiver normal LED-kontroll

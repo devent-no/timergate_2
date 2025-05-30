@@ -210,7 +210,11 @@ esp_err_t websocket_test_page_handler(httpd_req_t *req);
 // Nye funksjonsdeklarasjoner for debounce-håndtering
 bool should_ignore_break(const uint8_t *mac, int32_t sensor_id, uint32_t time_sec, uint32_t time_micros);
 void send_break_to_websocket(const uint8_t *mac_addr, uint32_t time_sec, uint32_t time_micros, int32_t sensor_id, bool filtered);
-bool process_break_for_passage_detection(const uint8_t *mac_addr, int32_t sensor_id, uint32_t time_sec, uint32_t time_micros);
+//bool process_break_for_passage_detection(const uint8_t *mac_addr, int32_t sensor_id, uint32_t time_sec, uint32_t time_micros);
+bool process_break_for_passage_detection(const uint8_t *mac_addr, int32_t sensor_id, 
+                                        uint32_t sensor_time_sec, uint32_t sensor_time_micros,
+                                        uint32_t server_time_sec, uint32_t server_time_micros)
+
 
 
 // Funksjon for å legge til passering i historikk
@@ -408,7 +412,7 @@ esp_err_t init_fs(void) {
     esp_vfs_spiffs_conf_t conf = {
         .base_path = "/www",
         .partition_label = "www",
-        .max_files = 10,  // Økt fra 5 til 10 for å støtte flere filer
+        .max_files = 20,  // Økt fra 5 til 10 for å støtte flere filer
         .format_if_mount_failed = false
     };
     
@@ -541,6 +545,7 @@ void tcp_client_handler(void *arg) {
                    
                    
 
+                    /* DEAKTIVERT: Bruk kun ESP-NOW for timing-data (TCP har for høy latens)
                     else if (strncmp(command, "{\"K\":1,", 7) == 0) {
                         // Parse JSON-strengen for K=1 (sensor break events)
                         char mac_str[18] = {0};
@@ -610,19 +615,21 @@ void tcp_client_handler(void *arg) {
                             // Bruk GJELDENDE SERVERTID i stedet for målestolpe-tid for å unngå tidsproblemer
                             struct timeval tv_now;
                             gettimeofday(&tv_now, NULL);
-                            uint32_t current_time_sec = tv_now.tv_sec;
-                            uint32_t current_time_usec = tv_now.tv_usec;
-                            
-                            ESP_LOGI(TAG, "Bruker servertid for passeringsdeteksjon: %u.%06u (i stedet for målestolpe-tid: %u.%06u)",
-                                    current_time_sec, current_time_usec, time_sec, time_usec);
-                            
-                            // Send til passeringsdeteksjon med server-tid
+                            uint32_t server_time_sec = tv_now.tv_sec;
+                            uint32_t server_time_usec = tv_now.tv_usec;
+
+                            ESP_LOGI(TAG, "Passeringsdeteksjon: målestolpe-tid=%u.%06u, server-tid=%u.%06u", 
+                                    time_sec, time_usec, server_time_sec, server_time_usec);
+
+                            // Send til passeringsdeteksjon med BÅDE målestolpe-tid og server-tid
                             ESP_LOGI(TAG, "Sender til passeringsdeteksjon: sensor_id=%d", sensor_id);
-                            process_break_for_passage_detection(mac_bytes, sensor_id, current_time_sec, current_time_usec);
-                            
-                            // if (passage_detected) {
-                            //     ESP_LOGI(TAG, "🎯 PASSERING DETEKTERT fra sensor %d på MAC %s", sensor_id, mac_str);
-                            // }
+                            bool passage_detected = process_break_for_passage_detection(mac_bytes, sensor_id, 
+                                                                                    time_sec, time_usec,           // Målestolpe-tid
+                                                                                    server_time_sec, server_time_usec); // Server-tid
+
+                            if (passage_detected) {
+                                ESP_LOGI(TAG, "🎯 PASSERING DETEKTERT fra sensor %d på MAC %s", sensor_id, mac_str);
+                            }
 
                         } else {
                             // Forbedret logging for debugging
@@ -636,12 +643,12 @@ void tcp_client_handler(void *arg) {
                                         break_value, sensor_id, strlen(mac_str));
                             }
                         }
-                    }
+                    }*/
 
 
 
 
-
+                    /* DEAKTIVERT: Bruk kun ESP-NOW for timing-data (TCP har for høy latens)
                     else if (strncmp(command, "{\"K\":0,", 7) == 0 && strstr(command, "\"B\":[") != NULL) {
                         // Parse JSON-strengen for K=0 med B-array
                         char mac_str[18] = {0};
@@ -685,13 +692,21 @@ void tcp_client_handler(void *arg) {
                                     if (value == 1) {
                                         //ESP_LOGI(TAG, "Fant utløst sensor fra B-array: sensor_id=%d, MAC=%s", i, mac_str);
                                         // Kall passeringsdeteksjon for denne sensoren
-                                        process_break_for_passage_detection(mac_bytes, i, time_sec, time_usec);
+                                        //process_break_for_passage_detection(mac_bytes, i, time_sec, time_usec);
+                                        // Få server-tid
+                                        struct timeval tv_server;
+                                        gettimeofday(&tv_server, NULL);
+
+                                        // Kall passeringsdeteksjon for denne sensoren
+                                        process_break_for_passage_detection(mac_bytes, i, 
+                                                                        time_sec, time_usec,                    // Målestolpe-tid
+                                                                        tv_server.tv_sec, tv_server.tv_usec);   // Server-tid
                                     }
                                     ptr++;
                                 }
                             }
                         }
-                    }
+                    }*/
 
 
 
@@ -1991,54 +2006,64 @@ bool process_break_for_passage_detection(const uint8_t *mac_addr, int32_t sensor
 
 
     // Konverter tidspunkt til millisekunder for enklere sammenligning
-    uint64_t current_time_ms = (uint64_t)time_sec * 1000 + time_micros / 1000;
-    uint64_t last_passage_ms = (uint64_t)passage_detectors[detector_idx].last_passage_time * 1000 + 
-                             passage_detectors[detector_idx].last_passage_micros / 1000;
+    // uint64_t current_time_ms = (uint64_t)time_sec * 1000 + time_micros / 1000;
+    // uint64_t last_passage_ms = (uint64_t)passage_detectors[detector_idx].last_passage_time * 1000 + 
+    //                          passage_detectors[detector_idx].last_passage_micros / 1000;
     
-    // Sjekk om vi er i debounce-perioden etter en passering
+    // // Sjekk om vi er i debounce-perioden etter en passering
+    // if (passage_detectors[detector_idx].last_passage_time > 0) {
+    //     uint64_t time_since_last_passage_ms = current_time_ms - last_passage_ms;
+
+    // KRITISK: Bruk målestolpe-tid for debounce-beregninger
+    uint64_t current_time_ms = (uint64_t)sensor_time_sec * 1000 + sensor_time_micros / 1000;
+    uint64_t last_passage_ms = (uint64_t)passage_detectors[detector_idx].last_passage_time * 1000 + 
+                            passage_detectors[detector_idx].last_passage_micros / 1000;
+
+    // Sjekk om vi er i debounce-perioden etter en passering (bruk målestolpe-tid)
     if (passage_detectors[detector_idx].last_passage_time > 0) {
         uint64_t time_since_last_passage_ms = current_time_ms - last_passage_ms;
-        
-        if (time_since_last_passage_ms < passage_debounce_ms) {
-            // ESP_LOGI(TAG, "DEBOUNCE: Ignorerer brudd under debounce-perioden (%llu ms siden siste passering, MAC=%s, sensor=%d)",
-            //         time_since_last_passage_ms, mac_str, sensor_id);
-            log_event_passering(mac_str, sensor_id, "DEBOUNCE", 0.0, 0, time_since_last_passage_ms, NULL, 0);
+
+            
+            if (time_since_last_passage_ms < passage_debounce_ms) {
+                // ESP_LOGI(TAG, "DEBOUNCE: Ignorerer brudd under debounce-perioden (%llu ms siden siste passering, MAC=%s, sensor=%d)",
+                //         time_since_last_passage_ms, mac_str, sensor_id);
+                log_event_passering(mac_str, sensor_id, "DEBOUNCE", 0.0, 0, time_since_last_passage_ms, NULL, 0);
 
 
-            xSemaphoreGive(passage_mutex);
-            return false;
+                xSemaphoreGive(passage_mutex);
+                return false;
+            }
         }
-    }
     
     // Sjekk om vi har en ny sekvens (telleren er 0) eller en eksisterende sekvens
     if (passage_detectors[detector_idx].unique_sensors_count == 0) {
-        // Dette er første sensor i en ny sekvens
-        passage_detectors[detector_idx].first_break_time = time_sec;
-        passage_detectors[detector_idx].first_break_micros = time_micros;
-        passage_detectors[detector_idx].sequence_start_time = time_sec;
+        // Dette er første sensor i en ny sekvens - bruk målestolpe-tid
+        passage_detectors[detector_idx].first_break_time = sensor_time_sec;
+        passage_detectors[detector_idx].first_break_micros = sensor_time_micros;
+        passage_detectors[detector_idx].sequence_start_time = sensor_time_sec;
     } else {
         // Vi har en eksisterende sekvens
         // Sjekk om vi kan bruke tid direkte fra sensoren for timeout
         uint32_t sensor_elapsed_time = 0;
         
-        // Beregn tid basert på sensor-tidsstempler (som er den mest konsistente kilden)
+        // Beregn tid basert på målestolpe-tidsstempler (som er den mest konsistente kilden)
         if (passage_detectors[detector_idx].last_sensor_time > 0) {
-            if (time_sec >= passage_detectors[detector_idx].last_sensor_time) {
+            if (sensor_time_sec >= passage_detectors[detector_idx].last_sensor_time) {
                 // Vanlig tilfelle - sensortid går fremover
-                sensor_elapsed_time = (time_sec - passage_detectors[detector_idx].last_sensor_time) * 1000;
+                sensor_elapsed_time = (sensor_time_sec - passage_detectors[detector_idx].last_sensor_time) * 1000;
                 
                 // Legg til mikrosekunder-delen
-                if (time_micros >= passage_detectors[detector_idx].last_sensor_micros) {
-                    sensor_elapsed_time += (time_micros - passage_detectors[detector_idx].last_sensor_micros) / 1000;
+                if (sensor_time_micros >= passage_detectors[detector_idx].last_sensor_micros) {
+                    sensor_elapsed_time += (sensor_time_micros - passage_detectors[detector_idx].last_sensor_micros) / 1000;
                 } else {
                     // Håndter mikrosekund-overgang
-                    sensor_elapsed_time += (1000000 + time_micros - passage_detectors[detector_idx].last_sensor_micros) / 1000 - 1000;
+                    sensor_elapsed_time += (1000000 + sensor_time_micros - passage_detectors[detector_idx].last_sensor_micros) / 1000 - 1000;
                 }
             } 
             else {
                 // Sensortid hopper bakover
                 ESP_LOGW(TAG, "Sensor-tid hopper bakover: %u -> %u, ignorerer denne hendelsen", 
-                        passage_detectors[detector_idx].last_sensor_time, time_sec);
+                        passage_detectors[detector_idx].last_sensor_time, sensor_time_sec);
                 
                 // Ikke oppdater last_sensor_time for å unngå gjentatte advarsler om samme hopp
                 xSemaphoreGive(passage_mutex);
@@ -2046,19 +2071,19 @@ bool process_break_for_passage_detection(const uint8_t *mac_addr, int32_t sensor
             }
         }
         
-        // Oppdater siste sensortid for neste beregning
-        passage_detectors[detector_idx].last_sensor_time = time_sec;
-        passage_detectors[detector_idx].last_sensor_micros = time_micros;
-        
+        // Oppdater siste sensortid for neste beregning - bruk målestolpe-tid
+        passage_detectors[detector_idx].last_sensor_time = sensor_time_sec;
+        passage_detectors[detector_idx].last_sensor_micros = sensor_time_micros;
+                
         // Sjekk om sekvensen har timed ut basert på sensortid
         if (sensor_elapsed_time > sequence_timeout_ms) {
             //  ESP_LOGI(TAG, "TIMEOUT: Sekvens timed ut etter %u ms (sensortid). MAC=%s, sensor=%d, Tilbakestiller.", 
             //          sensor_elapsed_time, mac_str, sensor_id);
 
-        log_event_passering(mac_str, sensor_id, "TIMEOUT",
-            passage_detectors[detector_idx].first_break_time +
-            (passage_detectors[detector_idx].first_break_micros / 1000000.0),
-            passage_detectors[detector_idx].unique_sensors_count, 0, NULL, 0);
+            log_event_passering(mac_str, sensor_id, "TIMEOUT",
+                passage_detectors[detector_idx].first_break_time +
+                (passage_detectors[detector_idx].first_break_micros / 1000000.0),
+                passage_detectors[detector_idx].unique_sensors_count, 0, NULL, 0);
                         
 
             // Tilbakestill tellere
@@ -2067,10 +2092,10 @@ bool process_break_for_passage_detection(const uint8_t *mac_addr, int32_t sensor
             }
             passage_detectors[detector_idx].unique_sensors_count = 0;
             
-            // Sett nye verdier for første brudd i ny sekvens
-            passage_detectors[detector_idx].first_break_time = time_sec;
-            passage_detectors[detector_idx].first_break_micros = time_micros;
-            passage_detectors[detector_idx].sequence_start_time = time_sec;
+            // Sett nye verdier for første brudd i ny sekvens - bruk målestolpe-tid
+            passage_detectors[detector_idx].first_break_time = sensor_time_sec;
+            passage_detectors[detector_idx].first_break_micros = sensor_time_micros;
+            passage_detectors[detector_idx].sequence_start_time = sensor_time_sec;
         }
     }
     
@@ -2079,9 +2104,9 @@ bool process_break_for_passage_detection(const uint8_t *mac_addr, int32_t sensor
         passage_detectors[detector_idx].sensor_triggered[sensor_id] = true;
         passage_detectors[detector_idx].unique_sensors_count++;
 
-        // Oppdater siste sensor-tid
-        passage_detectors[detector_idx].last_sensor_time = time_sec;
-        passage_detectors[detector_idx].last_sensor_micros = time_micros;
+        // Oppdater siste sensor-tid - bruk målestolpe-tid
+        passage_detectors[detector_idx].last_sensor_time = sensor_time_sec;
+        passage_detectors[detector_idx].last_sensor_micros = sensor_time_micros;
 
         ESP_LOGI(TAG, "Sensor %d registrert, sensorteller nå: %d, min for passering: %d", 
             sensor_id, passage_detectors[detector_idx].unique_sensors_count, min_sensors_for_passage);
@@ -2159,7 +2184,7 @@ bool process_break_for_passage_detection(const uint8_t *mac_addr, int32_t sensor
                 passage_detectors[detector_idx].first_break_micros, 
                 passage_detectors[detector_idx].unique_sensors_count);
             
-            // Lagre denne passeringens tidspunkt for debouncing
+            // Lagre denne passeringens tidspunkt for debouncing - bruk målestolpe-tid
             passage_detectors[detector_idx].last_passage_time = passage_detectors[detector_idx].first_break_time;
             passage_detectors[detector_idx].last_passage_micros = passage_detectors[detector_idx].first_break_micros;
             
@@ -2482,7 +2507,17 @@ void esp_now_recv_cb(const esp_now_recv_info_t *recv_info, const uint8_t *data, 
        
 
        // Behandle brudd for passeringsdeteksjon
-       process_break_for_passage_detection(mac_addr, sensor_id, pole_data[pole_idx].t, pole_data[pole_idx].u);
+       //process_break_for_passage_detection(mac_addr, sensor_id, pole_data[pole_idx].t, pole_data[pole_idx].u);
+       // Få server-tid ved mottak
+        struct timeval server_time;
+        gettimeofday(&server_time, NULL);
+
+        // Behandle brudd for passeringsdeteksjon med både målestolpe-tid og server-tid
+        process_break_for_passage_detection(mac_addr, sensor_id, 
+                                        pole_data[pole_idx].t, pole_data[pole_idx].u,     // Målestolpe-tid
+                                        server_time.tv_sec, server_time.tv_usec);         // Server-tid
+
+
    } else if (k == 2 && len >= 9 + sizeof(int32_t) * 21) {  // Settings
        memcpy(pole_data[pole_idx].e, &data[9], sizeof(int32_t) * 7);
        memcpy(pole_data[pole_idx].o, &data[9 + sizeof(int32_t) * 7], sizeof(int32_t) * 7);
@@ -2837,9 +2872,10 @@ esp_err_t set_debounce_time_handler(httpd_req_t *req) {
 httpd_handle_t start_webserver(void) {
    httpd_config_t config = HTTPD_DEFAULT_CONFIG();
    config.uri_match_fn = httpd_uri_match_wildcard; //Important when when gui-files is hashed
+   config.max_open_sockets = 7;
 
    // Øk maks URI-handlere
-   config.max_uri_handlers = 20; // Økt fra 6 til 12 for å ha plass til flere handlere
+   config.max_uri_handlers = 30; // Økt fra 6 til 12 for å ha plass til flere handlere
    // Øk recv/send-bufferstørrelse og timeouts
    config.recv_wait_timeout = 10;
    config.send_wait_timeout = 10;
