@@ -121,7 +121,6 @@ static SemaphoreHandle_t passage_mutex;
 
 
 
-// Strukt for å holde styr på sendte passeringer
 // Ny struktur for stoppeklokke-passeringer med dual timing
 typedef struct {
     uint8_t mac[ESP_NOW_ETH_ALEN];     // MAC-adresse til målestolpen
@@ -138,6 +137,15 @@ static stopwatch_passage_t stopwatch_passages[MAX_STOPWATCH_PASSAGES];
 static int stopwatch_passage_count = 0;
 static uint32_t next_passage_id = 1;   // Teller for unike passage-ID-er
 static SemaphoreHandle_t stopwatch_mutex;
+
+// Strukt for å holde styr på sendte passeringer (duplikatdeteksjon)
+typedef struct {
+    uint8_t mac[ESP_NOW_ETH_ALEN];     // MAC-adresse til målestolpen
+    uint32_t timestamp_sec;            // Tidspunkt for passeringen (sekunder)
+    uint32_t timestamp_micros;         // Mikrosekunder del
+    int sensors_count;                 // Antall sensorer som utløste
+    time_t send_time;                  // Når passeringen ble sendt (for cleanup)
+} sent_passage_t;
 
 #define MAX_SENT_PASSAGES 20           // Hvor mange tidligere passeringer vi holder styr på
 static sent_passage_t sent_passages[MAX_SENT_PASSAGES];
