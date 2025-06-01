@@ -2943,113 +2943,120 @@ esp_err_t websocket_test_page_handler(httpd_req_t *req) {
 }
 
 // Funksjon for å simulere data for testing
+// I timergate_server.c - erstatt simulate_pole_data_handler funksjonen
+// I timergate_server.c - erstatt simulate_pole_data_handler funksjonen
+
 esp_err_t simulate_pole_data_handler(httpd_req_t *req) {
-   ESP_LOGI(TAG, "Simulate pole data handler called");
-   
-   // Opprett en simulert målestolpe hvis det ikke finnes noen
-   xSemaphoreTake(pole_data_mutex, portMAX_DELAY);
-   
-   if (pole_count == 0) {
-       // Lag en simulert stolpe med MAC-adresse aa:bb:cc:dd:ee:ff
-       uint8_t mac[ESP_NOW_ETH_ALEN] = {0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff};
-       memcpy(pole_data[0].mac, mac, ESP_NOW_ETH_ALEN);
-       pole_count = 1;
-       ESP_LOGI(TAG, "Opprettet simulert målestolpe med MAC aa:bb:cc:dd:ee:ff");
-   }
-   
-   // Fyll inn simulerte ADC-verdier
-   pole_data[0].k = 0; // ADC-verdier
-   pole_data[0].t = time(NULL);
-   pole_data[0].u = 0;
-   
-   // Simulerte ADC-verdier i et mønster som vil være synlig i GUI
-   for (int i = 0; i < 7; i++) {
-       pole_data[0].v[i] = 2000 + (i * 300);  // Økende verdier
-       pole_data[0].b[i] = (i % 2);  // Veksler mellom 0 og 1
-   }
-   
-   // Simulerte innstillinger hvis de ikke er satt
-   for (int i = 0; i < 7; i++) {
-       pole_data[0].e[i] = 1;  // Alt er aktivert
-       pole_data[0].o[i] = 4000;  // Standard offset
-   }
-   
-   ESP_LOGI(TAG, "Simulerte ADC-verdier opprettet: [%d, %d, %d, %d, %d, %d, %d]",
-           pole_data[0].v[0], pole_data[0].v[1], pole_data[0].v[2],
-           pole_data[0].v[3], pole_data[0].v[4], pole_data[0].v[5],
-           pole_data[0].v[6]);
-   
-   // Send simulerte ADC-verdier via WebSocket
-   char mac_str[18];
-   sprintf(mac_str, "%02x:%02x:%02x:%02x:%02x:%02x",
-           pole_data[0].mac[0], pole_data[0].mac[1], pole_data[0].mac[2],
-           pole_data[0].mac[3], pole_data[0].mac[4], pole_data[0].mac[5]);
-   
-   char ws_msg[512];
-   sprintf(ws_msg, 
-           "{\"M\":\"%s\",\"K\":0,\"T\":%" PRIu32 ",\"U\":%" PRIu32 ",\"V\":[%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 "],\"B\":[%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 "]}",
-           mac_str, pole_data[0].t, pole_data[0].u,
-           pole_data[0].v[0], pole_data[0].v[1], pole_data[0].v[2], 
-           pole_data[0].v[3], pole_data[0].v[4], pole_data[0].v[5], pole_data[0].v[6],
-           pole_data[0].b[0], pole_data[0].b[1], pole_data[0].b[2], 
-           pole_data[0].b[3], pole_data[0].b[4], pole_data[0].b[5], pole_data[0].b[6]);
-   
-   xSemaphoreGive(pole_data_mutex);
-   
-   // Send til WebSocket-klienter
-   httpd_ws_frame_t ws_pkt = {
-       .final = true,
-       .fragmented = false,
-       .type = HTTPD_WS_TYPE_TEXT,
-       .payload = (uint8_t *)ws_msg,
-       .len = strlen(ws_msg)
-   };
+    ESP_LOGI(TAG, "Simulate pole data handler called");
+    
+    // Opprett en simulert målestolpe hvis det ikke finnes noen
+    xSemaphoreTake(pole_data_mutex, portMAX_DELAY);
+    
+    if (pole_count == 0) {
+        // Lag en simulert stolpe med MAC-adresse aa:bb:cc:dd:ee:ff
+        uint8_t mac[ESP_NOW_ETH_ALEN] = {0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff};
+        memcpy(pole_data[0].mac, mac, ESP_NOW_ETH_ALEN);
+        pole_count = 1;
+        ESP_LOGI(TAG, "Opprettet simulert målestolpe med MAC aa:bb:cc:dd:ee:ff");
+    }
+    
+    // Send simulerte ADC-verdier først (K=0)
+    pole_data[0].k = 0;
+    pole_data[0].t = time(NULL);
+    pole_data[0].u = 0;
+    
+    for (int i = 0; i < 7; i++) {
+        pole_data[0].v[i] = 2000 + (i * 300);
+        pole_data[0].b[i] = (i % 2);
+        pole_data[0].e[i] = 1;
+        pole_data[0].o[i] = 4000;
+    }
+    
+    // Send K=0 melding
+    char mac_str[18];
+    sprintf(mac_str, "%02x:%02x:%02x:%02x:%02x:%02x",
+            pole_data[0].mac[0], pole_data[0].mac[1], pole_data[0].mac[2],
+            pole_data[0].mac[3], pole_data[0].mac[4], pole_data[0].mac[5]);
+    
+    char ws_msg[512];
+    sprintf(ws_msg, 
+            "{\"M\":\"%s\",\"K\":0,\"T\":%" PRIu32 ",\"U\":%" PRIu32 ",\"V\":[%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 "],\"B\":[%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 "]}",
+            mac_str, pole_data[0].t, pole_data[0].u,
+            pole_data[0].v[0], pole_data[0].v[1], pole_data[0].v[2], 
+            pole_data[0].v[3], pole_data[0].v[4], pole_data[0].v[5], pole_data[0].v[6],
+            pole_data[0].b[0], pole_data[0].b[1], pole_data[0].b[2], 
+            pole_data[0].b[3], pole_data[0].b[4], pole_data[0].b[5], pole_data[0].b[6]);
+    
+    xSemaphoreGive(pole_data_mutex);
+    
+    // Send K=0 til WebSocket
+    httpd_ws_frame_t ws_pkt = {
+        .final = true,
+        .fragmented = false,
+        .type = HTTPD_WS_TYPE_TEXT,
+        .payload = (uint8_t *)ws_msg,
+        .len = strlen(ws_msg)
+    };
 
-   xSemaphoreTake(ws_mutex, portMAX_DELAY);
-   for (int i = 0; i < MAX_WS_CLIENTS; ++i) {
-       if (ws_clients[i] != 0) {
-           httpd_ws_send_frame_async(server, ws_clients[i], &ws_pkt);
-       }
-   }
-   xSemaphoreGive(ws_mutex);
-   
-   // Simuler et break event (k=1) etter et kort intervall
-   vTaskDelay(pdMS_TO_TICKS(1000));
-   
-   xSemaphoreTake(pole_data_mutex, portMAX_DELAY);
-   pole_data[0].k = 1;  // Break event
-   pole_data[0].t = time(NULL);
-   pole_data[0].u = 500000;  // 500 ms
-   
-   // Send et simulert break event via WebSocket
-   char break_msg[256];
-   sprintf(break_msg, 
-           "{\"M\":\"%s\",\"K\":1,\"T\":%" PRIu32 ",\"U\":%" PRIu32 ",\"B\":1}",
-           mac_str, pole_data[0].t, pole_data[0].u);
-   
-   xSemaphoreGive(pole_data_mutex);
-   
-   ws_pkt.payload = (uint8_t *)break_msg;
-   ws_pkt.len = strlen(break_msg);
-   
-   xSemaphoreTake(ws_mutex, portMAX_DELAY);
-   for (int i = 0; i < MAX_WS_CLIENTS; ++i) {
-       if (ws_clients[i] != 0) {
-           httpd_ws_send_frame_async(server, ws_clients[i], &ws_pkt);
-       }
-   }
-   xSemaphoreGive(ws_mutex);
-   
-   ESP_LOGI(TAG, "Simulert break event sendt: %s", break_msg);
-   
-   // Send respons til klienten
-   httpd_resp_set_type(req, "application/json");
-   httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
-   httpd_resp_sendstr(req, "{\"status\":\"success\",\"message\":\"Simulerte data opprettet\"}");
-   
-   return ESP_OK;
+    xSemaphoreTake(ws_mutex, portMAX_DELAY);
+    for (int i = 0; i < MAX_WS_CLIENTS; ++i) {
+        if (ws_clients[i] != 0) {
+            httpd_ws_send_frame_async(server, ws_clients[i], &ws_pkt);
+        }
+    }
+    xSemaphoreGive(ws_mutex);
+    
+    // ✅ NYTT: Simuler passeringsdeteksjon med flere sensorer
+    ESP_LOGI(TAG, "🧪 SIMULERING: Starter passeringsdeteksjon-sekvens");
+    
+    // Få gjeldende tid
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    
+    // Simuler 3 sensorer som utløses i sekvens (for å generere passering)
+    int sensor_sequence[] = {1, 3, 5}; // 3 forskjellige sensorer
+    
+    for (int i = 0; i < 3; i++) {
+        // Send hver sensor gjennom passeringsdeteksjon-systemet
+        ESP_LOGI(TAG, "🧪 SIMULERING: Sender sensor %d gjennom passeringsdeteksjon", sensor_sequence[i]);
+        
+        // Få målestolpe-tid (simulert)
+        uint32_t sensor_time_sec = tv.tv_sec;
+        uint32_t sensor_time_usec = tv.tv_usec + (i * 20000); // 20ms mellom hver sensor
+        
+        // Få server-tid
+        gettimeofday(&tv, NULL);
+        uint32_t server_time_sec = tv.tv_sec;
+        uint32_t server_time_usec = tv.tv_usec;
+        
+        // Send gjennom passeringsdeteksjon (dette bør generere K=4 når vi når min_sensors_for_passage)
+        bool passage_detected = process_break_for_passage_detection(
+            pole_data[0].mac, 
+            sensor_sequence[i],
+            sensor_time_sec, sensor_time_usec,     // Målestolpe-tid
+            server_time_sec, server_time_usec      // Server-tid
+        );
+        
+        if (passage_detected) {
+            ESP_LOGI(TAG, "🎯 SIMULERING: Passering detektert på sensor %d!", sensor_sequence[i]);
+        }
+        
+        // Send K=1 melding for denne sensoren
+        send_break_to_websocket(pole_data[0].mac, sensor_time_sec, sensor_time_usec, sensor_sequence[i], false);
+        
+        // Kort pause mellom sensorer
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
+    
+    ESP_LOGI(TAG, "🧪 SIMULERING: Passeringsdeteksjon-sekvens fullført");
+    
+    // Send respons til klienten
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    httpd_resp_sendstr(req, "{\"status\":\"success\",\"message\":\"Simulerte passeringer opprettet\"}");
+    
+    return ESP_OK;
 }
-
 
 
 // 

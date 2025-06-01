@@ -169,7 +169,11 @@ export default {
       timerStartTime: 0,
       lastPassageTime: 0,
       lastKnownPassagesLength: 0,
-      nextResultId: 1 // For å gi hver result en unik ID
+      nextResultId: 1,
+      // NYE VARIABLER for å håndtere navigasjon
+      componentActive: false,  // Sporer om komponenten er aktiv
+      passagesLengthAtMount: 0, // Lengde på passages når komponenten mountes
+      passagesSnapshot: []  // Snapshot av passages ved mounting
     };
   },
   computed: {
@@ -205,42 +209,64 @@ export default {
   },
 
   watch: {
+    // FORBEDRET: Observatør for passages med bedre navigasjonshåndtering
     passages: {
-      handler(newPassages) {
+      handler(newPassages, oldPassages) {
         console.log("🕒 TIMER WATCH:", { 
           nyLengde: newPassages?.length,
-          sisteKjenteLengde: this.lastKnownPassagesLength,
-          status: this.status
+          gamleLengde: oldPassages?.length,
+          componentActive: this.componentActive,
+          status: this.status,
+          sisteKjenteLengde: this.lastKnownPassagesLength
         });
         
-        if (newPassages.length > this.lastKnownPassagesLength) {
-          const numNewPassages = newPassages.length - this.lastKnownPassagesLength;
-          console.log(`🔔 ${numNewPassages} NYE PASSERINGER DETEKTERT`);
+        // FIKSET: Ignorer endringer hvis komponenten ikke er aktiv
+        if (!this.componentActive) {
+          console.log("🚫 TIMER: Komponenten er ikke aktiv, ignorerer endringer i passages");
+          return;
+        }
+        
+        // FIKSET: Sjekk om dette er en EKTE ny passering eller bare navigasjon
+        const actualNewPassages = newPassages.length - this.lastKnownPassagesLength;
+        
+        if (actualNewPassages > 0) {
+          console.log(`🔔 ${actualNewPassages} EKTE NYE PASSERINGER DETEKTERT`);
           
+          // Få den nyeste passeringen
           const latestPassage = newPassages[newPassages.length - 1];
           
           if (this.status === 'running') {
             console.log("⏹️ STOPPER TIMER: Timer kjører, stopping ved målpassering");
-            this.currentTime = latestPassage.time - this.timerStartTime;
+            this.currentTime = Date.now() - this.timerStartTime;
             this.stopTimer();
             this.status = 'finished';
             this.addCompletedTime();
+            this.saveTimerState(); // Lagre tilstand
           } else if (this.status === 'ready' || this.status === 'finished') {
             console.log("▶️ STARTER TIMER: Timer starter ved startpassering");
             this.resetPenalties();
-            this.timerStartTime = latestPassage.time;
+            this.timerStartTime = Date.now();
             this.currentTime = 0;
             this.startTimer();
             this.status = 'running';
+            this.saveTimerState(); // Lagre tilstand
           }
           
+          // Oppdater sist kjente lengde
           this.lastKnownPassagesLength = newPassages.length;
+        } else if (actualNewPassages < 0) {
+          console.log("⚠️ TIMER: Passages-array ble kortere, trolig navigasjonsrelatert");
+          // Juster lastKnownPassagesLength til gjeldende lengde
+          this.lastKnownPassagesLength = newPassages.length;
+        } else {
+          console.log("ℹ️ TIMER: Ingen nye passeringer, sannsynligvis navigasjon eller gjenmontering");
         }
       },
       deep: true,
-      immediate: true
+      immediate: false  // FIKSET: Ikke kjør umiddelbart ved mounting
     },
-
+    
+    // Overvåk tilkoblingsstatus
     connected(isConnected) {
       if (!isConnected && this.status !== 'error') {
         this.status = 'error';
@@ -248,7 +274,8 @@ export default {
         this.status = this.timerRunning ? 'running' : 'ready';
       }
     },
-
+    
+    // Overvåk sensorstatus
     sensorsOk(areOk) {
       if (!areOk && this.status !== 'error') {
         this.status = 'error';
@@ -256,19 +283,20 @@ export default {
         this.status = this.timerRunning ? 'running' : 'ready';
       }
     },
-
+    
+    // Nye watches for straffer
     faults(newValue) {
       if (this.status === 'finished' && this.recentTimes.length > 0) {
         this.recentTimes[0].faults = newValue;
       }
     },
-
+    
     refusals(newValue) {
       if (this.status === 'finished' && this.recentTimes.length > 0) {
         this.recentTimes[0].refusals = newValue;
       }
     },
-
+    
     isEliminated(newValue) {
       if (this.status === 'finished' && this.recentTimes.length > 0) {
         this.recentTimes[0].eliminated = newValue;
@@ -295,12 +323,35 @@ export default {
       this.currentTime = 0;
       this.resetPenalties();
       this.status = 'ready';
+      
+      // NYTT: Lagre tilbakestilt tilstand
+      this.saveTimerState();
     },
     
     resetPenalties() {
       this.faults = 0;
       this.refusals = 0;
       this.isEliminated = false;
+    },
+    
+    // NYTT: Separat funksjon for å lagre bare timer-tilstand
+    saveTimerState() {
+      try {
+        const timerState = {
+          status: this.status,
+          timerRunning: this.timerRunning,
+          timerStartTime: this.timerStartTime,
+          currentTime: this.currentTime,
+          faults: this.faults,
+          refusals: this.refusals,
+          isEliminated: this.isEliminated,
+          lastKnownPassagesLength: this.lastKnownPassagesLength,
+          timestamp: Date.now()
+        };
+        localStorage.setItem('timergate_timer_state', JSON.stringify(timerState));
+      } catch (error) {
+        console.warn('Kunne ikke lagre timer-tilstand:', error);
+      }
     },
     
     increaseFaults() {
@@ -349,12 +400,10 @@ export default {
         
         this.recentTimes.unshift(newResult);
         
-        // Behold maks 15 resultater
         if (this.recentTimes.length > 15) {
           this.recentTimes.pop();
         }
         
-        // Lagre til localStorage for persistens
         this.saveResultsToStorage();
       }
     },
@@ -375,6 +424,20 @@ export default {
       try {
         localStorage.setItem('timergate_results', JSON.stringify(this.recentTimes));
         localStorage.setItem('timergate_next_id', this.nextResultId.toString());
+        
+        // NYTT: Lagre timer-tilstand
+        const timerState = {
+          status: this.status,
+          timerRunning: this.timerRunning,
+          timerStartTime: this.timerStartTime,
+          currentTime: this.currentTime,
+          faults: this.faults,
+          refusals: this.refusals,
+          isEliminated: this.isEliminated,
+          lastKnownPassagesLength: this.lastKnownPassagesLength,
+          timestamp: Date.now() // For å beregne hvor lenge vi var borte
+        };
+        localStorage.setItem('timergate_timer_state', JSON.stringify(timerState));
       } catch (error) {
         console.warn('Kunne ikke lagre resultater til localStorage:', error);
       }
@@ -392,10 +455,54 @@ export default {
         if (savedNextId) {
           this.nextResultId = parseInt(savedNextId, 10);
         }
+        
+        // NYTT: Last inn timer-tilstand
+        const savedTimerState = localStorage.getItem('timergate_timer_state');
+        if (savedTimerState) {
+          const timerState = JSON.parse(savedTimerState);
+          const timeSinceLastSave = Date.now() - timerState.timestamp;
+          
+          console.log("🔄 GJENOPPRETTER TIMER-TILSTAND:", {
+            savedStatus: timerState.status,
+            timeSinceLastSave: timeSinceLastSave,
+            wasRunning: timerState.timerRunning
+          });
+          
+          // Gjenopprett tilstand
+          this.status = timerState.status;
+          this.faults = timerState.faults;
+          this.refusals = timerState.refusals;
+          this.isEliminated = timerState.isEliminated;
+          this.lastKnownPassagesLength = timerState.lastKnownPassagesLength;
+          
+          // Hvis timeren var i gang, beregn ny currentTime basert på hvor lenge vi var borte
+          if (timerState.timerRunning && timerState.status === 'running') {
+            this.timerStartTime = timerState.timerStartTime;
+            this.currentTime = timerState.currentTime + timeSinceLastSave;
+            this.timerRunning = false; // Vil settes til true i startTimer()
+            
+            // Start timeren igjen
+            this.$nextTick(() => {
+              this.startTimer();
+            });
+            
+            console.log("⏰ TIMER GJENOPPRETTET:", {
+              originalCurrentTime: timerState.currentTime,
+              addedTime: timeSinceLastSave,
+              newCurrentTime: this.currentTime
+            });
+          } else {
+            // Timer var ikke i gang
+            this.timerStartTime = timerState.timerStartTime;
+            this.currentTime = timerState.currentTime;
+            this.timerRunning = false;
+          }
+        }
       } catch (error) {
-        console.warn('Kunne ikke laste resultater fra localStorage:', error);
+        console.warn('Kunne ikke laste timer-tilstand fra localStorage:', error);
         this.recentTimes = [];
         this.nextResultId = 1;
+        // Ikke endre timer-tilstand ved feil
       }
     },
     
@@ -414,25 +521,96 @@ export default {
       passages: this.passages
     });
     
+    // NYTT: Marker komponenten som aktiv
+    this.componentActive = true;
+    
+    // NYTT: Ta snapshot av passages ved mounting
+    this.passagesLengthAtMount = this.passages ? this.passages.length : 0;
+    this.lastKnownPassagesLength = this.passagesLengthAtMount;
+    this.passagesSnapshot = this.passages ? [...this.passages] : [];
+    
+    console.log("📸 TIMERVIEW: Tatt snapshot ved mounting:", {
+      lengde: this.passagesLengthAtMount,
+      lastKnownLength: this.lastKnownPassagesLength
+    });
+    
     // Last inn lagrede resultater
     this.loadResultsFromStorage();
     
-    if (this.passages && this.passages.length > 0) {
-      console.log("⚠️ PASSAGES FINNES ALLEREDE VED OPPSTART, MEN WATCH IKKE TRIGGET");
-    }
-    
+    // FIKSET: Ikke start intervall for passages-sjekk (unødvendig)
     this.checkInterval = setInterval(() => {
-      // Check interval placeholder
+      // Tom funksjon - kan fjernes i fremtidige versjoner
     }, 5000);
   },
 
+  // NYTT: Lifecycle hook for når komponenten blir deaktivert
   beforeDestroy() {
+    console.log("🏁 TIMERVIEW: Komponenten deaktiveres");
+    this.componentActive = false;
+    
+    // VIKTIG: Lagre timer-tilstand før komponenten ødelegges
+    this.saveTimerState();
+    
+    // Rydd opp intervaller
     if (this.timerInterval) {
       clearInterval(this.timerInterval);
     }
     if (this.checkInterval) {
       clearInterval(this.checkInterval);
     }
+  },
+
+  // NYTT: For Vue 3 kompatibilitet
+  beforeUnmount() {
+    console.log("🏁 TIMERVIEW: Komponenten unmountes");
+    this.componentActive = false;
+    
+    // VIKTIG: Lagre timer-tilstand før komponenten ødelegges
+    this.saveTimerState();
+    
+    // Rydd opp intervaller
+    if (this.timerInterval) {
+      clearInterval(this.timerInterval);
+    }
+    if (this.checkInterval) {
+      clearInterval(this.checkInterval);
+    }
+  },
+
+  // NYTT: Når komponenten aktiveres igjen (ved navigasjon tilbake)
+  activated() {
+    console.log("✅ TIMERVIEW: Komponenten aktivert igjen");
+    this.componentActive = true;
+    
+    // FIKSET: Gjenopprett timer hvis den var i gang
+    if (this.status === 'running' && !this.timerRunning) {
+      console.log("🔄 TIMERVIEW: Gjenoppretter pågående timer");
+      this.startTimer();
+    }
+    
+    // Sjekk om det har kommet nye passages mens vi var borte
+    const currentLength = this.passages ? this.passages.length : 0;
+    console.log("🔄 TIMERVIEW AKTIVERT: Sjekker passages-endringer", {
+      tidligereLengde: this.lastKnownPassagesLength,
+      gjeldendeLengde: currentLength,
+      forskjell: currentLength - this.lastKnownPassagesLength
+    });
+    
+    // Oppdater lastKnownPassagesLength til gjeldende tilstand
+    this.lastKnownPassagesLength = currentLength;
+  },
+
+  // FIKSET: Når komponenten deaktiveres (ved navigasjon bort)
+  deactivated() {
+    console.log("⏸️ TIMERVIEW: Komponenten deaktivert - bevarer timer-tilstand");
+    this.componentActive = false;
+    
+    // VIKTIG: Ikke stopp timeren, bare pause interval
+    if (this.timerInterval) {
+      clearInterval(this.timerInterval);
+      this.timerInterval = null;
+    }
+    // Bevar this.timerRunning = true og this.status = 'running'
   }
 };
 </script>
@@ -646,7 +824,6 @@ export default {
   display: flex;
   align-items: center;
   justify-content: center;
-  /* Touch-optimized tap target */
   min-width: 44px;
   min-height: 44px;
 }
@@ -705,7 +882,6 @@ export default {
   border-radius: 8px;
   cursor: pointer;
   transition: all 0.2s ease;
-  /* Touch-optimized tap target */
   min-height: 44px;
 }
 
@@ -744,7 +920,6 @@ export default {
   transition: all 0.2s ease;
   font-weight: bold;
   font-size: 1rem;
-  /* Touch-optimized tap target */
   min-height: 44px;
 }
 
@@ -802,7 +977,6 @@ export default {
   cursor: pointer;
   transition: all 0.2s ease;
   font-size: 0.8rem;
-  /* Touch-optimized tap target */
   min-height: 36px;
 }
 
@@ -867,7 +1041,6 @@ export default {
   justify-content: center;
   font-size: 16px;
   opacity: 0;
-  /* Touch-optimized tap target */
   min-width: 32px;
   min-height: 32px;
 }
@@ -933,7 +1106,6 @@ export default {
   border-radius: 4px;
   background-color: transparent;
   color: #d32f2f;
-  /* Touch-optimized tap target */
   min-width: 32px;
   min-height: 32px;
   display: flex;

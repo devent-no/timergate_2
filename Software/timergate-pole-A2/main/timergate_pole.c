@@ -3,27 +3,22 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-
 #include "driver/ledc.h"
 #include "esp_err.h"
 #include "esp_mac.h"
-
 #include "esp_wifi.h"
 #include "esp_system.h"
 #include "nvs_flash.h"
 #include "esp_event.h"
 #include "esp_netif.h"
 #include "protocol_examples_common.h"
-
 #include "lwip/err.h"
 #include "lwip/sys.h"
 #include "lwip/netdb.h"
 #include "lwip/dns.h"
-
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "soc/soc_caps.h"
-
 #include "driver/gpio.h"
 #include "esp_log.h"
 #include "esp_adc/adc_oneshot.h"
@@ -31,15 +26,26 @@
 #include "esp_adc/adc_cali_scheme.h"
 #include "led_strip.h"
 #include "esp_now.h"
-
 #include "lwip/sockets.h"
 #include "lwip/dns.h"
 #include "lwip/netdb.h"
-
 #include "esp_log.h"
 #include "esp_timer.h"  // For esp_timer_get_time()
-
 #include "esp_sleep.h"
+
+// ESP-NOW datastruktur for sensorbrudd
+typedef struct {
+    uint8_t k;           // Meldingstype (1 for sensorbrudd)
+    uint32_t t;          // Timestamp sekunder  
+    uint32_t u;          // Timestamp mikrosekunder
+    int32_t sensor_id;   // Sensor som utløste (0-6)
+    int32_t break_state; // 1=brudd, 0=gjenopprettet
+} __attribute__((packed)) esp_now_sensor_break_t;
+
+// ESP-NOW peer informasjon
+static uint8_t ap_mac_addr[ESP_NOW_ETH_ALEN] = {0};
+static bool esp_now_peer_added = false;
+
 
 /* Constants that aren't configurable in menuconfig */
 #define HOST_IP_ADDR "192.168.4.1"
@@ -1120,6 +1126,65 @@ static void sync_time()
     ESP_LOGI(TAG, "Unix timestamp is: %lld", tv_now.tv_sec);
 }
 
+
+
+// Funksjon for å sende sensorbrudd via ESP-NOW
+static void send_sensor_break_esp_now(int sensor_id, int break_state) {
+    if (!esp_now_peer_added) {
+        ESP_LOGW(TAG, "ESP-NOW peer ikke registrert, kan ikke sende sensorbrudd");
+        return;
+    }
+    
+    // Opprett datastruktur
+    esp_now_sensor_break_t sensor_data = {0};
+    sensor_data.k = 1;  // Meldingstype for sensorbrudd
+    sensor_data.sensor_id = sensor_id;
+    sensor_data.break_state = break_state;
+    
+    // Få nåværende tidsstempel
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    sensor_data.t = tv.tv_sec;
+    sensor_data.u = tv.tv_usec;
+    
+    ESP_LOGI(TAG, "📡 ESP-NOW SEND: sensor_id=%d, break_state=%d, tid=%u.%06u", 
+             sensor_id, break_state, sensor_data.t, sensor_data.u);
+    
+    // Send ESP-NOW melding
+    esp_err_t result = esp_now_send(ap_mac_addr, (uint8_t*)&sensor_data, sizeof(sensor_data));
+    
+    if (result == ESP_OK) {
+        ESP_LOGI(TAG, "✅ ESP-NOW sensorbrudd sendt vellykket");
+    } else {
+        ESP_LOGE(TAG, "❌ ESP-NOW sending feilet: %s", esp_err_to_name(result));
+    }
+}
+
+
+// Funksjon for å sjekke ESP-NOW status
+static void log_esp_now_status(void) {
+    ESP_LOGI(TAG, "📊 ESP-NOW Status:");
+    ESP_LOGI(TAG, "   Peer registrert: %s", esp_now_peer_added ? "✅ Ja" : "❌ Nei");
+    
+    if (esp_now_peer_added) {
+        ESP_LOGI(TAG, "   AP MAC: %02x:%02x:%02x:%02x:%02x:%02x",
+                 ap_mac_addr[0], ap_mac_addr[1], ap_mac_addr[2],
+                 ap_mac_addr[3], ap_mac_addr[4], ap_mac_addr[5]);
+    }
+    
+    // Test ESP-NOW tilgjengelighet
+    esp_now_peer_num_t peer_num = {0};
+    esp_err_t ret = esp_now_get_peer_num(&peer_num);
+    if (ret == ESP_OK) {
+        ESP_LOGI(TAG, "   Antall peers: %d", peer_num.total_num);
+    }
+}
+
+
+
+
+
+
 static void example_espnow_recv_cb(const esp_now_recv_info_t *recv_info, const uint8_t *data, int len)
 {
     uint8_t *mac_addr = recv_info->src_addr;
@@ -1144,12 +1209,47 @@ static void example_espnow_recv_cb(const esp_now_recv_info_t *recv_info, const u
 
 static esp_err_t example_espnow_init(void)
 {
+    ESP_LOGI(TAG, "Initialiserer ESP-NOW med peer management");
+    
     ESP_ERROR_CHECK(esp_now_init());
     ESP_ERROR_CHECK(esp_now_register_recv_cb(example_espnow_recv_cb));
 
+    // Hent AP's MAC-adresse fra WiFi-tilkoblingen
+    wifi_ap_record_t ap_info;
+    esp_err_t ret = esp_wifi_sta_get_ap_info(&ap_info);
+    
+    if (ret == ESP_OK) {
+        // Kopier AP's MAC-adresse
+        memcpy(ap_mac_addr, ap_info.bssid, ESP_NOW_ETH_ALEN);
+        
+        ESP_LOGI(TAG, "🔍 AP MAC-adresse hentet: %02x:%02x:%02x:%02x:%02x:%02x",
+                 ap_mac_addr[0], ap_mac_addr[1], ap_mac_addr[2],
+                 ap_mac_addr[3], ap_mac_addr[4], ap_mac_addr[5]);
+        
+        // Legg til AP som ESP-NOW peer
+        esp_now_peer_info_t peer_info = {0};
+        memcpy(peer_info.peer_addr, ap_mac_addr, ESP_NOW_ETH_ALEN);
+        peer_info.channel = 0;  // Samme kanal som WiFi
+        peer_info.ifidx = WIFI_IF_STA;
+        peer_info.encrypt = false;  // Ingen kryptering for nå
+        
+        ret = esp_now_add_peer(&peer_info);
+        if (ret == ESP_OK) {
+            esp_now_peer_added = true;
+            ESP_LOGI(TAG, "✅ ESP-NOW peer (AP) registrert vellykket");
+        } else if (ret == ESP_ERR_ESPNOW_EXIST) {
+            esp_now_peer_added = true;
+            ESP_LOGI(TAG, "ℹ️ ESP-NOW peer (AP) allerede registrert");
+        } else {
+            ESP_LOGE(TAG, "❌ Feil ved registrering av ESP-NOW peer: %s", esp_err_to_name(ret));
+        }
+    } else {
+        ESP_LOGE(TAG, "❌ Kunne ikke hente AP-informasjon: %s", esp_err_to_name(ret));
+        ESP_LOGW(TAG, "ESP-NOW sending vil ikke fungere uten AP MAC-adresse");
+    }
+
     return ESP_OK;
 }
-
 
 static void check_socket()
 {
@@ -1191,12 +1291,30 @@ static void check_socket()
                         publish_settings();
                     }
                 }
+                // else if (strncmp(command, "time", 4) == 0)
+                // {
+                //     timestamp = strtol(command + 5, NULL, 10);
+                //     ESP_LOGI(TAG, "Got timestamp: %lld", timestamp);
+                //     example_espnow_init();
+                // }
+
                 else if (strncmp(command, "time", 4) == 0)
                 {
                     timestamp = strtol(command + 5, NULL, 10);
                     ESP_LOGI(TAG, "Got timestamp: %lld", timestamp);
-                    example_espnow_init();
+                    
+                    // Initialiserer ESP-NOW med forbedret error handling
+                    esp_err_t espnow_result = example_espnow_init();
+                    if (espnow_result != ESP_OK) {
+                        ESP_LOGE(TAG, "❌ ESP-NOW initialisering feilet: %s", esp_err_to_name(espnow_result));
+                        ESP_LOGW(TAG, "⚠️ Sensorbrudd vil kun sendes via TCP");
+                    } else {
+                        ESP_LOGI(TAG, "✅ ESP-NOW initialisert - sensorbrudd sendes via både TCP og ESP-NOW");
+                    }
                 }
+
+
+
                 else if (strncmp(command, "hsearch", 7) == 0)
                 {
                     int channel = strtol(command + 8, NULL, 10);
@@ -1627,6 +1745,16 @@ void app_main(void)
     store_mac();
     nvs_update_restart();
 
+    // Initialiser ESP-NOW tidlig for rask passeringsdeteksjon
+    ESP_LOGI(TAG, "Initialiserer ESP-NOW ved oppstart...");
+    esp_err_t espnow_result = example_espnow_init();
+    if (espnow_result != ESP_OK) {
+        ESP_LOGE(TAG, "❌ ESP-NOW initialisering feilet: %s", esp_err_to_name(espnow_result));
+    } else {
+        ESP_LOGI(TAG, "✅ ESP-NOW klar for sensordata");
+        log_esp_now_status();
+    }
+
     xQueue = xQueueCreate(1, sizeof(char *));
     xQueueBreak = xQueueCreate(30, sizeof(char *));
     xTaskCreatePinnedToCore(tcp_client_task, "tcp_client", 4096, (void *)AF_INET, 5, NULL, 1);
@@ -1670,6 +1798,9 @@ void app_main(void)
     if (wifi_connected && connected) {
         ESP_LOGI(TAG, "*** STARTER HIGHPOINT SEARCH MANUELT VED OPPSTART ***");
         highpoint_search = true;
+        // Logg ESP-NOW status etter initialisering
+        vTaskDelay(1000 / portTICK_PERIOD_MS);
+        log_esp_now_status();
         highpoint_offset = 0;
         highpoint_channel = 0;
         highpoint_max = 0;
@@ -2116,10 +2247,15 @@ void app_main(void)
                     
                     // Send event hvis denne sensoren har endret tilstand
                     if (current_sensor_break != prev_sensor_break[i]) {
+                        // Send via TCP (eksisterende funksjonalitet)
                         publish_break(i, current_sensor_break ? 1 : 0);
+                        
+                        // Send via ESP-NOW for rask passeringsdeteksjon
+                        send_sensor_break_esp_now(i, current_sensor_break ? 1 : 0);
+                        
                         prev_sensor_break[i] = current_sensor_break;
                         
-                        ESP_LOGI(TAG, "Sensor %d endret tilstand: %s (ADC: %d, limit: %d)", 
+                        ESP_LOGI(TAG, "🔄 Sensor %d endret tilstand: %s (ADC: %d, limit: %d) - Sendt via TCP og ESP-NOW", 
                                 i, current_sensor_break ? "BRUTT" : "OK", 
                                 adc_raw[0][i], break_limit[i]);
                     }
