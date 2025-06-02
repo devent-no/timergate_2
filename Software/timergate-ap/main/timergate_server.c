@@ -3036,7 +3036,7 @@ esp_err_t simulate_pole_data_handler(httpd_req_t *req) {
             sensor_time_sec, sensor_time_usec,     // Målestolpe-tid
             server_time_sec, server_time_usec      // Server-tid
         );
-        
+         
         if (passage_detected) {
             ESP_LOGI(TAG, "🎯 SIMULERING: Passering detektert på sensor %d!", sensor_sequence[i]);
         }
