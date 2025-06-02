@@ -113,6 +113,47 @@ typedef struct {
     int first_sensor_id_candidate;
 } passage_detection_t;
 
+
+// Nye strukturer for discovery og pairing
+typedef struct {
+    uint32_t system_id;      // 0x00000000 = søker system
+    uint8_t msg_type;        // MSG_POLE_ANNOUNCE
+    uint8_t mac[6];          // Målestolpens MAC
+    char device_name[16];    // "TimerGate Pole"
+    uint8_t firmware_ver[3]; // [1, 2, 3]
+    int8_t rssi_estimate;    // For avstandsestimering
+} __attribute__((packed)) pole_announce_t;
+
+typedef struct {
+    uint32_t system_id;      // AP's System ID
+    uint8_t msg_type;        // MSG_SYSTEM_ASSIGN
+    uint8_t target_mac[6];   // Målestolpens MAC
+    char system_name[32];    // "Timergate Nord"
+} __attribute__((packed)) system_assign_t;
+
+typedef struct {
+    uint8_t mac[6];
+    char device_name[16];
+    time_t first_seen;
+    time_t last_seen;
+    int8_t rssi;
+    bool identifying;        // Om den blinker nå
+    uint8_t firmware_ver[3];
+} discovered_pole_t;
+
+// Discovery protokoll konstanter
+#define MSG_SENSOR_DATA        0x01
+#define MSG_PASSAGE_DETECTED   0x02
+#define MSG_POLE_ANNOUNCE      0x10
+#define MSG_SYSTEM_ASSIGN      0x11
+#define MSG_IDENTIFY_REQUEST   0x20
+#define MSG_COMMAND            0x30
+
+#define MAX_DISCOVERED_POLES   10
+
+
+
+
 // Array for å holde passeringsdeteksjonsstatus per målestolpe
 #define MAX_PASSAGE_DETECTORS MAX_POLES
 static passage_detection_t passage_detectors[MAX_PASSAGE_DETECTORS];
@@ -153,7 +194,12 @@ static sent_passage_t sent_passages[MAX_SENT_PASSAGES];
 static int sent_passage_count = 0;
 static SemaphoreHandle_t sent_passages_mutex;
 
-
+// Discovery og pairing variabler
+static discovered_pole_t discovered_poles[MAX_DISCOVERED_POLES];
+static int discovered_pole_count = 0;
+static bool discovery_active = true;  // Standard på for å oppdage nye målestolper
+static SemaphoreHandle_t discovery_mutex;
+static uint32_t current_system_id = 0;  // Vil bli satt ved oppstart
 
 
 
@@ -326,6 +372,17 @@ void log_passage_with_dual_timing(const char *mac_str, int sensor_id,
                                  uint32_t server_time_sec, uint32_t server_time_usec,
                                  int *sensors_used, int sensor_count);
 uint64_t calculate_stopwatch_time_ms(const uint8_t *mac1, const uint8_t *mac2);
+
+
+// Nye funksjonsdeklarasjoner for discovery og pairing
+void handle_pole_announce(const pole_announce_t *announce, int8_t rssi);
+void add_or_update_discovered_pole(const pole_announce_t *announce, int8_t rssi);
+void send_discovery_update_to_gui(void);
+void initialize_system_id(void);
+bool send_system_assign_to_pole(const uint8_t *mac);
+esp_err_t get_discovered_poles_handler(httpd_req_t *req);
+esp_err_t assign_pole_handler(httpd_req_t *req);
+esp_err_t get_system_id_handler(httpd_req_t *req);
 
 
 static httpd_handle_t global_server = NULL;
@@ -1638,6 +1695,497 @@ esp_err_t calculate_stopwatch_handler(httpd_req_t *req) {
 
 
 
+// Funksjon for å initialisere System ID
+void initialize_system_id(void) {
+    nvs_handle_t nvs_handle;
+    esp_err_t err;
+    
+    // Åpne NVS
+    err = nvs_open("system", NVS_READWRITE, &nvs_handle);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Feil ved åpning av NVS for system ID: %s", esp_err_to_name(err));
+        return;
+    }
+    
+    // Prøv å lese eksisterende System ID
+    err = nvs_get_u32(nvs_handle, "system_id", &current_system_id);
+    
+    if (err == ESP_ERR_NVS_NOT_FOUND) {
+        // Generer nytt System ID fra MAC-adresse
+        uint8_t mac[6];
+        esp_err_t mac_err = esp_read_mac(mac, ESP_MAC_WIFI_STA);
+        
+        if (mac_err == ESP_OK) {
+            // Bruk siste 4 bytes av MAC for å lage System ID
+            current_system_id = (mac[2] << 24) | (mac[3] << 16) | (mac[4] << 8) | mac[5];
+            
+            // Sikre at System ID aldri er 0x00000000 (reservert for broadcast)
+            if (current_system_id == 0x00000000) {
+                current_system_id = 0x00000001;
+            }
+            
+            // Lagre System ID permanent
+            err = nvs_set_u32(nvs_handle, "system_id", current_system_id);
+            if (err == ESP_OK) {
+                err = nvs_commit(nvs_handle);
+                if (err == ESP_OK) {
+                    ESP_LOGI(TAG, "🆔 Nytt System ID generert og lagret: %08X", current_system_id);
+                } else {
+                    ESP_LOGE(TAG, "Feil ved commit av System ID: %s", esp_err_to_name(err));
+                }
+            } else {
+                ESP_LOGE(TAG, "Feil ved lagring av System ID: %s", esp_err_to_name(err));
+            }
+        } else {
+            ESP_LOGE(TAG, "Kunne ikke lese MAC-adresse for System ID generering: %s", esp_err_to_name(mac_err));
+            current_system_id = 0x12345678;  // Fallback
+        }
+    } else if (err == ESP_OK) {
+        ESP_LOGI(TAG, "📱 System ID lastet fra NVS: %08X", current_system_id);
+    } else {
+        ESP_LOGE(TAG, "Feil ved lesing av System ID fra NVS: %s", esp_err_to_name(err));
+        current_system_id = 0x12345678;  // Fallback
+    }
+    
+    nvs_close(nvs_handle);
+}
+
+
+
+
+// Funksjon for å håndtere announce-meldinger fra målestolper
+void handle_pole_announce(const pole_announce_t *announce, int8_t rssi) {
+    // Ignorer meldinger som ikke er for discovery (system_id != 0)
+    if (announce->system_id != 0x00000000) {
+        return;
+    }
+    
+    ESP_LOGI(TAG, "📢 Mottok announce fra målestolpe: %s (MAC: %02x:%02x:%02x:%02x:%02x:%02x, RSSI: %d)",
+             announce->device_name,
+             announce->mac[0], announce->mac[1], announce->mac[2],
+             announce->mac[3], announce->mac[4], announce->mac[5],
+             rssi);
+    
+    // Legg til eller oppdater i discovered poles liste
+    add_or_update_discovered_pole(announce, rssi);
+    
+    // Send oppdatering til GUI
+    send_discovery_update_to_gui();
+}
+
+// Funksjon for å legge til eller oppdatere oppdaget målestolpe
+void add_or_update_discovered_pole(const pole_announce_t *announce, int8_t rssi) {
+    xSemaphoreTake(discovery_mutex, portMAX_DELAY);
+    
+    // Sjekk om denne målestolpen allerede er oppdaget
+    int existing_index = -1;
+    for (int i = 0; i < discovered_pole_count; i++) {
+        if (memcmp(discovered_poles[i].mac, announce->mac, 6) == 0) {
+            existing_index = i;
+            break;
+        }
+    }
+    
+    if (existing_index >= 0) {
+        // Oppdater eksisterende oppføring
+        discovered_poles[existing_index].last_seen = time(NULL);
+        discovered_poles[existing_index].rssi = rssi;
+        
+        ESP_LOGI(TAG, "🔄 Oppdatert eksisterende målestolpe: %s", announce->device_name);
+    } else {
+        // Legg til ny målestolpe hvis vi har plass
+        if (discovered_pole_count < MAX_DISCOVERED_POLES) {
+            discovered_pole_t *new_pole = &discovered_poles[discovered_pole_count];
+            
+            memcpy(new_pole->mac, announce->mac, 6);
+            strncpy(new_pole->device_name, announce->device_name, sizeof(new_pole->device_name) - 1);
+            new_pole->device_name[sizeof(new_pole->device_name) - 1] = '\0';
+            new_pole->first_seen = time(NULL);
+            new_pole->last_seen = time(NULL);
+            new_pole->rssi = rssi;
+            new_pole->identifying = false;
+            memcpy(new_pole->firmware_ver, announce->firmware_ver, 3);
+            
+            discovered_pole_count++;
+            
+            ESP_LOGI(TAG, "✅ Lagt til ny målestolpe: %s (totalt: %d)", 
+                     announce->device_name, discovered_pole_count);
+        } else {
+            ESP_LOGW(TAG, "⚠️ Kan ikke legge til flere målestolper - maksimalt %d nådd", MAX_DISCOVERED_POLES);
+        }
+    }
+    
+    xSemaphoreGive(discovery_mutex);
+}
+
+
+
+
+
+
+// Funksjon for å sende discovery-oppdateringer til GUI
+void send_discovery_update_to_gui(void) {
+    if (!global_server) {
+        return;  // Server ikke initialisert ennå
+    }
+    
+    xSemaphoreTake(discovery_mutex, portMAX_DELAY);
+    
+    // Bygg JSON med oppdagede målestolper
+    char *json_msg = malloc(2048);  // Stor nok buffer for alle målestolpene
+    if (!json_msg) {
+        xSemaphoreGive(discovery_mutex);
+        return;
+    }
+    
+    int pos = sprintf(json_msg, "{\"type\":\"discovery_update\",\"poles\":[");
+    
+    for (int i = 0; i < discovered_pole_count; i++) {
+        discovered_pole_t *pole = &discovered_poles[i];
+        
+        // Estimer avstand basert på RSSI (grov tilnærming)
+        int estimated_distance = 0;
+        if (pole->rssi > -40) {
+            estimated_distance = 5;
+        } else if (pole->rssi > -60) {
+            estimated_distance = 20;
+        } else if (pole->rssi > -80) {
+            estimated_distance = 100;
+        } else {
+            estimated_distance = 200;
+        }
+        
+        pos += sprintf(json_msg + pos,
+            "%s{\"mac\":\"%02x:%02x:%02x:%02x:%02x:%02x\","
+            "\"device_name\":\"%s\","
+            "\"first_seen\":%ld,"
+            "\"last_seen\":%ld,"
+            "\"rssi\":%d,"
+            "\"estimated_distance\":%d,"
+            "\"identifying\":%s,"
+            "\"firmware_ver\":[%d,%d,%d]}",
+            (i > 0) ? "," : "",
+            pole->mac[0], pole->mac[1], pole->mac[2],
+            pole->mac[3], pole->mac[4], pole->mac[5],
+            pole->device_name,
+            pole->first_seen,
+            pole->last_seen,
+            pole->rssi,
+            estimated_distance,
+            pole->identifying ? "true" : "false",
+            pole->firmware_ver[0], pole->firmware_ver[1], pole->firmware_ver[2]
+        );
+    }
+    
+    pos += sprintf(json_msg + pos, "]}");
+    
+    xSemaphoreGive(discovery_mutex);
+    
+    // Send til alle WebSocket-klienter
+    httpd_ws_frame_t ws_pkt = {
+        .final = true,
+        .fragmented = false,
+        .type = HTTPD_WS_TYPE_TEXT,
+        .payload = (uint8_t *)json_msg,
+        .len = strlen(json_msg)
+    };
+    
+    xSemaphoreTake(ws_mutex, portMAX_DELAY);
+    for (int i = 0; i < MAX_WS_CLIENTS; ++i) {
+        if (ws_clients[i] != 0) {
+            httpd_ws_send_frame_async(global_server, ws_clients[i], &ws_pkt);
+        }
+    }
+    xSemaphoreGive(ws_mutex);
+    
+    free(json_msg);
+    
+    ESP_LOGI(TAG, "📤 Sendt discovery-oppdatering til GUI (%d målestolper)", discovered_pole_count);
+}
+
+
+
+// API handler for å hente oppdagede målestolper
+esp_err_t get_discovered_poles_handler(httpd_req_t *req) {
+    ESP_LOGI(TAG, "get_discovered_poles_handler called");
+    
+    // CORS headers
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    
+    if (req->method == HTTP_OPTIONS) {
+        httpd_resp_send(req, NULL, 0);
+        return ESP_OK;
+    }
+    
+    xSemaphoreTake(discovery_mutex, portMAX_DELAY);
+    
+    // Bygg JSON-respons
+    char *response = malloc(2048);
+    if (!response) {
+        xSemaphoreGive(discovery_mutex);
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+    
+    int pos = sprintf(response, "{\"status\":\"success\",\"system_id\":\"%08X\",\"discovery_active\":%s,\"poles\":[",
+                     current_system_id, discovery_active ? "true" : "false");
+    
+    for (int i = 0; i < discovered_pole_count; i++) {
+        discovered_pole_t *pole = &discovered_poles[i];
+        
+        // Beregn hvor lenge siden sist sett
+        time_t now = time(NULL);
+        long seconds_since_last_seen = now - pole->last_seen;
+        
+        // Estimer avstand basert på RSSI
+        int estimated_distance = 0;
+        if (pole->rssi > -40) {
+            estimated_distance = 5;
+        } else if (pole->rssi > -60) {
+            estimated_distance = 20;
+        } else if (pole->rssi > -80) {
+            estimated_distance = 100;
+        } else {
+            estimated_distance = 200;
+        }
+        
+        pos += sprintf(response + pos,
+            "%s{\"mac\":\"%02x:%02x:%02x:%02x:%02x:%02x\","
+            "\"device_name\":\"%s\","
+            "\"first_seen\":%ld,"
+            "\"last_seen\":%ld,"
+            "\"seconds_since_last_seen\":%ld,"
+            "\"rssi\":%d,"
+            "\"estimated_distance\":%d,"
+            "\"identifying\":%s,"
+            "\"firmware_ver\":[%d,%d,%d]}",
+            (i > 0) ? "," : "",
+            pole->mac[0], pole->mac[1], pole->mac[2],
+            pole->mac[3], pole->mac[4], pole->mac[5],
+            pole->device_name,
+            pole->first_seen,
+            pole->last_seen,
+            seconds_since_last_seen,
+            pole->rssi,
+            estimated_distance,
+            pole->identifying ? "true" : "false",
+            pole->firmware_ver[0], pole->firmware_ver[1], pole->firmware_ver[2]
+        );
+    }
+    
+    pos += sprintf(response + pos, "]}");
+    
+    xSemaphoreGive(discovery_mutex);
+    
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    httpd_resp_sendstr(req, response);
+    
+    free(response);
+    return ESP_OK;
+}
+
+
+
+
+
+// API handler for å hente System ID
+esp_err_t get_system_id_handler(httpd_req_t *req) {
+    ESP_LOGI(TAG, "get_system_id_handler called");
+    
+    // CORS headers
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    
+    if (req->method == HTTP_OPTIONS) {
+        httpd_resp_send(req, NULL, 0);
+        return ESP_OK;
+    }
+    
+    // Hent systemnavn fra NVS hvis det finnes
+    char system_name[32] = "Timergate System";  // Standard navn
+    nvs_handle_t nvs_handle;
+    esp_err_t err = nvs_open("system", NVS_READONLY, &nvs_handle);
+    if (err == ESP_OK) {
+        size_t required_size = sizeof(system_name);
+        nvs_get_str(nvs_handle, "system_name", system_name, &required_size);
+        nvs_close(nvs_handle);
+    }
+    
+    // Bygg JSON-respons
+    char response[256];
+    sprintf(response, 
+        "{\"status\":\"success\","
+        "\"system_id\":\"%08X\","
+        "\"system_name\":\"%s\","
+        "\"discovery_active\":%s,"
+        "\"discovered_pole_count\":%d}",
+        current_system_id,
+        system_name,
+        discovery_active ? "true" : "false",
+        discovered_pole_count
+    );
+    
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    httpd_resp_sendstr(req, response);
+    
+    return ESP_OK;
+}
+
+
+
+
+
+// Funksjon for å sende system assignment til målestolpe
+bool send_system_assign_to_pole(const uint8_t *mac) {
+    if (!mac) {
+        ESP_LOGE(TAG, "Ugyldig MAC-adresse for system assignment");
+        return false;
+    }
+    
+    // Hent systemnavn fra NVS
+    char system_name[32] = "Timergate System";
+    nvs_handle_t nvs_handle;
+    esp_err_t err = nvs_open("system", NVS_READONLY, &nvs_handle);
+    if (err == ESP_OK) {
+        size_t required_size = sizeof(system_name);
+        nvs_get_str(nvs_handle, "system_name", system_name, &required_size);
+        nvs_close(nvs_handle);
+    }
+    
+    // Opprett system assignment-melding
+    system_assign_t assign_msg = {0};
+    assign_msg.system_id = current_system_id;
+    assign_msg.msg_type = MSG_SYSTEM_ASSIGN;
+    memcpy(assign_msg.target_mac, mac, 6);
+    strncpy(assign_msg.system_name, system_name, sizeof(assign_msg.system_name) - 1);
+    assign_msg.system_name[sizeof(assign_msg.system_name) - 1] = '\0';
+    
+    ESP_LOGI(TAG, "📤 Sender system assignment til målestolpe %02x:%02x:%02x:%02x:%02x:%02x",
+             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    ESP_LOGI(TAG, "   System ID: %08X, Navn: %s", current_system_id, system_name);
+    
+    // Send via ESP-NOW
+    esp_err_t result = esp_now_send(mac, (uint8_t*)&assign_msg, sizeof(assign_msg));
+    
+    if (result == ESP_OK) {
+        ESP_LOGI(TAG, "✅ System assignment sendt vellykket");
+        return true;
+    } else {
+        ESP_LOGE(TAG, "❌ Feil ved sending av system assignment: %s", esp_err_to_name(result));
+        return false;
+    }
+}
+
+
+
+
+
+
+
+
+// API handler for å tilknytte en målestolpe til systemet
+esp_err_t assign_pole_handler(httpd_req_t *req) {
+    char buf[200];
+    int ret, remaining = req->content_len;
+    
+    ESP_LOGI(TAG, "assign_pole_handler called, content_len: %d", remaining);
+    
+    // CORS headers
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    
+    if (req->method == HTTP_OPTIONS) {
+        httpd_resp_send(req, NULL, 0);
+        return ESP_OK;
+    }
+    
+    if (remaining > sizeof(buf)) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Request too large");
+        return ESP_FAIL;
+    }
+    
+    if ((ret = httpd_req_recv(req, buf, MIN(remaining, sizeof(buf)))) <= 0) {
+        if (ret == HTTPD_SOCK_ERR_TIMEOUT) {
+            httpd_resp_send_408(req);
+        }
+        return ESP_FAIL;
+    }
+    
+    buf[ret] = '\0';
+    ESP_LOGI(TAG, "Mottok assign data: %s", buf);
+    
+    // Parse MAC-adresse fra JSON
+    uint8_t target_mac[6];
+    char mac_str[18] = {0};
+    
+    char *mac_start = strstr(buf, "\"mac\":\"");
+    if (mac_start) {
+        mac_start += 7; // Hopp over "mac":"
+        char *mac_end = strchr(mac_start, '\"');
+        if (mac_end && (mac_end - mac_start) < 18) {
+            strncpy(mac_str, mac_start, mac_end - mac_start);
+            mac_str[mac_end - mac_start] = '\0';
+            
+            // Konverter MAC-streng til bytes
+            if (sscanf(mac_str, "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx", 
+                      &target_mac[0], &target_mac[1], &target_mac[2],
+                      &target_mac[3], &target_mac[4], &target_mac[5]) == 6) {
+                
+                ESP_LOGI(TAG, "Tilknytter målestolpe: %s", mac_str);
+                
+                // Send system assignment til målestolpen
+                if (send_system_assign_to_pole(target_mac)) {
+                    // Fjern fra discovered poles liste
+                    xSemaphoreTake(discovery_mutex, portMAX_DELAY);
+                    
+                    for (int i = 0; i < discovered_pole_count; i++) {
+                        if (memcmp(discovered_poles[i].mac, target_mac, 6) == 0) {
+                            // Flytt siste element til denne posisjonen
+                            if (i < discovered_pole_count - 1) {
+                                discovered_poles[i] = discovered_poles[discovered_pole_count - 1];
+                            }
+                            discovered_pole_count--;
+                            ESP_LOGI(TAG, "Fjernet målestolpe fra discovered liste");
+                            break;
+                        }
+                    }
+                    
+                    xSemaphoreGive(discovery_mutex);
+                    
+                    // Send oppdatering til GUI
+                    send_discovery_update_to_gui();
+                    
+                    httpd_resp_set_type(req, "application/json");
+                    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+                    httpd_resp_sendstr(req, "{\"status\":\"success\",\"message\":\"Målestolpe tilknyttet\"}");
+                } else {
+                    httpd_resp_set_type(req, "application/json");
+                    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+                    httpd_resp_sendstr(req, "{\"status\":\"error\",\"message\":\"Kunne ikke sende tilknytning til målestolpe\"}");
+                }
+            } else {
+                ESP_LOGW(TAG, "Ugyldig MAC-format: %s", mac_str);
+                httpd_resp_set_type(req, "application/json");
+                httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+                httpd_resp_sendstr(req, "{\"status\":\"error\",\"message\":\"Ugyldig MAC-format\"}");
+            }
+        } else {
+            ESP_LOGW(TAG, "Kunne ikke parse MAC fra JSON");
+            httpd_resp_set_type(req, "application/json");
+            httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+            httpd_resp_sendstr(req, "{\"status\":\"error\",\"message\":\"MAC ikke funnet i request\"}");
+        }
+    } else {
+        ESP_LOGW(TAG, "MAC ikke funnet i JSON");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_sendstr(req, "{\"status\":\"error\",\"message\":\"MAC ikke funnet i request\"}");
+    }
+    
+    return ESP_OK;
+}
+
+
 
 
 
@@ -2711,6 +3259,50 @@ void esp_now_recv_cb(const esp_now_recv_info_t *recv_info, const uint8_t *data, 
        return;
    }
    
+
+
+
+    // Sjekk om dette er en ny discovery-melding (med system_id)
+   if (len >= sizeof(pole_announce_t)) {
+       pole_announce_t *announce = (pole_announce_t*)data;
+       
+       // Sjekk om dette er en pole announce-melding
+       if (announce->msg_type == MSG_POLE_ANNOUNCE && announce->system_id == 0x00000000) {
+           ESP_LOGI(TAG, "📢 Mottok pole announce via ESP-NOW");
+           
+           // Estimer RSSI fra ESP-NOW info (hvis tilgjengelig)
+           int8_t rssi = recv_info->rx_ctrl ? recv_info->rx_ctrl->rssi : -70;
+           
+           handle_pole_announce(announce, rssi);
+           return;  // Ikke behandle som vanlig sensordata
+       }
+       
+       // Sjekk om dette er en melding for vårt system
+       uint32_t msg_system_id;
+       memcpy(&msg_system_id, data, sizeof(uint32_t));
+       
+       if (msg_system_id != current_system_id && msg_system_id != 0x00000000) {
+           // Dette er ikke for vårt system, ignorer
+           ESP_LOGD(TAG, "Ignorerer melding for annet system: %08X (vårt: %08X)", 
+                   msg_system_id, current_system_id);
+           return;
+       }
+       
+       // Hvis meldingen har system_id, hopp over de første 4 bytene
+       if (msg_system_id == current_system_id) {
+           data += sizeof(uint32_t);
+           len -= sizeof(uint32_t);
+           ESP_LOGI(TAG, "Behandler melding for vårt system: %08X", current_system_id);
+       }
+   }
+
+
+
+
+
+
+
+
    // Logg raw data for debugging
    ESP_LOGI(TAG, "Data header: k=%d, t=%02x%02x%02x%02x, u=%02x%02x%02x%02x", 
             data[0], 
@@ -3388,6 +3980,32 @@ httpd_handle_t start_webserver(void) {
         httpd_register_uri_handler(server_handle, &pole_power);
 
 
+        // Discovery og pairing API endpoints
+        httpd_uri_t get_system_id = {
+            .uri = "/api/v1/system/id",
+            .method = HTTP_GET,
+            .handler = get_system_id_handler,
+            .user_ctx = NULL
+        };
+        httpd_register_uri_handler(server_handle, &get_system_id);
+
+        httpd_uri_t get_discovered_poles = {
+            .uri = "/api/v1/poles/discovered",
+            .method = HTTP_GET,
+            .handler = get_discovered_poles_handler,
+            .user_ctx = NULL
+        };
+        httpd_register_uri_handler(server_handle, &get_discovered_poles);
+
+        httpd_uri_t assign_pole = {
+            .uri = "/api/v1/poles/assign",
+            .method = HTTP_POST,
+            .handler = assign_pole_handler,
+            .user_ctx = NULL
+        };
+        httpd_register_uri_handler(server_handle, &assign_pole);
+
+
         // System ID API
         httpd_uri_t get_system_id_uri = {
             .uri = "/api/v1/system/id",
@@ -3593,6 +4211,7 @@ wifi_config_t wifi_config = {
     sent_passages_mutex = xSemaphoreCreateMutex();
     passage_history_mutex = xSemaphoreCreateMutex();
     stopwatch_mutex = xSemaphoreCreateMutex();
+    discovery_mutex = xSemaphoreCreateMutex();
 
 
 
@@ -3608,6 +4227,15 @@ wifi_config_t wifi_config = {
     memset(stopwatch_passages, 0, sizeof(stopwatch_passages));
     stopwatch_passage_count = 0;
     next_passage_id = 1; 
+
+    // Initialiser discovery system
+    memset(discovered_poles, 0, sizeof(discovered_poles));
+    discovered_pole_count = 0;
+    discovery_active = true;
+    
+    // Initialiser System ID
+    initialize_system_id();
+    ESP_LOGI(TAG, "🆔 System ID initialisert: %08X", current_system_id);
 
 
     // Sikre at alle nominal_mac-felt er initialisert
