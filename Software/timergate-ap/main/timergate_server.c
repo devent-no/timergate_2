@@ -29,6 +29,7 @@
 
 #include "esp_timer.h"
 #include "esp_now.h"
+#include "esp_mac.h"
 
 
 
@@ -192,6 +193,36 @@ static SemaphoreHandle_t tcp_poles_mutex;
 static const char *TAG = "timergate-ap";
 
 
+// System ID for isolasjon mellom Timergate-systemer
+static uint32_t current_system_id = 0;
+static SemaphoreHandle_t system_id_mutex;
+
+// Meldingstyper for ESP-NOW kommunikasjon
+#define MSG_SENSOR_DATA        0x01
+#define MSG_PASSAGE_DETECTED   0x02
+#define MSG_POLE_ANNOUNCE      0x10
+#define MSG_SYSTEM_ASSIGN      0x11
+#define MSG_IDENTIFY_REQUEST   0x20
+#define MSG_COMMAND            0x30
+
+// Kommandotyper
+#define CMD_TIME_SYNC      0x01
+#define CMD_RESTART        0x02
+#define CMD_HSEARCH        0x03
+#define CMD_SET_BREAK      0x04
+#define CMD_SET_ENABLED    0x05
+#define CMD_POWER_OFF      0x06
+
+// ESP-NOW meldingsformat med System ID
+typedef struct {
+    uint32_t system_id;      // Unikt per system
+    uint8_t msg_type;        // SENSOR_DATA, COMMAND, ANNOUNCE, etc.
+    uint8_t data[];          // Payload
+} __attribute__((packed)) timergate_msg_t;
+
+
+
+
 static void log_event_passering(const char *mac, int sensor_id, const char *status,
                                 double timestamp, int count, int debounce_ms,
                                 int sensors_used[], int sensor_count)
@@ -221,6 +252,15 @@ static void log_event_passering(const char *mac, int sensor_id, const char *stat
 
 // Funksjonsdeklarasjoner
 void init_esp_now(void);
+void initialize_system_id(void);
+uint32_t get_system_id(void);
+bool is_message_for_us(const timergate_msg_t *msg);
+esp_err_t send_esp_now_message(const uint8_t *dest_mac, uint8_t msg_type, const void *payload, size_t payload_len);
+
+esp_err_t get_system_id_handler(httpd_req_t *req);
+
+
+
 esp_err_t simulate_pole_data_handler(httpd_req_t *req);
 esp_err_t websocket_test_page_handler(httpd_req_t *req);
 
@@ -2639,6 +2679,26 @@ void clean_old_passages(void *pvParameters) {
 
 // ESP-NOW mottaker callback
 void esp_now_recv_cb(const esp_now_recv_info_t *recv_info, const uint8_t *data, int len) {
+
+   // Sjekk om meldingen har riktig format med System ID
+   if (len < sizeof(timergate_msg_t)) {
+       ESP_LOGD(TAG, "ESP-NOW melding for kort (%d bytes), antar gammel format", len);
+       // Fall tilbake til gammel behandling for bakoverkompatibilitet
+   } else {
+       // Sjekk om dette er en ny timergate_msg_t med System ID
+       timergate_msg_t *msg = (timergate_msg_t *)data;
+       if (!is_message_for_us(msg)) {
+           ESP_LOGD(TAG, "ESP-NOW melding ikke for vårt system (ID: %08X vs vårt: %08X)", 
+                   msg->system_id, current_system_id);
+           return; // Ignorer meldinger fra andre systemer
+       }
+       ESP_LOGI(TAG, "ESP-NOW melding bekreftet for vårt system (ID: %08X)", msg->system_id);
+   }
+
+
+
+
+
    // Hent MAC-adressen fra recv_info
    const uint8_t *mac_addr = recv_info->src_addr;
    
@@ -3328,8 +3388,14 @@ httpd_handle_t start_webserver(void) {
         httpd_register_uri_handler(server_handle, &pole_power);
 
 
-
-
+        // System ID API
+        httpd_uri_t get_system_id_uri = {
+            .uri = "/api/v1/system/id",
+            .method = HTTP_GET,
+            .handler = get_system_id_handler,
+            .user_ctx = NULL
+        };
+        httpd_register_uri_handler(server_handle, &get_system_id_uri);
 
 
 
@@ -3350,6 +3416,125 @@ httpd_handle_t start_webserver(void) {
    }
 
    return server_handle;
+}
+
+
+// Funksjon for å initialisere unikt System ID
+void initialize_system_id(void) {
+    esp_err_t err;
+    nvs_handle_t nvs_handle;
+    
+    ESP_LOGI(TAG, "Initialiserer System ID...");
+    
+    // Åpne NVS for system-konfigurasjon
+    err = nvs_open("system", NVS_READWRITE, &nvs_handle);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Feil ved åpning av NVS system namespace: %s", esp_err_to_name(err));
+        // Generer midlertidig ID fra MAC
+        uint8_t mac[6];
+        esp_read_mac(mac, ESP_MAC_WIFI_STA);
+        current_system_id = (mac[2] << 24) | (mac[3] << 16) | (mac[4] << 8) | mac[5];
+        ESP_LOGW(TAG, "Bruker midlertidig System ID: %08X", current_system_id);
+        return;
+    }
+    
+    // Prøv å lese eksisterende System ID
+    err = nvs_get_u32(nvs_handle, "system_id", &current_system_id);
+    
+    if (err == ESP_ERR_NVS_NOT_FOUND) {
+        // Generer nytt System ID basert på AP's MAC-adresse
+        uint8_t mac[6];
+        esp_read_mac(mac, ESP_MAC_WIFI_STA);
+        current_system_id = (mac[2] << 24) | (mac[3] << 16) | (mac[4] << 8) | mac[5];
+        
+        // Lagre permanent i NVS
+        err = nvs_set_u32(nvs_handle, "system_id", current_system_id);
+        if (err == ESP_OK) {
+            err = nvs_commit(nvs_handle);
+            if (err == ESP_OK) {
+                ESP_LOGI(TAG, "Nytt System ID generert og lagret: %08X", current_system_id);
+            } else {
+                ESP_LOGE(TAG, "Feil ved commit av System ID: %s", esp_err_to_name(err));
+            }
+        } else {
+            ESP_LOGE(TAG, "Feil ved lagring av System ID: %s", esp_err_to_name(err));
+        }
+    } else if (err == ESP_OK) {
+        ESP_LOGI(TAG, "Eksisterende System ID lastet: %08X", current_system_id);
+    } else {
+        ESP_LOGE(TAG, "Feil ved lesing av System ID: %s", esp_err_to_name(err));
+        // Bruk MAC som fallback
+        uint8_t mac[6];
+        esp_read_mac(mac, ESP_MAC_WIFI_STA);
+        current_system_id = (mac[2] << 24) | (mac[3] << 16) | (mac[4] << 8) | mac[5];
+        ESP_LOGW(TAG, "Bruker MAC-basert System ID som fallback: %08X", current_system_id);
+    }
+    
+    nvs_close(nvs_handle);
+}
+
+// Funksjon for å hente gjeldende System ID
+uint32_t get_system_id(void) {
+    return current_system_id;
+}
+
+// Funksjon for å sjekke om en melding tilhører vårt system
+bool is_message_for_us(const timergate_msg_t *msg) {
+    return (msg->system_id == current_system_id) || 
+           (msg->system_id == 0x00000000); // Broadcast/discovery
+}
+
+// Handler for å hente System ID
+esp_err_t get_system_id_handler(httpd_req_t *req) {
+    ESP_LOGI(TAG, "get_system_id_handler called");
+    
+    // Send gjeldende System ID
+    char response[128];
+    sprintf(response, "{\"status\":\"success\",\"system_id\":\"%08" PRIX32 "\",\"system_id_int\":%" PRIu32 "}",
+            current_system_id, current_system_id);
+    
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    httpd_resp_sendstr(req, response);
+    
+    return ESP_OK;
+}
+
+
+
+// Hjelpefunksjon for å sende ESP-NOW melding med System ID
+esp_err_t send_esp_now_message(const uint8_t *dest_mac, uint8_t msg_type, 
+                               const void *payload, size_t payload_len) {
+    if (!dest_mac) {
+        ESP_LOGE(TAG, "Ugyldig destinasjons-MAC for ESP-NOW sending");
+        return ESP_ERR_INVALID_ARG;
+    }
+    
+    size_t total_len = sizeof(timergate_msg_t) + payload_len;
+    timergate_msg_t *msg = malloc(total_len);
+    if (!msg) {
+        ESP_LOGE(TAG, "Minneallokering feilet for ESP-NOW melding");
+        return ESP_ERR_NO_MEM;
+    }
+    
+    msg->system_id = current_system_id;
+    msg->msg_type = msg_type;
+    if (payload && payload_len > 0) {
+        memcpy(msg->data, payload, payload_len);
+    }
+    
+    ESP_LOGI(TAG, "Sender ESP-NOW melding type %d med System ID %08X til %02x:%02x:%02x:%02x:%02x:%02x",
+             msg_type, current_system_id, 
+             dest_mac[0], dest_mac[1], dest_mac[2], dest_mac[3], dest_mac[4], dest_mac[5]);
+    
+    esp_err_t result = esp_now_send(dest_mac, (uint8_t*)msg, total_len);
+    free(msg);
+    
+    if (result != ESP_OK) {
+        ESP_LOGE(TAG, "ESP-NOW sending feilet: %s", esp_err_to_name(result));
+    }
+    
+    return result;
 }
 
 
@@ -3399,6 +3584,9 @@ wifi_config_t wifi_config = {
 
     // Initialiser mutexer
     ws_mutex = xSemaphoreCreateMutex();
+    system_id_mutex = xSemaphoreCreateMutex();
+    // Initialiser System ID
+    initialize_system_id();
     pole_data_mutex = xSemaphoreCreateMutex();
     tcp_poles_mutex = xSemaphoreCreateMutex();
     passage_mutex = xSemaphoreCreateMutex();
