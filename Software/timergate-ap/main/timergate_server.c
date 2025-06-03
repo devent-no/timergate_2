@@ -131,6 +131,18 @@ typedef struct {
     char system_name[32];    // "Timergate Nord"
 } __attribute__((packed)) system_assign_t;
 
+
+
+typedef struct {
+    uint32_t system_id;      // 0x00000000 for broadcast eller current_system_id
+    uint8_t msg_type;        // MSG_IDENTIFY_REQUEST
+    uint8_t target_mac[6];   // Spesifikk målestolpe
+    uint8_t duration_sec;    // Hvor lenge den skal blinke (5-30 sekunder)
+} __attribute__((packed)) identify_request_t;
+
+
+
+
 typedef struct {
     uint8_t mac[6];
     char device_name[16];
@@ -382,6 +394,7 @@ void initialize_system_id(void);
 bool send_system_assign_to_pole(const uint8_t *mac);
 esp_err_t get_discovered_poles_handler(httpd_req_t *req);
 esp_err_t assign_pole_handler(httpd_req_t *req);
+esp_err_t identify_pole_handler(httpd_req_t *req);
 esp_err_t get_system_id_handler(httpd_req_t *req);
 
 
@@ -850,12 +863,45 @@ void tcp_client_handler(void *arg) {
                     // Logg mottatt kommando
                     //ESP_LOGI(TAG, "Mottatt kommando fra målestolpe %d: %s", pole_idx, command);
                     
-                    // Tolke MAC-adresse fra "ID: MAC" kommando hvis den sendes
+                    // // Tolke MAC-adresse fra "ID: MAC" kommando hvis den sendes
+                    // if (strncmp(command, "ID: ", 4) == 0) {
+                    //     strncpy(tcp_poles[pole_idx].mac, command + 4, 17);
+                    //     tcp_poles[pole_idx].mac[17] = 0; // Sikre null-terminering
+                    //     ESP_LOGI(TAG, "Målestolpe %d har MAC: '%s'", pole_idx, tcp_poles[pole_idx].mac);
+                    // }
+
+
+                    // Registrer målestolpen som ESP-NOW peer når vi får MAC-adressen
                     if (strncmp(command, "ID: ", 4) == 0) {
                         strncpy(tcp_poles[pole_idx].mac, command + 4, 17);
                         tcp_poles[pole_idx].mac[17] = 0; // Sikre null-terminering
                         ESP_LOGI(TAG, "Målestolpe %d har MAC: '%s'", pole_idx, tcp_poles[pole_idx].mac);
+                        
+                        // Automatisk registrering som ESP-NOW peer
+                        uint8_t mac_bytes[6];
+                        if (sscanf(tcp_poles[pole_idx].mac, "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx", 
+                                  &mac_bytes[0], &mac_bytes[1], &mac_bytes[2],
+                                  &mac_bytes[3], &mac_bytes[4], &mac_bytes[5]) == 6) {
+                            
+                            esp_now_peer_info_t peer_info = {0};
+                            memcpy(peer_info.peer_addr, mac_bytes, ESP_NOW_ETH_ALEN);
+                            peer_info.channel = 0;
+                            peer_info.ifidx = WIFI_IF_AP;
+                            peer_info.encrypt = false;
+                            
+                            esp_err_t peer_result = esp_now_add_peer(&peer_info);
+                            if (peer_result == ESP_OK) {
+                                ESP_LOGI(TAG, "✅ TCP-målestolpe registrert som ESP-NOW peer: %s", tcp_poles[pole_idx].mac);
+                            } else if (peer_result == ESP_ERR_ESPNOW_EXIST) {
+                                ESP_LOGI(TAG, "ℹ️ TCP-målestolpe allerede registrert som ESP-NOW peer: %s", tcp_poles[pole_idx].mac);
+                            } else {
+                                ESP_LOGE(TAG, "❌ Kunne ikke registrere TCP-målestolpe som ESP-NOW peer: %s (%s)", 
+                                        tcp_poles[pole_idx].mac, esp_err_to_name(peer_result));
+                            }
+                        }
                     }
+
+
                     
                     // Send direkte til WebSocket-klienter
                     char ws_msg[256];
@@ -2007,6 +2053,112 @@ esp_err_t get_discovered_poles_handler(httpd_req_t *req) {
     return ESP_OK;
 }
 
+
+
+
+// API handler for å identifisere en målestolpe (få den til å blinke)
+esp_err_t identify_pole_handler(httpd_req_t *req) {
+    char buf[200];
+    int ret, remaining = req->content_len;
+    
+    ESP_LOGI(TAG, "identify_pole_handler called, content_len: %d", remaining);
+    
+    // CORS headers
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    
+    if (req->method == HTTP_OPTIONS) {
+        httpd_resp_send(req, NULL, 0);
+        return ESP_OK;
+    }
+    
+    if (remaining > sizeof(buf)) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Request too large");
+        return ESP_FAIL;
+    }
+    
+    if ((ret = httpd_req_recv(req, buf, MIN(remaining, sizeof(buf)))) <= 0) {
+        if (ret == HTTPD_SOCK_ERR_TIMEOUT) {
+            httpd_resp_send_408(req);
+        }
+        return ESP_FAIL;
+    }
+    
+    buf[ret] = '\0';
+    ESP_LOGI(TAG, "Mottok identify data: %s", buf);
+    
+    // Parse MAC-adresse og varighet fra JSON
+    uint8_t target_mac[6];
+    char mac_str[18] = {0};
+    uint8_t duration_sec = 10; // Standard 10 sekunder
+    
+    // Parse MAC-adresse
+    char *mac_start = strstr(buf, "\"mac\":\"");
+    if (mac_start) {
+        mac_start += 7; // Hopp over "mac":"
+        char *mac_end = strchr(mac_start, '\"');
+        if (mac_end && (mac_end - mac_start) < 18) {
+            strncpy(mac_str, mac_start, mac_end - mac_start);
+            mac_str[mac_end - mac_start] = '\0';
+            
+            // Konverter MAC-streng til bytes
+            if (sscanf(mac_str, "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx", 
+                      &target_mac[0], &target_mac[1], &target_mac[2],
+                      &target_mac[3], &target_mac[4], &target_mac[5]) == 6) {
+                
+                // Parse varighet (valgfritt)
+                char *duration_start = strstr(buf, "\"duration\":");
+                if (duration_start) {
+                    duration_start += 11; // Hopp over "duration":
+                    int parsed_duration = atoi(duration_start);
+                    if (parsed_duration >= 5 && parsed_duration <= 30) {
+                        duration_sec = (uint8_t)parsed_duration;
+                    }
+                }
+                
+                ESP_LOGI(TAG, "Sender identify-forespørsel til målestolpe: %s (varighet: %d sek)", 
+                         mac_str, duration_sec);
+                
+                // Opprett og send identify-melding
+                identify_request_t identify_msg = {0};
+                identify_msg.system_id = current_system_id;
+                identify_msg.msg_type = MSG_IDENTIFY_REQUEST;
+                memcpy(identify_msg.target_mac, target_mac, 6);
+                identify_msg.duration_sec = duration_sec;
+                
+                esp_err_t result = esp_now_send(target_mac, (uint8_t*)&identify_msg, sizeof(identify_msg));
+                
+                if (result == ESP_OK) {
+                    ESP_LOGI(TAG, "✅ Identify-forespørsel sendt vellykket til %s", mac_str);
+                    httpd_resp_set_type(req, "application/json");
+                    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+                    httpd_resp_sendstr(req, "{\"status\":\"success\",\"message\":\"Identify-kommando sendt\"}");
+                } else {
+                    ESP_LOGE(TAG, "❌ Feil ved sending av identify-forespørsel: %s", esp_err_to_name(result));
+                    httpd_resp_set_type(req, "application/json");
+                    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+                    httpd_resp_sendstr(req, "{\"status\":\"error\",\"message\":\"Kunne ikke sende identify-kommando\"}");
+                }
+            } else {
+                ESP_LOGW(TAG, "Ugyldig MAC-format: %s", mac_str);
+                httpd_resp_set_type(req, "application/json");
+                httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+                httpd_resp_sendstr(req, "{\"status\":\"error\",\"message\":\"Ugyldig MAC-format\"}");
+            }
+        } else {
+            ESP_LOGW(TAG, "Kunne ikke parse MAC fra JSON");
+            httpd_resp_set_type(req, "application/json");
+            httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+            httpd_resp_sendstr(req, "{\"status\":\"error\",\"message\":\"MAC ikke funnet i request\"}");
+        }
+    } else {
+        ESP_LOGW(TAG, "MAC ikke funnet i JSON");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_sendstr(req, "{\"status\":\"error\",\"message\":\"MAC ikke funnet i request\"}");
+    }
+    
+    return ESP_OK;
+}
 
 
 
@@ -4026,6 +4178,18 @@ httpd_handle_t start_webserver(void) {
             .user_ctx = NULL
         };
         httpd_register_uri_handler(server_handle, &assign_pole);
+
+
+
+        httpd_uri_t identify_pole = {
+            .uri = "/api/v1/poles/identify",
+            .method = HTTP_POST,
+            .handler = identify_pole_handler,
+            .user_ctx = NULL
+        };
+        httpd_register_uri_handler(server_handle, &identify_pole);
+
+
 
 
         // System ID API

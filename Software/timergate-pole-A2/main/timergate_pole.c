@@ -125,6 +125,15 @@ static bool announcement_active = true;              // Send announce-meldinger
 static uint32_t last_announce_time = 0;
 static const uint32_t ANNOUNCE_INTERVAL_MS = 5000;  // Send announce hvert 5. sekund
 
+
+// Variabler for identify-funksjonalitet
+static bool identification_active = false;
+static uint64_t identification_end_time = 0;
+static const uint8_t IDENTIFY_BLINK_INTERVAL_MS = 200; // Rask blinking hver 200ms
+
+
+
+
 // Discovery protokoll strukturer (samme som i AP)
 typedef struct {
     uint32_t system_id;      // 0x00000000 = søker system
@@ -141,6 +150,18 @@ typedef struct {
     uint8_t target_mac[6];   // Målestolpens MAC
     char system_name[32];    // "Timergate Nord"
 } __attribute__((packed)) system_assign_t;
+
+
+typedef struct {
+    uint32_t system_id;      // 0x00000000 for broadcast eller current_system_id
+    uint8_t msg_type;        // MSG_IDENTIFY_REQUEST
+    uint8_t target_mac[6];   // Spesifikk målestolpe
+    uint8_t duration_sec;    // Hvor lenge den skal blinke (5-30 sekunder)
+} __attribute__((packed)) identify_request_t;
+
+
+
+
 
 // Meldingstyper (samme som i AP)
 #define MSG_SENSOR_DATA        0x01
@@ -219,6 +240,11 @@ static void handle_system_assignment(const system_assign_t *assign);
 static void load_system_assignment_from_nvs(void);
 static void save_system_assignment_to_nvs(void);
 static bool is_assigned_to_system(void);
+
+
+static void handle_identify_request(const identify_request_t *msg);
+static void start_identification_blink(uint8_t duration);
+static void handle_identification_animation(void);
 
 
 
@@ -1047,6 +1073,26 @@ static void tcp_connect()
     // Vent lenger før status endres til READY
     vTaskDelay(500 / portTICK_PERIOD_MS);
     set_system_status(STATUS_READY);
+
+    // Send vår MAC-adresse til serveren for ESP-NOW peer-registrering
+    uint8_t mac[6];
+    esp_err_t mac_err = esp_read_mac(mac, ESP_MAC_WIFI_STA);
+    if (mac_err == ESP_OK) {
+        char id_msg[32];
+        sprintf(id_msg, "ID: %02x:%02x:%02x:%02x:%02x:%02x\n", 
+                mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+        
+        int written = send(sock, id_msg, strlen(id_msg), 0);
+        if (written > 0) {
+            ESP_LOGI(TAG, "Sendt MAC-adresse til server: %s", id_msg);
+        } else {
+            ESP_LOGW(TAG, "Kunne ikke sende MAC-adresse til server");
+        }
+    }
+
+
+
+
 }
 
 static void add_to_queue(char *msg)
@@ -1252,6 +1298,19 @@ static void example_espnow_recv_cb(const esp_now_recv_info_t *recv_info, const u
             return;
         }
     }
+
+    // Sjekk om dette er en identify-forespørsel
+    if (len >= sizeof(identify_request_t)) {
+        identify_request_t *identify = (identify_request_t*)data;
+        if (identify->msg_type == MSG_IDENTIFY_REQUEST) {
+            ESP_LOGI(TAG, "✨ Mottok identify-forespørsel via ESP-NOW");
+            handle_identify_request(identify);
+            return;
+        }
+    }
+
+
+
 
     // Behandle vanlige ESP-NOW meldinger (eksisterende kode)
     example_espnow_data_t *buf = (example_espnow_data_t *)data;
@@ -1488,6 +1547,75 @@ static void save_system_assignment_to_nvs(void) {
 
 
 
+// Funksjon for å håndtere identify-forespørsler
+static void handle_identify_request(const identify_request_t *msg) {
+    // Sjekk at meldingen er rettet mot oss
+    uint8_t my_mac[6];
+    esp_read_mac(my_mac, ESP_MAC_WIFI_STA);
+    
+    if (memcmp(msg->target_mac, my_mac, 6) != 0) {
+        return; // Ikke for oss
+    }
+    
+    ESP_LOGI(TAG, "✨ Mottok identify-forespørsel fra System ID: %08X", msg->system_id);
+    ESP_LOGI(TAG, "   Varighet: %d sekunder", msg->duration_sec);
+    
+    // Start identifikasjonsblinking
+    start_identification_blink(msg->duration_sec);
+}
+
+// Funksjon for å starte identifikasjonsblinking
+static void start_identification_blink(uint8_t duration) {
+    if (duration < 5) duration = 5;   // Minimum 5 sekunder
+    if (duration > 30) duration = 30; // Maksimum 30 sekunder
+    
+    identification_active = true;
+    identification_end_time = esp_timer_get_time() + ((uint64_t)duration * 1000000);
+    
+    ESP_LOGI(TAG, "🔶 Starter identifikasjonsblinking i %d sekunder", duration);
+    
+    // Sett alle LED-er til kraftig oransje for å starte
+    normal_led_control = false;
+    set_all_leds(1, 255, 165, 0);  // Kraftig oransje
+}
+
+// Funksjon for å håndtere identifikasjonsanimasjon
+static void handle_identification_animation(void) {
+    if (!identification_active) {
+        return;
+    }
+    
+    uint64_t current_time = esp_timer_get_time();
+    
+    // Sjekk om identifikasjonsperioden er over
+    if (current_time >= identification_end_time) {
+        ESP_LOGI(TAG, "🔶 Identifikasjonsblinking fullført");
+        identification_active = false;
+        
+        // Gå tilbake til normal LED-kontroll
+        normal_led_control = true;
+        
+        // Slå av alle LED-er for å returnere til normal tilstand
+        set_all_leds(0, 0, 0, 0);
+        return;
+    }
+    
+    // Kraftig oransje blinking med rask frekvens
+    uint32_t blink_cycle = IDENTIFY_BLINK_INTERVAL_MS * 2; // 400ms total syklus
+    uint32_t time_in_cycle = (current_time / 1000) % blink_cycle;
+    bool blink_on = time_in_cycle < IDENTIFY_BLINK_INTERVAL_MS;
+    
+    if (blink_on) {
+        // Kraftig oransje når på
+        set_all_leds(1, 255, 165, 0);
+    } else {
+        // Av når blink er av
+        set_all_leds(0, 0, 0, 0);
+    }
+    
+    // Deaktiver normal LED-kontroll mens identifikasjon pågår
+    normal_led_control = false;
+}
 
 
 
@@ -2173,6 +2301,11 @@ void app_main(void)
 
         // Håndter status-animasjoner
         handle_status_animation();
+
+        // Håndter identifikasjonsanimasjon (prioriteres over normal LED-kontroll)
+        handle_identification_animation();
+
+
 
         // Oppdater LED-er basert på sensortilstand men bare hvis normal_led_control er aktivert og ikke under kalibrering
         if (normal_led_control && !highpoint_search) {
