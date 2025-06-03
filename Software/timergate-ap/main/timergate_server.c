@@ -153,6 +153,27 @@ typedef struct {
     uint8_t firmware_ver[3];
 } discovered_pole_t;
 
+
+// Struktur for tilknyttede (paired) målestolper
+typedef struct {
+    uint8_t mac[6];
+    char name[32];           // "Start Gate", "Finish Gate"
+    bool enabled;
+    time_t paired_time;      // Når den ble tilknyttet
+    time_t last_seen;        // Siste aktivitet
+    uint32_t firmware_version;
+    char user_notes[64];     // "Nordre målestolpe"
+} paired_pole_t;
+
+#define MAX_PAIRED_POLES 10
+
+
+
+
+
+
+
+
 // Discovery protokoll konstanter
 #define MSG_SENSOR_DATA        0x01
 #define MSG_PASSAGE_DETECTED   0x02
@@ -211,6 +232,12 @@ static discovered_pole_t discovered_poles[MAX_DISCOVERED_POLES];
 static int discovered_pole_count = 0;
 static bool discovery_active = true;  // Standard på for å oppdage nye målestolper
 static SemaphoreHandle_t discovery_mutex;
+
+// Paired poles variabler
+static paired_pole_t paired_poles[MAX_PAIRED_POLES];
+static int32_t paired_pole_count = 0;
+static SemaphoreHandle_t paired_poles_mutex;
+
 //static uint32_t current_system_id = 0;  // Vil bli satt ved oppstart
 
 
@@ -317,6 +344,14 @@ esp_err_t send_esp_now_message(const uint8_t *dest_mac, uint8_t msg_type, const 
 
 esp_err_t get_system_id_handler(httpd_req_t *req);
 
+// Funksjonsdeklarasjoner for paired poles
+void load_paired_poles_from_nvs(void);
+void save_paired_poles_to_nvs(void);
+void add_paired_pole(const uint8_t *mac, const char *name);
+void remove_paired_pole(const uint8_t *mac);
+esp_err_t get_paired_poles_handler(httpd_req_t *req);
+esp_err_t unpair_pole_handler(httpd_req_t *req);
+esp_err_t rename_pole_handler(httpd_req_t *req);
 
 
 esp_err_t simulate_pole_data_handler(httpd_req_t *req);
@@ -685,190 +720,6 @@ void tcp_client_handler(void *arg) {
                    
                    
 
-                    /* DEAKTIVERT: Bruk kun ESP-NOW for timing-data (TCP har for høy latens)
-                    else if (strncmp(command, "{\"K\":1,", 7) == 0) {
-                        // Parse JSON-strengen for K=1 (sensor break events)
-                        char mac_str[18] = {0};
-                        int32_t break_value = -1;
-                        int32_t sensor_id = -1;
-                        uint32_t time_sec = 0;
-                        uint32_t time_usec = 0;
-                        
-                        ESP_LOGI(TAG, "Mottat K=1 JSON: %s", command);
-                        
-                        // Finn MAC-adresse
-                        char *mac_start = strstr(command, "\"M\":\"");
-                        if (mac_start) {
-                            mac_start += 5; // Hopp over "M":"
-                            char *mac_end = strchr(mac_start, '\"');
-                            if (mac_end && (mac_end - mac_start) < 18) {
-                                strncpy(mac_str, mac_start, mac_end - mac_start);
-                                mac_str[mac_end - mac_start] = '\0';
-                            }
-                        }
-                        
-                        // Finn sensor ID (S-feltet)
-                        char *sensor_start = strstr(command, "\"S\":");
-                        if (sensor_start) {
-                            sensor_start += 4; // Hopp over "S":
-                            sensor_id = atoi(sensor_start);
-                        }
-                        
-                        // Finn break-verdien (B-feltet)
-                        char *break_start = strstr(command, "\"B\":");
-                        if (break_start) {
-                            break_start += 4; // Hopp over "B":
-                            break_value = atoi(break_start);
-                        }
-                        
-                        // Finn tidspunktet (T-feltet)
-                        char *time_start = strstr(command, "\"T\":");
-                        if (time_start) {
-                            time_start += 4; // Hopp over "T":
-                            time_sec = atoi(time_start);
-                        }
-                        
-                        // Finn mikrosekunder (U-feltet)
-                        char *usec_start = strstr(command, "\"U\":");
-                        if (usec_start) {
-                            usec_start += 4; // Hopp over "U":
-                            time_usec = atoi(usec_start);
-                        }
-                        
-                        ESP_LOGI(TAG, "JSON-parsing resultat: MAC=%s, sensor_id=%d, break_value=%d, time_sec=%u, time_usec=%u",
-                                mac_str, sensor_id, break_value, time_sec, time_usec);
-                        
-                        // Valider at vi har nødvendige data og at det er et faktisk brudd
-                        if (break_value == 1 && strlen(mac_str) > 0 && sensor_id >= 0 && sensor_id < MAX_SENSORS_PER_POLE) {
-                            // Konverter MAC-adressen til bytes
-                            uint8_t mac_bytes[ESP_NOW_ETH_ALEN];
-                            sscanf(mac_str, "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx", 
-                                &mac_bytes[0], &mac_bytes[1], &mac_bytes[2],
-                                &mac_bytes[3], &mac_bytes[4], &mac_bytes[5]);
-                            
-                            ESP_LOGI(TAG, "Sensorbrudd mottatt: MAC=%s, sensor_id=%d, break_value=%d, tid=%u.%06u",
-                                    mac_str, sensor_id, break_value, time_sec, time_usec);
-                            
-                            // Send alltid rådata til WebSocket først
-                            send_break_to_websocket(mac_bytes, time_sec, time_usec, sensor_id, false);
-                            
-                            // Bruk GJELDENDE SERVERTID i stedet for målestolpe-tid for å unngå tidsproblemer
-                            struct timeval tv_now;
-                            gettimeofday(&tv_now, NULL);
-                            uint32_t server_time_sec = tv_now.tv_sec;
-                            uint32_t server_time_usec = tv_now.tv_usec;
-
-                            ESP_LOGI(TAG, "Passeringsdeteksjon: målestolpe-tid=%u.%06u, server-tid=%u.%06u", 
-                                    time_sec, time_usec, server_time_sec, server_time_usec);
-
-                            // Send til passeringsdeteksjon med BÅDE målestolpe-tid og server-tid
-                            ESP_LOGI(TAG, "Sender til passeringsdeteksjon: sensor_id=%d", sensor_id);
-                            bool passage_detected = process_break_for_passage_detection(mac_bytes, sensor_id, 
-                                                                                    time_sec, time_usec,           // Målestolpe-tid
-                                                                                    server_time_sec, server_time_usec); // Server-tid
-
-                            if (passage_detected) {
-                                ESP_LOGI(TAG, "🎯 PASSERING DETEKTERT fra sensor %d på MAC %s", sensor_id, mac_str);
-                            }
-
-                        } else {
-                            // Forbedret logging for debugging
-                            if (break_value == 0) {
-                                //ESP_LOGI(TAG, "Ignorerer sensor-gjenoppretting: sensor_id=%d, mac=%s", sensor_id, mac_str);
-                                log_event_passering(mac_str, sensor_id, "IGNORED", 0.0, 0, 0, NULL, 0);
-                            } else if (sensor_id < 0) {
-                                ESP_LOGW(TAG, "JSON parsing feilet - sensor_id ikke funnet! JSON: %s", command);
-                            } else {
-                                ESP_LOGW(TAG, "Ugyldig break-melding: break_value=%d, sensor_id=%d, mac_length=%d", 
-                                        break_value, sensor_id, strlen(mac_str));
-                            }
-                        }
-                    }*/
-
-
-
-
-                    /* DEAKTIVERT: Bruk kun ESP-NOW for timing-data (TCP har for høy latens)
-                    else if (strncmp(command, "{\"K\":0,", 7) == 0 && strstr(command, "\"B\":[") != NULL) {
-                        // Parse JSON-strengen for K=0 med B-array
-                        char mac_str[18] = {0};
-                        uint32_t time_sec = 0;
-                        uint32_t time_usec = 0;
-                        
-                        // Finn MAC
-                        char *mac_start = strstr(command, "\"M\":\"");
-                        if (mac_start) {
-                            mac_start += 5; // Hopp over "M":"
-                            char *mac_end = strchr(mac_start, '\"');
-                            if (mac_end && (mac_end - mac_start) < 18) {
-                                strncpy(mac_str, mac_start, mac_end - mac_start);
-                                mac_str[mac_end - mac_start] = '\0';
-                            }
-                        }
-                        
-                        // Vi bruker gjeldende tid siden T og U vanligvis ikke er i K=0 meldinger
-                        struct timeval tv;
-                        gettimeofday(&tv, NULL);
-                        time_sec = tv.tv_sec;
-                        time_usec = tv.tv_usec;
-                        
-                        // Finn B-array
-                        char *b_array_start = strstr(command, "\"B\":[");
-                        if (b_array_start && strlen(mac_str) > 0) {
-                            b_array_start += 5; // Hopp over "B":[
-                            
-                            // Konverter MAC-adressen til bytes
-                            uint8_t mac_bytes[ESP_NOW_ETH_ALEN];
-                            sscanf(mac_str, "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx", 
-                                &mac_bytes[0], &mac_bytes[1], &mac_bytes[2],
-                                &mac_bytes[3], &mac_bytes[4], &mac_bytes[5]);
-                            
-                            // Prosessere B-arrayet for å finne utløste sensorer
-                            char *ptr = b_array_start;
-                            for (int i = 0; i < 7; i++) {
-                                while (*ptr && (*ptr < '0' || *ptr > '9')) ptr++; // Hopp til neste tall
-                                if (*ptr) {
-                                    int value = *ptr - '0'; // Konverter til tall
-                                    if (value == 1) {
-                                        //ESP_LOGI(TAG, "Fant utløst sensor fra B-array: sensor_id=%d, MAC=%s", i, mac_str);
-                                        // Kall passeringsdeteksjon for denne sensoren
-                                        //process_break_for_passage_detection(mac_bytes, i, time_sec, time_usec);
-                                        // Få server-tid
-                                        struct timeval tv_server;
-                                        gettimeofday(&tv_server, NULL);
-
-                                        // Kall passeringsdeteksjon for denne sensoren
-                                        process_break_for_passage_detection(mac_bytes, i, 
-                                                                        time_sec, time_usec,                    // Målestolpe-tid
-                                                                        tv_server.tv_sec, tv_server.tv_usec);   // Server-tid
-                                    }
-                                    ptr++;
-                                }
-                            }
-                        }
-                    }*/
-
-
-
-
-
-
-
-
-
-
-
-
-                    
-                    // Logg mottatt kommando
-                    //ESP_LOGI(TAG, "Mottatt kommando fra målestolpe %d: %s", pole_idx, command);
-                    
-                    // // Tolke MAC-adresse fra "ID: MAC" kommando hvis den sendes
-                    // if (strncmp(command, "ID: ", 4) == 0) {
-                    //     strncpy(tcp_poles[pole_idx].mac, command + 4, 17);
-                    //     tcp_poles[pole_idx].mac[17] = 0; // Sikre null-terminering
-                    //     ESP_LOGI(TAG, "Målestolpe %d har MAC: '%s'", pole_idx, tcp_poles[pole_idx].mac);
-                    // }
 
 
                     // Registrer målestolpen som ESP-NOW peer når vi får MAC-adressen
@@ -2253,6 +2104,388 @@ bool send_system_assign_to_pole(const uint8_t *mac) {
 
 
 
+// Funksjon for å laste paired poles fra NVS
+void load_paired_poles_from_nvs(void) {
+    nvs_handle_t nvs_handle;
+    esp_err_t err = nvs_open("paired_poles", NVS_READONLY, &nvs_handle);
+    
+    if (err != ESP_OK) {
+        ESP_LOGI(TAG, "Ingen lagrede paired poles funnet - starter med tom liste");
+        paired_pole_count = 0;
+        return;
+    }
+    
+    // Les antall paired poles
+    err = nvs_get_i32(nvs_handle, "count", &paired_pole_count);
+    if (err != ESP_OK || paired_pole_count < 0 || paired_pole_count > MAX_PAIRED_POLES) {
+        ESP_LOGW(TAG, "Ugyldig paired poles count, nullstiller");
+        paired_pole_count = 0;
+        nvs_close(nvs_handle);
+        return;
+    }
+    
+    // Les paired poles data
+    size_t required_size = sizeof(paired_poles);
+    err = nvs_get_blob(nvs_handle, "data", paired_poles, &required_size);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Kunne ikke lese paired poles data: %s", esp_err_to_name(err));
+        paired_pole_count = 0;
+    } else {
+        ESP_LOGI(TAG, "🔗 Lastet %d paired poles fra NVS", paired_pole_count);
+    }
+    
+    nvs_close(nvs_handle);
+}
+
+// Funksjon for å lagre paired poles til NVS
+void save_paired_poles_to_nvs(void) {
+    nvs_handle_t nvs_handle;
+    esp_err_t err = nvs_open("paired_poles", NVS_READWRITE, &nvs_handle);
+    
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Kunne ikke åpne NVS for paired poles: %s", esp_err_to_name(err));
+        return;
+    }
+    
+    // Lagre antall paired poles
+    err = nvs_set_i32(nvs_handle, "count", paired_pole_count);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Kunne ikke lagre paired poles count: %s", esp_err_to_name(err));
+        nvs_close(nvs_handle);
+        return;
+    }
+    
+    // Lagre paired poles data
+    err = nvs_set_blob(nvs_handle, "data", paired_poles, sizeof(paired_poles));
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Kunne ikke lagre paired poles data: %s", esp_err_to_name(err));
+        nvs_close(nvs_handle);
+        return;
+    }
+    
+    // Commit endringer
+    err = nvs_commit(nvs_handle);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Kunne ikke committe paired poles NVS: %s", esp_err_to_name(err));
+    } else {
+        ESP_LOGI(TAG, "💾 Paired poles lagret i NVS (%d stk)", paired_pole_count);
+    }
+    
+    nvs_close(nvs_handle);
+}
+
+
+
+
+// Funksjon for å legge til en paired pole
+void add_paired_pole(const uint8_t *mac, const char *name) {
+    xSemaphoreTake(paired_poles_mutex, portMAX_DELAY);
+    
+    // Sjekk om målestolpen allerede er paired
+    for (int i = 0; i < paired_pole_count; i++) {
+        if (memcmp(paired_poles[i].mac, mac, 6) == 0) {
+            ESP_LOGW(TAG, "Målestolpe allerede paired, oppdaterer navn");
+            strncpy(paired_poles[i].name, name ? name : "Navnløs målestolpe", sizeof(paired_poles[i].name) - 1);
+            paired_poles[i].name[sizeof(paired_poles[i].name) - 1] = '\0';
+            paired_poles[i].last_seen = time(NULL);
+            xSemaphoreGive(paired_poles_mutex);
+            save_paired_poles_to_nvs();
+            return;
+        }
+    }
+    
+    // Legg til ny paired pole hvis vi har plass
+    if (paired_pole_count < MAX_PAIRED_POLES) {
+        paired_pole_t *new_pole = &paired_poles[paired_pole_count];
+        
+        memcpy(new_pole->mac, mac, 6);
+        strncpy(new_pole->name, name ? name : "Navnløs målestolpe", sizeof(new_pole->name) - 1);
+        new_pole->name[sizeof(new_pole->name) - 1] = '\0';
+        new_pole->enabled = true;
+        new_pole->paired_time = time(NULL);
+        new_pole->last_seen = time(NULL);
+        new_pole->firmware_version = 0;
+        new_pole->user_notes[0] = '\0';
+        
+        paired_pole_count++;
+        
+        ESP_LOGI(TAG, "✅ Lagt til paired pole: %s (totalt: %d)", new_pole->name, paired_pole_count);
+        
+        save_paired_poles_to_nvs();
+    } else {
+        ESP_LOGW(TAG, "⚠️ Kan ikke legge til flere paired poles - maksimalt %d nådd", MAX_PAIRED_POLES);
+    }
+    
+    xSemaphoreGive(paired_poles_mutex);
+}
+
+// Funksjon for å fjerne en paired pole
+void remove_paired_pole(const uint8_t *mac) {
+    xSemaphoreTake(paired_poles_mutex, portMAX_DELAY);
+    
+    for (int i = 0; i < paired_pole_count; i++) {
+        if (memcmp(paired_poles[i].mac, mac, 6) == 0) {
+            ESP_LOGI(TAG, "🗑️ Fjerner paired pole: %s", paired_poles[i].name);
+            
+            // Flytt siste element til denne posisjonen
+            if (i < paired_pole_count - 1) {
+                paired_poles[i] = paired_poles[paired_pole_count - 1];
+            }
+            paired_pole_count--;
+            
+            save_paired_poles_to_nvs();
+            break;
+        }
+    }
+    
+    xSemaphoreGive(paired_poles_mutex);
+}
+
+
+
+// API handler for å hente paired poles
+esp_err_t get_paired_poles_handler(httpd_req_t *req) {
+    ESP_LOGI(TAG, "get_paired_poles_handler called");
+    
+    // CORS headers
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    
+    if (req->method == HTTP_OPTIONS) {
+        httpd_resp_send(req, NULL, 0);
+        return ESP_OK;
+    }
+    
+    xSemaphoreTake(paired_poles_mutex, portMAX_DELAY);
+    
+    // Bygg JSON-respons
+    char *response = malloc(2048);
+    if (!response) {
+        xSemaphoreGive(paired_poles_mutex);
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+    
+    int pos = sprintf(response, "{\"status\":\"success\",\"system_id\":\"%08" PRIX32 "\",\"poles\":[",
+                     current_system_id);
+    
+    for (int i = 0; i < paired_pole_count; i++) {
+        paired_pole_t *pole = &paired_poles[i];
+        
+        // Beregn hvor lenge siden sist sett
+        time_t now = time(NULL);
+        long seconds_since_last_seen = now - pole->last_seen;
+        
+        pos += sprintf(response + pos,
+            "%s{\"mac\":\"%02x:%02x:%02x:%02x:%02x:%02x\","
+            "\"name\":\"%s\","
+            "\"enabled\":%s,"
+            "\"paired_time\":%lld,"
+            "\"last_seen\":%lld,"
+            "\"seconds_since_last_seen\":%ld,"
+             "\"firmware_version\":%" PRIu32 ","
+            "\"user_notes\":\"%s\"}",
+            (i > 0) ? "," : "",
+            pole->mac[0], pole->mac[1], pole->mac[2],
+            pole->mac[3], pole->mac[4], pole->mac[5],
+            pole->name,
+            pole->enabled ? "true" : "false",
+            pole->paired_time,
+            pole->last_seen,
+            seconds_since_last_seen,
+            pole->firmware_version,
+            pole->user_notes
+        );
+    }
+    
+    pos += sprintf(response + pos, "]}");
+    
+    xSemaphoreGive(paired_poles_mutex);
+    
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    httpd_resp_sendstr(req, response);
+    
+    free(response);
+    return ESP_OK;
+}
+
+// API handler for å fjerne en paired pole
+esp_err_t unpair_pole_handler(httpd_req_t *req) {
+    char buf[200];
+    int ret, remaining = req->content_len;
+    
+    ESP_LOGI(TAG, "unpair_pole_handler called, content_len: %d", remaining);
+    
+    // CORS headers
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    
+    if (req->method == HTTP_OPTIONS) {
+        httpd_resp_send(req, NULL, 0);
+        return ESP_OK;
+    }
+    
+    if (remaining > sizeof(buf)) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Request too large");
+        return ESP_FAIL;
+    }
+    
+    if ((ret = httpd_req_recv(req, buf, MIN(remaining, sizeof(buf)))) <= 0) {
+        if (ret == HTTPD_SOCK_ERR_TIMEOUT) {
+            httpd_resp_send_408(req);
+        }
+        return ESP_FAIL;
+    }
+    
+    buf[ret] = '\0';
+    ESP_LOGI(TAG, "Mottok unpair data: %s", buf);
+    
+    // Parse MAC-adresse fra JSON
+    uint8_t target_mac[6];
+    char mac_str[18] = {0};
+    
+    char *mac_start = strstr(buf, "\"mac\":\"");
+    if (mac_start) {
+        mac_start += 7; // Hopp over "mac":"
+        char *mac_end = strchr(mac_start, '\"');
+        if (mac_end && (mac_end - mac_start) < 18) {
+            strncpy(mac_str, mac_start, mac_end - mac_start);
+            mac_str[mac_end - mac_start] = '\0';
+            
+            // Konverter MAC-streng til bytes
+            if (sscanf(mac_str, "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx", 
+                      &target_mac[0], &target_mac[1], &target_mac[2],
+                      &target_mac[3], &target_mac[4], &target_mac[5]) == 6) {
+                
+                ESP_LOGI(TAG, "Fjerner paired pole: %s", mac_str);
+                remove_paired_pole(target_mac);
+                
+                httpd_resp_set_type(req, "application/json");
+                httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+                httpd_resp_sendstr(req, "{\"status\":\"success\",\"message\":\"Målestolpe fjernet\"}");
+            } else {
+                ESP_LOGW(TAG, "Ugyldig MAC-format: %s", mac_str);
+                httpd_resp_set_type(req, "application/json");
+                httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+                httpd_resp_sendstr(req, "{\"status\":\"error\",\"message\":\"Ugyldig MAC-format\"}");
+            }
+        } else {
+            ESP_LOGW(TAG, "Kunne ikke parse MAC fra JSON");
+            httpd_resp_set_type(req, "application/json");
+            httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+            httpd_resp_sendstr(req, "{\"status\":\"error\",\"message\":\"MAC ikke funnet i request\"}");
+        }
+    } else {
+        ESP_LOGW(TAG, "MAC ikke funnet i JSON");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_sendstr(req, "{\"status\":\"error\",\"message\":\"MAC ikke funnet i request\"}");
+    }
+    
+    return ESP_OK;
+}
+
+// API handler for å gi nytt navn til en paired pole
+esp_err_t rename_pole_handler(httpd_req_t *req) {
+    char buf[200];
+    int ret, remaining = req->content_len;
+    
+    ESP_LOGI(TAG, "rename_pole_handler called, content_len: %d", remaining);
+    
+    // CORS headers
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    
+    if (req->method == HTTP_OPTIONS) {
+        httpd_resp_send(req, NULL, 0);
+        return ESP_OK;
+    }
+    
+    if (remaining > sizeof(buf)) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Request too large");
+        return ESP_FAIL;
+    }
+    
+    if ((ret = httpd_req_recv(req, buf, MIN(remaining, sizeof(buf)))) <= 0) {
+        if (ret == HTTPD_SOCK_ERR_TIMEOUT) {
+            httpd_resp_send_408(req);
+        }
+        return ESP_FAIL;
+    }
+    
+    buf[ret] = '\0';
+    ESP_LOGI(TAG, "Mottok rename data: %s", buf);
+    
+    // Parse MAC-adresse og nytt navn fra JSON
+    uint8_t target_mac[6];
+    char mac_str[18] = {0};
+    char new_name[32] = {0};
+    
+    // Parse MAC
+    char *mac_start = strstr(buf, "\"mac\":\"");
+    if (mac_start) {
+        mac_start += 7;
+        char *mac_end = strchr(mac_start, '\"');
+        if (mac_end && (mac_end - mac_start) < 18) {
+            strncpy(mac_str, mac_start, mac_end - mac_start);
+            mac_str[mac_end - mac_start] = '\0';
+        }
+    }
+    
+    // Parse new name
+    char *name_start = strstr(buf, "\"name\":\"");
+    if (name_start) {
+        name_start += 8;
+        char *name_end = strchr(name_start, '\"');
+        if (name_end && (name_end - name_start) < 32) {
+            strncpy(new_name, name_start, name_end - name_start);
+            new_name[name_end - name_start] = '\0';
+        }
+    }
+    
+    if (strlen(mac_str) > 0 && strlen(new_name) > 0) {
+        // Konverter MAC-streng til bytes
+        if (sscanf(mac_str, "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx", 
+                  &target_mac[0], &target_mac[1], &target_mac[2],
+                  &target_mac[3], &target_mac[4], &target_mac[5]) == 6) {
+            
+            ESP_LOGI(TAG, "Endrer navn på paired pole %s til: %s", mac_str, new_name);
+            
+            // Oppdater navnet
+            xSemaphoreTake(paired_poles_mutex, portMAX_DELAY);
+            bool found = false;
+            for (int i = 0; i < paired_pole_count; i++) {
+                if (memcmp(paired_poles[i].mac, target_mac, 6) == 0) {
+                    strncpy(paired_poles[i].name, new_name, sizeof(paired_poles[i].name) - 1);
+                    paired_poles[i].name[sizeof(paired_poles[i].name) - 1] = '\0';
+                    found = true;
+                    break;
+                }
+            }
+            xSemaphoreGive(paired_poles_mutex);
+            
+            if (found) {
+                save_paired_poles_to_nvs();
+                httpd_resp_set_type(req, "application/json");
+                httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+                httpd_resp_sendstr(req, "{\"status\":\"success\",\"message\":\"Målestolpe omdøpt\"}");
+            } else {
+                httpd_resp_set_type(req, "application/json");
+                httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+                httpd_resp_sendstr(req, "{\"status\":\"error\",\"message\":\"Målestolpe ikke funnet\"}");
+            }
+        } else {
+            httpd_resp_set_type(req, "application/json");
+            httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+            httpd_resp_sendstr(req, "{\"status\":\"error\",\"message\":\"Ugyldig MAC-format\"}");
+        }
+    } else {
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_sendstr(req, "{\"status\":\"error\",\"message\":\"Mangler MAC eller navn\"}");
+    }
+    
+    return ESP_OK;
+}
+
 
 
 
@@ -2328,6 +2561,15 @@ esp_err_t assign_pole_handler(httpd_req_t *req) {
                     
                     // Send oppdatering til GUI
                     send_discovery_update_to_gui();
+
+
+                    // Legg til i paired poles liste
+                    char pole_name[32];
+                    sprintf(pole_name, "Målestolpe %02X%02X", target_mac[4], target_mac[5]);
+                    add_paired_pole(target_mac, pole_name);
+                    
+                    ESP_LOGI(TAG, "✅ Målestolpe lagt til i paired poles: %s", pole_name);
+
                     
                     httpd_resp_set_type(req, "application/json");
                     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
@@ -3514,6 +3756,19 @@ void esp_now_recv_cb(const esp_now_recv_info_t *recv_info, const uint8_t *data, 
    
    ESP_LOGI(TAG, "Mottok data type %d fra målestolpe %d, timestamp=%u.%06u", 
            k, pole_idx, pole_data[pole_idx].t, pole_data[pole_idx].u);
+
+
+    // Oppdater last_seen for paired pole hvis den finnes
+    xSemaphoreTake(paired_poles_mutex, portMAX_DELAY);
+    for (int i = 0; i < paired_pole_count; i++) {
+        if (memcmp(paired_poles[i].mac, mac_addr, 6) == 0) {
+            paired_poles[i].last_seen = time(NULL);
+            break;
+        }
+    }
+    xSemaphoreGive(paired_poles_mutex);
+
+
    
    // Les ADC verdier eller andre data basert på type melding
    if (k == 0 && len >= 9 + sizeof(int32_t) * 14) {  // ADC verdier
@@ -4190,6 +4445,31 @@ httpd_handle_t start_webserver(void) {
         httpd_register_uri_handler(server_handle, &identify_pole);
 
 
+        // Paired poles API endpoints
+        httpd_uri_t get_paired_poles = {
+            .uri = "/api/v1/poles/paired",
+            .method = HTTP_GET,
+            .handler = get_paired_poles_handler,
+            .user_ctx = NULL
+        };
+        httpd_register_uri_handler(server_handle, &get_paired_poles);
+
+        httpd_uri_t unpair_pole = {
+            .uri = "/api/v1/poles/unpair",
+            .method = HTTP_POST,
+            .handler = unpair_pole_handler,
+            .user_ctx = NULL
+        };
+        httpd_register_uri_handler(server_handle, &unpair_pole);
+
+        httpd_uri_t rename_pole = {
+            .uri = "/api/v1/poles/rename",
+            .method = HTTP_POST,
+            .handler = rename_pole_handler,
+            .user_ctx = NULL
+        };
+        httpd_register_uri_handler(server_handle, &rename_pole);
+
 
 
         // System ID API
@@ -4328,6 +4608,7 @@ wifi_config_t wifi_config = {
     passage_history_mutex = xSemaphoreCreateMutex();
     stopwatch_mutex = xSemaphoreCreateMutex();
     discovery_mutex = xSemaphoreCreateMutex();
+    paired_poles_mutex = xSemaphoreCreateMutex();
 
 
 
@@ -4348,6 +4629,15 @@ wifi_config_t wifi_config = {
     memset(discovered_poles, 0, sizeof(discovered_poles));
     discovered_pole_count = 0;
     discovery_active = true;
+
+
+   // Initialiser paired poles system
+    memset(paired_poles, 0, sizeof(paired_poles));
+    paired_pole_count = 0;
+    load_paired_poles_from_nvs();
+
+
+
     
     // Initialiser System ID
     initialize_system_id();
