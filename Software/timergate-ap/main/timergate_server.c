@@ -199,7 +199,7 @@ static discovered_pole_t discovered_poles[MAX_DISCOVERED_POLES];
 static int discovered_pole_count = 0;
 static bool discovery_active = true;  // Standard på for å oppdage nye målestolper
 static SemaphoreHandle_t discovery_mutex;
-static uint32_t current_system_id = 0;  // Vil bli satt ved oppstart
+//static uint32_t current_system_id = 0;  // Vil bli satt ved oppstart
 
 
 
@@ -1858,8 +1858,8 @@ void send_discovery_update_to_gui(void) {
         pos += sprintf(json_msg + pos,
             "%s{\"mac\":\"%02x:%02x:%02x:%02x:%02x:%02x\","
             "\"device_name\":\"%s\","
-            "\"first_seen\":%ld,"
-            "\"last_seen\":%ld,"
+            "\"first_seen\":%lld,"
+            "\"last_seen\":%lld,"
             "\"rssi\":%d,"
             "\"estimated_distance\":%d,"
             "\"identifying\":%s,"
@@ -1927,7 +1927,7 @@ esp_err_t get_discovered_poles_handler(httpd_req_t *req) {
         return ESP_FAIL;
     }
     
-    int pos = sprintf(response, "{\"status\":\"success\",\"system_id\":\"%08X\",\"discovery_active\":%s,\"poles\":[",
+    int pos = sprintf(response, "{\"status\":\"success\",\"system_id\":\"%08" PRIX32 "\",\"discovery_active\":%s,\"poles\":[",
                      current_system_id, discovery_active ? "true" : "false");
     
     for (int i = 0; i < discovered_pole_count; i++) {
@@ -1952,8 +1952,8 @@ esp_err_t get_discovered_poles_handler(httpd_req_t *req) {
         pos += sprintf(response + pos,
             "%s{\"mac\":\"%02x:%02x:%02x:%02x:%02x:%02x\","
             "\"device_name\":\"%s\","
-            "\"first_seen\":%ld,"
-            "\"last_seen\":%ld,"
+            "\"first_seen\":%lld,"
+            "\"last_seen\":%lld,"
             "\"seconds_since_last_seen\":%ld,"
             "\"rssi\":%d,"
             "\"estimated_distance\":%d,"
@@ -2015,7 +2015,7 @@ esp_err_t get_system_id_handler(httpd_req_t *req) {
     char response[256];
     sprintf(response, 
         "{\"status\":\"success\","
-        "\"system_id\":\"%08X\","
+        "\"system_id\":\"%08" PRIX32 "\","
         "\"system_name\":\"%s\","
         "\"discovery_active\":%s,"
         "\"discovered_pole_count\":%d}",
@@ -4037,60 +4037,6 @@ httpd_handle_t start_webserver(void) {
 }
 
 
-// Funksjon for å initialisere unikt System ID
-void initialize_system_id(void) {
-    esp_err_t err;
-    nvs_handle_t nvs_handle;
-    
-    ESP_LOGI(TAG, "Initialiserer System ID...");
-    
-    // Åpne NVS for system-konfigurasjon
-    err = nvs_open("system", NVS_READWRITE, &nvs_handle);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Feil ved åpning av NVS system namespace: %s", esp_err_to_name(err));
-        // Generer midlertidig ID fra MAC
-        uint8_t mac[6];
-        esp_read_mac(mac, ESP_MAC_WIFI_STA);
-        current_system_id = (mac[2] << 24) | (mac[3] << 16) | (mac[4] << 8) | mac[5];
-        ESP_LOGW(TAG, "Bruker midlertidig System ID: %08X", current_system_id);
-        return;
-    }
-    
-    // Prøv å lese eksisterende System ID
-    err = nvs_get_u32(nvs_handle, "system_id", &current_system_id);
-    
-    if (err == ESP_ERR_NVS_NOT_FOUND) {
-        // Generer nytt System ID basert på AP's MAC-adresse
-        uint8_t mac[6];
-        esp_read_mac(mac, ESP_MAC_WIFI_STA);
-        current_system_id = (mac[2] << 24) | (mac[3] << 16) | (mac[4] << 8) | mac[5];
-        
-        // Lagre permanent i NVS
-        err = nvs_set_u32(nvs_handle, "system_id", current_system_id);
-        if (err == ESP_OK) {
-            err = nvs_commit(nvs_handle);
-            if (err == ESP_OK) {
-                ESP_LOGI(TAG, "Nytt System ID generert og lagret: %08X", current_system_id);
-            } else {
-                ESP_LOGE(TAG, "Feil ved commit av System ID: %s", esp_err_to_name(err));
-            }
-        } else {
-            ESP_LOGE(TAG, "Feil ved lagring av System ID: %s", esp_err_to_name(err));
-        }
-    } else if (err == ESP_OK) {
-        ESP_LOGI(TAG, "Eksisterende System ID lastet: %08X", current_system_id);
-    } else {
-        ESP_LOGE(TAG, "Feil ved lesing av System ID: %s", esp_err_to_name(err));
-        // Bruk MAC som fallback
-        uint8_t mac[6];
-        esp_read_mac(mac, ESP_MAC_WIFI_STA);
-        current_system_id = (mac[2] << 24) | (mac[3] << 16) | (mac[4] << 8) | mac[5];
-        ESP_LOGW(TAG, "Bruker MAC-basert System ID som fallback: %08X", current_system_id);
-    }
-    
-    nvs_close(nvs_handle);
-}
-
 // Funksjon for å hente gjeldende System ID
 uint32_t get_system_id(void) {
     return current_system_id;
@@ -4100,22 +4046,6 @@ uint32_t get_system_id(void) {
 bool is_message_for_us(const timergate_msg_t *msg) {
     return (msg->system_id == current_system_id) || 
            (msg->system_id == 0x00000000); // Broadcast/discovery
-}
-
-// Handler for å hente System ID
-esp_err_t get_system_id_handler(httpd_req_t *req) {
-    ESP_LOGI(TAG, "get_system_id_handler called");
-    
-    // Send gjeldende System ID
-    char response[128];
-    sprintf(response, "{\"status\":\"success\",\"system_id\":\"%08" PRIX32 "\",\"system_id_int\":%" PRIu32 "}",
-            current_system_id, current_system_id);
-    
-    httpd_resp_set_type(req, "application/json");
-    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
-    httpd_resp_sendstr(req, response);
-    
-    return ESP_OK;
 }
 
 
