@@ -1771,6 +1771,28 @@ void handle_pole_announce(const pole_announce_t *announce, int8_t rssi) {
     
     // Send oppdatering til GUI
     send_discovery_update_to_gui();
+
+
+
+    // Registrer målestolpen som ESP-NOW peer for assignment-sending
+    esp_now_peer_info_t peer_info = {0};
+    memcpy(peer_info.peer_addr, announce->mac, ESP_NOW_ETH_ALEN);
+    peer_info.channel = 0;  // Samme kanal som WiFi
+    peer_info.ifidx = WIFI_IF_AP;  // AP interface
+    peer_info.encrypt = false;
+    
+    esp_err_t peer_result = esp_now_add_peer(&peer_info);
+    if (peer_result == ESP_OK) {
+        ESP_LOGI(TAG, "✅ Registrert målestolpe som ESP-NOW peer: %02x:%02x:%02x:%02x:%02x:%02x",
+                 announce->mac[0], announce->mac[1], announce->mac[2],
+                 announce->mac[3], announce->mac[4], announce->mac[5]);
+    } else if (peer_result == ESP_ERR_ESPNOW_EXIST) {
+        ESP_LOGD(TAG, "ESP-NOW peer allerede registrert");
+    } else {
+        ESP_LOGE(TAG, "❌ Feil ved registrering av ESP-NOW peer: %s", esp_err_to_name(peer_result));
+    }
+
+
 }
 
 // Funksjon for å legge til eller oppdatere oppdaget målestolpe

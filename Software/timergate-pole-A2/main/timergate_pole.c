@@ -117,6 +117,44 @@ static int min_broken_sensors_for_alert = 2;  // Antall sensorer som må være b
 
 bool calibration_completed = false;  // Flagg for å holde styr på om kalibrering er fullført
 
+
+// Nye variabler for discovery og system assignment
+static uint32_t my_assigned_system_id = 0x00000000;  // 0 = ikke tilknyttet
+static char assigned_system_name[32] = {0};
+static bool announcement_active = true;              // Send announce-meldinger
+static uint32_t last_announce_time = 0;
+static const uint32_t ANNOUNCE_INTERVAL_MS = 5000;  // Send announce hvert 5. sekund
+
+// Discovery protokoll strukturer (samme som i AP)
+typedef struct {
+    uint32_t system_id;      // 0x00000000 = søker system
+    uint8_t msg_type;        // MSG_POLE_ANNOUNCE
+    uint8_t mac[6];          // Målestolpens MAC
+    char device_name[16];    // "TimerGate Pole"
+    uint8_t firmware_ver[3]; // [1, 2, 3]
+    int8_t rssi_estimate;    // For avstandsestimering
+} __attribute__((packed)) pole_announce_t;
+
+typedef struct {
+    uint32_t system_id;      // AP's System ID
+    uint8_t msg_type;        // MSG_SYSTEM_ASSIGN
+    uint8_t target_mac[6];   // Målestolpens MAC
+    char system_name[32];    // "Timergate Nord"
+} __attribute__((packed)) system_assign_t;
+
+// Meldingstyper (samme som i AP)
+#define MSG_SENSOR_DATA        0x01
+#define MSG_PASSAGE_DETECTED   0x02
+#define MSG_POLE_ANNOUNCE      0x10
+#define MSG_SYSTEM_ASSIGN      0x11
+#define MSG_IDENTIFY_REQUEST   0x20
+#define MSG_COMMAND            0x30
+
+
+
+
+
+
 // Nye globale enum for systemstatus
 typedef enum {
     STATUS_INITIALIZING,
@@ -173,6 +211,17 @@ led_strip_config_t strip_config = {
 led_strip_rmt_config_t rmt_config = {
     .resolution_hz = 10 * 1000 * 1000, // 10MHz
 };
+
+
+// Nye funksjonsdeklarasjoner for discovery og assignment
+static void send_pole_announce(void);
+static void handle_system_assignment(const system_assign_t *assign);
+static void load_system_assignment_from_nvs(void);
+static void save_system_assignment_to_nvs(void);
+static bool is_assigned_to_system(void);
+
+
+
 
 typedef struct
 {
@@ -1184,7 +1233,6 @@ static void log_esp_now_status(void) {
 
 
 
-
 static void example_espnow_recv_cb(const esp_now_recv_info_t *recv_info, const uint8_t *data, int len)
 {
     uint8_t *mac_addr = recv_info->src_addr;
@@ -1195,8 +1243,18 @@ static void example_espnow_recv_cb(const esp_now_recv_info_t *recv_info, const u
         return;
     }
 
-    example_espnow_data_t *buf = (example_espnow_data_t *)data;
+    // Sjekk om dette er en system assignment-melding
+    if (len >= sizeof(system_assign_t)) {
+        system_assign_t *assign = (system_assign_t*)data;
+        if (assign->msg_type == MSG_SYSTEM_ASSIGN) {
+            ESP_LOGI(TAG, "📨 Mottok system assignment via ESP-NOW");
+            handle_system_assignment(assign);
+            return;
+        }
+    }
 
+    // Behandle vanlige ESP-NOW meldinger (eksisterende kode)
+    example_espnow_data_t *buf = (example_espnow_data_t *)data;
     int payload_len = len - sizeof(example_espnow_data_t);
 
     ESP_LOGI(TAG, "Receive broadcast ESPNOW data, len = %d", len);
@@ -1206,6 +1264,7 @@ static void example_espnow_recv_cb(const esp_now_recv_info_t *recv_info, const u
         sync_time();
     }
 }
+
 
 static esp_err_t example_espnow_init(void)
 {
@@ -1243,13 +1302,197 @@ static esp_err_t example_espnow_init(void)
         } else {
             ESP_LOGE(TAG, "❌ Feil ved registrering av ESP-NOW peer: %s", esp_err_to_name(ret));
         }
+        
+        // Legg også til broadcast peer for announce-meldinger
+        esp_now_peer_info_t broadcast_peer = {0};
+        uint8_t broadcast_mac[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+        memcpy(broadcast_peer.peer_addr, broadcast_mac, ESP_NOW_ETH_ALEN);
+        broadcast_peer.channel = 0;
+        broadcast_peer.ifidx = WIFI_IF_STA;
+        broadcast_peer.encrypt = false;
+        
+        esp_err_t broadcast_result = esp_now_add_peer(&broadcast_peer);
+        if (broadcast_result == ESP_OK) {
+            ESP_LOGI(TAG, "✅ ESP-NOW broadcast peer registrert for announce-meldinger");
+        } else if (broadcast_result == ESP_ERR_ESPNOW_EXIST) {
+            ESP_LOGI(TAG, "ℹ️ ESP-NOW broadcast peer allerede registrert");
+        } else {
+            ESP_LOGE(TAG, "❌ Feil ved registrering av broadcast peer: %s", esp_err_to_name(broadcast_result));
+        }
+        
     } else {
         ESP_LOGE(TAG, "❌ Kunne ikke hente AP-informasjon: %s", esp_err_to_name(ret));
         ESP_LOGW(TAG, "ESP-NOW sending vil ikke fungere uten AP MAC-adresse");
+        
+        // Legg til broadcast peer likevel for announce-meldinger
+        esp_now_peer_info_t broadcast_peer = {0};
+        uint8_t broadcast_mac[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+        memcpy(broadcast_peer.peer_addr, broadcast_mac, ESP_NOW_ETH_ALEN);
+        broadcast_peer.channel = 0;
+        broadcast_peer.ifidx = WIFI_IF_STA;
+        broadcast_peer.encrypt = false;
+        
+        esp_err_t broadcast_result = esp_now_add_peer(&broadcast_peer);
+        if (broadcast_result == ESP_OK) {
+            ESP_LOGI(TAG, "✅ ESP-NOW broadcast peer registrert (uten AP)");
+        }
     }
 
     return ESP_OK;
 }
+
+
+
+
+// Funksjon for å sjekke om målestolpen er tilknyttet et system
+static bool is_assigned_to_system(void) {
+    return (my_assigned_system_id != 0x00000000);
+}
+
+// Funksjon for å sende announce-melding
+static void send_pole_announce(void) {
+    if (!esp_now_peer_added || is_assigned_to_system()) {
+        return; // Ikke send hvis ikke ESP-NOW er klar eller vi allerede er tilknyttet
+    }
+    
+    pole_announce_t announce = {0};
+    announce.system_id = 0x00000000;  // Søker system
+    announce.msg_type = MSG_POLE_ANNOUNCE;
+    
+    // Få egen MAC-adresse
+    esp_read_mac(announce.mac, ESP_MAC_WIFI_STA);
+    
+    // Sett enhetsnavn og firmware-versjon
+    strncpy(announce.device_name, "TimerGate Pole", sizeof(announce.device_name) - 1);
+    announce.firmware_ver[0] = 1;
+    announce.firmware_ver[1] = 0;
+    announce.firmware_ver[2] = 0;
+    announce.rssi_estimate = -50; // Estimat
+    
+    ESP_LOGI(TAG, "📢 Sender pole announce (søker system-tilknytning)");
+    
+    // Send via ESP-NOW til broadcast
+    uint8_t broadcast_mac[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+    esp_err_t result = esp_now_send(broadcast_mac, (uint8_t*)&announce, sizeof(announce));
+    
+    if (result != ESP_OK) {
+        ESP_LOGE(TAG, "❌ Feil ved sending av announce: %s", esp_err_to_name(result));
+    }
+}
+
+
+
+
+// Funksjon for å håndtere system assignment
+static void handle_system_assignment(const system_assign_t *assign) {
+    // Sjekk at meldingen er rettet mot oss
+    uint8_t my_mac[6];
+    esp_read_mac(my_mac, ESP_MAC_WIFI_STA);
+    
+    if (memcmp(assign->target_mac, my_mac, 6) != 0) {
+        return; // Ikke for oss
+    }
+    
+    ESP_LOGI(TAG, "✅ Mottok system assignment fra System ID: %08X", assign->system_id);
+    ESP_LOGI(TAG, "   System navn: %s", assign->system_name);
+    
+    // Lagre assignment
+    my_assigned_system_id = assign->system_id;
+    strncpy(assigned_system_name, assign->system_name, sizeof(assigned_system_name) - 1);
+    assigned_system_name[sizeof(assigned_system_name) - 1] = '\0';
+    
+    // Stopp announce-meldinger
+    announcement_active = false;
+    
+    // Lagre i NVS
+    save_system_assignment_to_nvs();
+    
+    ESP_LOGI(TAG, "🔗 Målestolpe tilknyttet system: %s (ID: %08X)", 
+             assigned_system_name, my_assigned_system_id);
+}
+
+
+
+
+
+// Funksjon for å laste system assignment fra NVS
+static void load_system_assignment_from_nvs(void) {
+    nvs_handle_t nvs_handle;
+    esp_err_t err = nvs_open("assignment", NVS_READONLY, &nvs_handle);
+    
+    if (err != ESP_OK) {
+        ESP_LOGI(TAG, "Ingen lagret system assignment funnet - starter i discovery-modus");
+        my_assigned_system_id = 0x00000000;
+        announcement_active = true;
+        return;
+    }
+    
+    // Les system ID
+    err = nvs_get_u32(nvs_handle, "system_id", &my_assigned_system_id);
+    if (err != ESP_OK) {
+        my_assigned_system_id = 0x00000000;
+        announcement_active = true;
+    }
+    
+    // Les system navn
+    size_t required_size = sizeof(assigned_system_name);
+    err = nvs_get_str(nvs_handle, "system_name", assigned_system_name, &required_size);
+    if (err != ESP_OK) {
+        assigned_system_name[0] = '\0';
+    }
+    
+    nvs_close(nvs_handle);
+    
+    if (my_assigned_system_id != 0x00000000) {
+        announcement_active = false; // Stopp announce hvis vi er tilknyttet
+        ESP_LOGI(TAG, "🔗 Lastet system assignment: %s (ID: %08X)", 
+                 assigned_system_name, my_assigned_system_id);
+    } else {
+        announcement_active = true;
+        ESP_LOGI(TAG, "📢 Starter i discovery-modus (ikke tilknyttet system)");
+    }
+}
+
+// Funksjon for å lagre system assignment til NVS
+static void save_system_assignment_to_nvs(void) {
+    nvs_handle_t nvs_handle;
+    esp_err_t err = nvs_open("assignment", NVS_READWRITE, &nvs_handle);
+    
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Kunne ikke åpne NVS for assignment: %s", esp_err_to_name(err));
+        return;
+    }
+    
+    // Lagre system ID
+    err = nvs_set_u32(nvs_handle, "system_id", my_assigned_system_id);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Kunne ikke lagre system_id: %s", esp_err_to_name(err));
+    }
+    
+    // Lagre system navn
+    err = nvs_set_str(nvs_handle, "system_name", assigned_system_name);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Kunne ikke lagre system_name: %s", esp_err_to_name(err));
+    }
+    
+    // Commit endringer
+    err = nvs_commit(nvs_handle);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Kunne ikke committe NVS: %s", esp_err_to_name(err));
+    } else {
+        ESP_LOGI(TAG, "💾 System assignment lagret i NVS");
+    }
+    
+    nvs_close(nvs_handle);
+}
+
+
+
+
+
+
+
+
 
 static void check_socket()
 {
@@ -1685,6 +1928,9 @@ void app_main(void)
     nvs_setup();
     nvs_read();
 
+    // Last system assignment fra NVS
+    load_system_assignment_from_nvs();
+
 
 
     // Sjekk oppvåkningsårsak etter deep sleep
@@ -1837,6 +2083,18 @@ void app_main(void)
     while (1)
     {
         vTaskDelay(10 / portTICK_PERIOD_MS);
+
+
+        // Håndter announce-sending hvis ikke tilknyttet system
+        if (announcement_active && !is_assigned_to_system()) {
+            uint32_t current_time = esp_timer_get_time() / 1000; // Millisekunder
+            
+            if (current_time - last_announce_time >= ANNOUNCE_INTERVAL_MS) {
+                send_pole_announce();
+                last_announce_time = current_time;
+            }
+        }
+
 
         curr_broken = false;
         bool all_sensors_broken = true;
