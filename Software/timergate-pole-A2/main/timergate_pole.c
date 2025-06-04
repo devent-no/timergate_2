@@ -160,6 +160,23 @@ typedef struct {
 } __attribute__((packed)) identify_request_t;
 
 
+// Kommando-struktur for ESP-NOW
+typedef struct {
+    uint32_t system_id;
+    uint8_t msg_type;        // MSG_COMMAND
+    uint8_t target_mac[6];   // Spesifikk målestolpe eller broadcast
+    uint8_t command_type;    // TIME_SYNC, RESTART, HSEARCH, etc.
+    uint8_t data[];          // Kommando-spesifikk data
+} __attribute__((packed)) command_msg_t;
+
+// Kommandotyper (samme som i AP)
+#define CMD_TIME_SYNC      0x01
+#define CMD_RESTART        0x02
+#define CMD_HSEARCH        0x03
+#define CMD_SET_BREAK      0x04
+#define CMD_SET_ENABLED    0x05
+#define CMD_POWER_OFF      0x06
+
 
 
 
@@ -245,6 +262,17 @@ static bool is_assigned_to_system(void);
 static void handle_identify_request(const identify_request_t *msg);
 static void start_identification_blink(uint8_t duration);
 static void handle_identification_animation(void);
+
+
+// Funksjonsdeklarasjoner for ESP-NOW kommando-håndtering
+//static void handle_esp_now_command(const command_msg_t *cmd);
+static void handle_esp_now_command(const command_msg_t *cmd, int len);
+static void handle_time_sync_command(const uint8_t *data, size_t data_len);
+static void handle_restart_command(const uint8_t *data, size_t data_len);
+static void handle_hsearch_command(const uint8_t *data, size_t data_len);
+static void handle_set_break_command(const uint8_t *data, size_t data_len);
+static void handle_set_enabled_command(const uint8_t *data, size_t data_len);
+static void handle_power_off_command(const uint8_t *data, size_t data_len);
 
 
 
@@ -1310,6 +1338,17 @@ static void example_espnow_recv_cb(const esp_now_recv_info_t *recv_info, const u
     }
 
 
+    // Sjekk om dette er en kommando-melding
+    if (len >= sizeof(command_msg_t)) {
+        command_msg_t *command = (command_msg_t*)data;
+        if (command->msg_type == MSG_COMMAND) {
+            ESP_LOGI(TAG, "📨 Mottok kommando via ESP-NOW: type=%d", command->command_type);
+            handle_esp_now_command(command, len);
+            return;
+        }
+    }
+
+
 
 
     // Behandle vanlige ESP-NOW meldinger (eksisterende kode)
@@ -1616,6 +1655,304 @@ static void handle_identification_animation(void) {
     // Deaktiver normal LED-kontroll mens identifikasjon pågår
     normal_led_control = false;
 }
+
+
+
+// Hovedfunksjon for å håndtere ESP-NOW kommandoer
+static void handle_esp_now_command(const command_msg_t *cmd, int len) {
+    // Valider at kommandoen er for oss
+    uint8_t my_mac[6];
+    esp_read_mac(my_mac, ESP_MAC_WIFI_STA);
+    
+    // Sjekk om kommandoen er broadcast (alle nuller) eller spesifikt for oss
+    bool is_broadcast = true;
+    bool is_for_us = false;
+    
+    for (int i = 0; i < 6; i++) {
+        if (cmd->target_mac[i] != 0x00) {
+            is_broadcast = false;
+            break;
+        }
+    }
+    
+    if (!is_broadcast) {
+        is_for_us = (memcmp(cmd->target_mac, my_mac, 6) == 0);
+    }
+    
+    if (!is_broadcast && !is_for_us) {
+        ESP_LOGD(TAG, "Kommando ikke rettet mot oss, ignorerer");
+        return;
+    }
+    
+    // Beregn data-lengde
+    size_t header_size = sizeof(command_msg_t);
+    size_t data_len = (len > header_size) ? (len - header_size) : 0;
+    const uint8_t *data = (len > header_size) ? cmd->data : NULL;
+    
+    ESP_LOGI(TAG, "🔧 Behandler ESP-NOW kommando type %d, data_len=%d", 
+             cmd->command_type, data_len);
+    
+    // Dispatch til riktig handler basert på kommando-type
+    switch (cmd->command_type) {
+        case CMD_TIME_SYNC:
+            handle_time_sync_command(data, data_len);
+            break;
+        case CMD_RESTART:
+            handle_restart_command(data, data_len);
+            break;
+        case CMD_HSEARCH:
+            handle_hsearch_command(data, data_len);
+            break;
+        case CMD_SET_BREAK:
+            handle_set_break_command(data, data_len);
+            break;
+        case CMD_SET_ENABLED:
+            handle_set_enabled_command(data, data_len);
+            break;
+        case CMD_POWER_OFF:
+            handle_power_off_command(data, data_len);
+            break;
+        default:
+            ESP_LOGW(TAG, "Ukjent kommando-type: %d", cmd->command_type);
+            break;
+    }
+}
+
+
+
+// Handler for tidssynkronisering via ESP-NOW
+static void handle_time_sync_command(const uint8_t *data, size_t data_len) {
+    if (data_len < sizeof(uint32_t)) {
+        ESP_LOGW(TAG, "TIME_SYNC kommando har ugyldig data-lengde: %d", data_len);
+        return;
+    }
+    
+    // Les timestamp fra kommando-data
+    uint32_t timestamp;
+    memcpy(&timestamp, data, sizeof(uint32_t));
+    
+    ESP_LOGI(TAG, "⏰ ESP-NOW TIME_SYNC: Mottok timestamp %u", timestamp);
+    
+    // Sett lokal tid (samme logikk som TCP-versjon)
+    struct timeval tv;
+    tv.tv_sec = timestamp;
+    tv.tv_usec = 0;
+    settimeofday(&tv, NULL);
+    
+    // Logg ny tid for bekreftelse
+    time_t now;
+    char strftime_buf[64];
+    struct tm timeinfo;
+    
+    time(&now);
+    setenv("TZ", "GMT+2", 1);
+    tzset();
+    
+    localtime_r(&now, &timeinfo);
+    strftime(strftime_buf, sizeof(strftime_buf), "%c", &timeinfo);
+    ESP_LOGI(TAG, "✅ ESP-NOW tid synkronisert: %s (Unix: %lld)", strftime_buf, (long long)now);
+}
+
+
+
+// Handler for restart-kommando via ESP-NOW
+static void handle_restart_command(const uint8_t *data, size_t data_len) {
+    uint8_t restart_type = 1; // Standard: soft restart
+    
+    if (data_len >= sizeof(uint8_t)) {
+        restart_type = data[0];
+    }
+    
+    ESP_LOGI(TAG, "🔄 ESP-NOW RESTART: Type %d", restart_type);
+    
+    // Vis visuell indikasjon basert på restart-type
+    normal_led_control = false;
+    
+    switch (restart_type) {
+        case 1: // Soft restart
+            ESP_LOGI(TAG, "Utfører myk restart via ESP-NOW...");
+            for (int i = 0; i < 3; i++) {
+                set_all_leds(1, 0, 0, 255);  // Blå
+                vTaskDelay(200 / portTICK_PERIOD_MS);
+                set_all_leds(0, 0, 0, 0);
+                vTaskDelay(200 / portTICK_PERIOD_MS);
+            }
+            break;
+            
+        case 2: // Hard restart
+            ESP_LOGI(TAG, "Utfører hard restart via ESP-NOW...");
+            for (int i = 0; i < 5; i++) {
+                set_all_leds(1, 255, 165, 0);  // Oransje
+                vTaskDelay(150 / portTICK_PERIOD_MS);
+                set_all_leds(0, 0, 0, 0);
+                vTaskDelay(150 / portTICK_PERIOD_MS);
+            }
+            break;
+            
+        case 3: // Factory reset
+            ESP_LOGI(TAG, "Utfører factory reset via ESP-NOW...");
+            for (int i = 0; i < 10; i++) {
+                set_all_leds(1, 255, 0, 0);  // Rød
+                vTaskDelay(100 / portTICK_PERIOD_MS);
+                set_all_leds(0, 0, 0, 0);
+                vTaskDelay(100 / portTICK_PERIOD_MS);
+            }
+            
+            // Slett NVS-innstillinger for factory reset
+            if (restart_type == 3) {
+                nvs_handle_t my_handle;
+                esp_err_t err = nvs_open("storage", NVS_READWRITE, &my_handle);
+                if (err == ESP_OK) {
+                    ESP_LOGI(TAG, "Sletter NVS-innstillinger for factory reset...");
+                    nvs_erase_all(my_handle);
+                    nvs_commit(my_handle);
+                    nvs_close(my_handle);
+                }
+            }
+            break;
+            
+        default:
+            ESP_LOGW(TAG, "Ukjent restart-type: %d", restart_type);
+            return;
+    }
+    
+    ESP_LOGI(TAG, "✅ Restart kommando behandlet, restarter om 500ms...");
+    vTaskDelay(500 / portTICK_PERIOD_MS);
+    esp_restart();
+}
+
+
+
+// Handler for highpoint search kommando via ESP-NOW
+static void handle_hsearch_command(const uint8_t *data, size_t data_len) {
+    uint8_t channel = 0; // Standard kanal
+    
+    if (data_len >= sizeof(uint8_t)) {
+        channel = data[0];
+    }
+    
+    ESP_LOGI(TAG, "🔍 ESP-NOW HSEARCH: Kanal %d", channel);
+    
+    // Start highpoint search (samme logikk som TCP-versjon)
+    highpoint_search = true;
+    highpoint_offset = 0;
+    highpoint_channel = channel;
+    highpoint_max = 0;
+    
+    // Sett status til kalibrering
+    set_system_status(STATUS_CALIBRATING);
+    
+    ESP_LOGI(TAG, "✅ Highpoint search startet via ESP-NOW på kanal %d", channel);
+}
+
+
+
+
+// Handler for set break kommando via ESP-NOW
+static void handle_set_break_command(const uint8_t *data, size_t data_len) {
+    if (data_len < sizeof(uint8_t) + sizeof(uint16_t)) {
+        ESP_LOGW(TAG, "SET_BREAK kommando har ugyldig data-lengde: %d", data_len);
+        return;
+    }
+    
+    // Les ADC nummer og break-verdi fra data
+    uint8_t adc_nr = data[0];
+    uint16_t break_val;
+    memcpy(&break_val, &data[1], sizeof(uint16_t));
+    
+    ESP_LOGI(TAG, "⚙️ ESP-NOW SET_BREAK: ADC %d = %d", adc_nr, break_val);
+    
+    // Valider verdier (samme logikk som TCP-versjon)
+    if (adc_nr < 7 && break_val < 4906) {
+        break_limit[adc_nr] = break_val;
+        ESP_LOGI(TAG, "✅ Break limit oppdatert: sensor %d = %d", adc_nr, break_val);
+        
+        // Hvis dette er siste sensor (6), lagre alle innstillinger
+        if (adc_nr == 6) {
+            nvs_update_offsets();
+            publish_settings();
+            ESP_LOGI(TAG, "💾 Alle break limits lagret og publisert");
+        }
+    } else {
+        ESP_LOGW(TAG, "❌ Ugyldig break-verdier: ADC=%d, verdi=%d", adc_nr, break_val);
+    }
+}
+
+
+
+
+// Handler for set enabled kommando via ESP-NOW
+static void handle_set_enabled_command(const uint8_t *data, size_t data_len) {
+    if (data_len < sizeof(uint8_t) + sizeof(uint8_t)) {
+        ESP_LOGW(TAG, "SET_ENABLED kommando har ugyldig data-lengde: %d", data_len);
+        return;
+    }
+    
+    // Les sensor nummer og enabled-status fra data
+    uint8_t sensor_nr = data[0];
+    uint8_t is_enabled = data[1];
+    
+    ESP_LOGI(TAG, "🔧 ESP-NOW SET_ENABLED: Sensor %d = %s", 
+             sensor_nr, is_enabled ? "aktivert" : "deaktivert");
+    
+    // Valider verdier (samme logikk som TCP-versjon)
+    if (sensor_nr < 7) {
+        enabled[sensor_nr] = (is_enabled != 0);
+        
+        // Slå av LED for denne sensoren
+        led_set_simple(sensor_nr, 0);
+        
+        // Lagre innstillinger
+        nvs_update_offsets();
+        publish_settings();
+        
+        ESP_LOGI(TAG, "✅ Sensor %d %s via ESP-NOW", 
+                 sensor_nr, enabled[sensor_nr] ? "aktivert" : "deaktivert");
+    } else {
+        ESP_LOGW(TAG, "❌ Ugyldig sensor nummer: %d", sensor_nr);
+    }
+}
+
+
+
+
+// Handler for power off kommando via ESP-NOW
+static void handle_power_off_command(const uint8_t *data, size_t data_len) {
+    ESP_LOGI(TAG, "⚡ ESP-NOW POWER_OFF: Setter ESP32 i deep sleep");
+    
+    // Vis visuell indikasjon på at enheten skal soves (samme som TCP-versjon)
+    normal_led_control = false;
+    for (int i = 0; i < 3; i++) {
+        set_all_leds(1, 255, 0, 0);  // Rød for avstengning
+        vTaskDelay(200 / portTICK_PERIOD_MS);
+        set_all_leds(0, 0, 0, 0);
+        vTaskDelay(200 / portTICK_PERIOD_MS);
+    }
+    
+    // Lukk TCP-forbindelse på en ren måte (hvis tilkoblet)
+    if (connected) {
+        const char *shutdown_msg = "{\"K\":3,\"cmd\":\"powering_off_espnow\"}\n";
+        send(sock, shutdown_msg, strlen(shutdown_msg), 0);
+        vTaskDelay(100 / portTICK_PERIOD_MS);
+        close(sock);
+        connected = false;
+        ESP_LOGI(TAG, "TCP-forbindelse lukket før deep sleep");
+    }
+    
+    // Slå av alle LED-er før deep sleep
+    set_all_leds(0, 0, 0, 0);
+    
+    ESP_LOGI(TAG, "✅ Går inn i deep sleep modus via ESP-NOW kommando");
+    vTaskDelay(500 / portTICK_PERIOD_MS);
+    
+    // Sett deep sleep (samme som TCP-versjon)
+    esp_deep_sleep_start();
+}
+
+
+
+
+
 
 
 

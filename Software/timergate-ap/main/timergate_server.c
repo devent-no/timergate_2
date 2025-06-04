@@ -141,6 +141,14 @@ typedef struct {
 } __attribute__((packed)) identify_request_t;
 
 
+// Kommando-protokoll for ESP-NOW
+typedef struct {
+    uint32_t system_id;      // System ID for isolasjon
+    uint8_t msg_type;        // MSG_COMMAND
+    uint8_t target_mac[6];   // Spesifikk målestolpe eller broadcast
+    uint8_t command_type;    // TIME_SYNC, RESTART, HSEARCH, etc.
+    uint8_t data[];          // Kommando-spesifikk data
+} __attribute__((packed)) command_msg_t;
 
 
 typedef struct {
@@ -181,6 +189,7 @@ typedef struct {
 #define MSG_SYSTEM_ASSIGN      0x11
 #define MSG_IDENTIFY_REQUEST   0x20
 #define MSG_COMMAND            0x30
+
 
 #define MAX_DISCOVERED_POLES   10
 
@@ -298,6 +307,18 @@ static SemaphoreHandle_t system_id_mutex;
 #define CMD_SET_ENABLED    0x05
 #define CMD_POWER_OFF      0x06
 
+#define CMD_SET_BREAK      0x04
+#define CMD_SET_ENABLED    0x05
+#define CMD_POWER_OFF      0x06
+#define CMD_POWER_ON       0x07
+#define CMD_RESTART_SOFT   0x08
+#define CMD_RESTART_HARD   0x09
+#define CMD_RESTART_FACTORY 0x0A
+
+
+
+
+
 // ESP-NOW meldingsformat med System ID
 typedef struct {
     uint32_t system_id;      // Unikt per system
@@ -341,7 +362,7 @@ void initialize_system_id(void);
 uint32_t get_system_id(void);
 bool is_message_for_us(const timergate_msg_t *msg);
 esp_err_t send_esp_now_message(const uint8_t *dest_mac, uint8_t msg_type, const void *payload, size_t payload_len);
-
+bool send_esp_now_command_to_pole(const uint8_t *mac, uint8_t cmd_type, const void *data, size_t data_len);
 esp_err_t get_system_id_handler(httpd_req_t *req);
 
 // Funksjonsdeklarasjoner for paired poles
@@ -965,6 +986,57 @@ esp_err_t pole_restart_handler(httpd_req_t *req) {
     if (strlen(mac) > 0) {
         // Bygger kommandoen basert på restart-typen
         char command[64];
+
+
+
+
+        // NYTT: Send restart-kommando via ESP-NOW først
+        ESP_LOGI(TAG, "🔄 Sender restart-kommando via ESP-NOW (MAC: %s, type: %d)", 
+                 mac, restart_type);
+        
+        // Konverter MAC-streng til bytes
+        uint8_t target_mac[6];
+        bool esp_now_sent = false;
+        
+        if (sscanf(mac, "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx", 
+                  &target_mac[0], &target_mac[1], &target_mac[2],
+                  &target_mac[3], &target_mac[4], &target_mac[5]) == 6) {
+            
+            uint8_t restart_cmd_type;
+            switch (restart_type) {
+                case 1:
+                    restart_cmd_type = CMD_RESTART_SOFT;
+                    break;
+                case 2:
+                    restart_cmd_type = CMD_RESTART_HARD;
+                    break;
+                case 3:
+                    restart_cmd_type = CMD_RESTART_FACTORY;
+                    break;
+                default:
+                    restart_cmd_type = CMD_RESTART_SOFT; // Standard
+                    break;
+            }
+            
+            esp_now_sent = send_esp_now_command_to_pole(
+                target_mac, 
+                restart_cmd_type, 
+                NULL, 
+                0  // Ingen ekstra data trengs
+            );
+            
+            if (esp_now_sent) {
+                ESP_LOGI(TAG, "✅ ESP-NOW restart-kommando sendt til %s", mac);
+            } else {
+                ESP_LOGW(TAG, "❌ ESP-NOW restart-kommando feilet for %s", mac);
+            }
+        }
+        
+        // Fortsett med TCP for bakoverkompatibilitet
+
+
+
+
         
         switch (restart_type) {
             case 1:
@@ -1067,6 +1139,51 @@ esp_err_t pole_power_handler(httpd_req_t *req) {
         // Bygger kommandoen basert på ønsket strømtilstand
         char command[32];
         
+
+// NYTT: Send power-kommando via ESP-NOW først
+        ESP_LOGI(TAG, "🔋 Sender power-kommando via ESP-NOW (MAC: %s, tilstand: %s)", 
+                 mac, power_state);
+        
+        // Konverter MAC-streng til bytes
+        uint8_t target_mac[6];
+        bool esp_now_sent = false;
+        
+        if (sscanf(mac, "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx", 
+                  &target_mac[0], &target_mac[1], &target_mac[2],
+                  &target_mac[3], &target_mac[4], &target_mac[5]) == 6) {
+            
+            uint8_t power_cmd_type;
+            if (strcmp(power_state, "on") == 0) {
+                power_cmd_type = CMD_POWER_ON;
+            } else if (strcmp(power_state, "off") == 0) {
+                power_cmd_type = CMD_POWER_OFF;
+            } else {
+                ESP_LOGW(TAG, "Ugyldig power-tilstand for ESP-NOW: %s", power_state);
+                power_cmd_type = 0; // Ugyldig
+            }
+            
+            if (power_cmd_type != 0) {
+                esp_now_sent = send_esp_now_command_to_pole(
+                    target_mac, 
+                    power_cmd_type, 
+                    NULL, 
+                    0  // Ingen ekstra data trengs
+                );
+                
+                if (esp_now_sent) {
+                    ESP_LOGI(TAG, "✅ ESP-NOW power-kommando sendt til %s", mac);
+                } else {
+                    ESP_LOGW(TAG, "❌ ESP-NOW power-kommando feilet for %s", mac);
+                }
+            }
+        }
+        
+        // Fortsett med TCP for bakoverkompatibilitet
+
+
+
+
+        
         if (strcmp(power_state, "on") == 0) {
             sprintf(command, "power: on\n");
         } else if (strcmp(power_state, "off") == 0) {
@@ -1153,6 +1270,36 @@ esp_err_t time_sync_handler(httpd_req_t *req) {
     if (timestamp > 0) {
         // Vi sender tidsynkroniseringskommando til alle tilkoblede målestolper
         
+
+        // NYTT: Send tidsynkronisering via ESP-NOW til alle paired poles
+        ESP_LOGI(TAG, "🕒 Sender tidsynkronisering via ESP-NOW til paired poles");
+        
+        xSemaphoreTake(paired_poles_mutex, portMAX_DELAY);
+        
+        // Opprett kommando-data for tidsynkronisering
+        uint32_t sync_timestamp = timestamp + 1; // +1 for å kompensere for latens
+        
+        for (int i = 0; i < paired_pole_count; i++) {
+            if (paired_poles[i].enabled) {
+                bool esp_now_result = send_esp_now_command_to_pole(
+                    paired_poles[i].mac, 
+                    CMD_TIME_SYNC, 
+                    &sync_timestamp, 
+                    sizeof(sync_timestamp)
+                );
+                
+                if (esp_now_result) {
+                    ESP_LOGI(TAG, "✅ ESP-NOW tidsynkronisering sendt til %s", paired_poles[i].name);
+                } else {
+                    ESP_LOGW(TAG, "❌ ESP-NOW tidsynkronisering feilet for %s", paired_poles[i].name);
+                }
+            }
+        }
+        
+        xSemaphoreGive(paired_poles_mutex);
+        
+        // Fortsett med TCP for bakoverkompatibilitet
+
         xSemaphoreTake(tcp_poles_mutex, portMAX_DELAY);
         
         for (int i = 0; i < MAX_TCP_POLES; i++) {
@@ -1280,6 +1427,64 @@ esp_err_t time_hsearch_handler(httpd_req_t *req) {
     // Bygg kommandoen
     char command[64];
     sprintf(command, "hsearch: %d\n", channel);
+
+
+
+    // NYTT: Send hsearch via ESP-NOW
+    ESP_LOGI(TAG, "🔍 Sender hsearch via ESP-NOW (channel=%d, mac=%s)", channel, mac);
+    
+    // Opprett kommando-data for hsearch
+    uint32_t hsearch_channel = channel;
+    bool esp_now_sent = false;
+    
+    if (strlen(mac) > 0) {
+        // Send til spesifikk målestolpe via ESP-NOW
+        uint8_t target_mac[6];
+        if (sscanf(mac, "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx", 
+                  &target_mac[0], &target_mac[1], &target_mac[2],
+                  &target_mac[3], &target_mac[4], &target_mac[5]) == 6) {
+            
+            esp_now_sent = send_esp_now_command_to_pole(
+                target_mac, 
+                CMD_HSEARCH, 
+                &hsearch_channel, 
+                sizeof(hsearch_channel)
+            );
+            
+            if (esp_now_sent) {
+                ESP_LOGI(TAG, "✅ ESP-NOW hsearch sendt til spesifikk målestolpe: %s", mac);
+            }
+        }
+    } else {
+        // Send til alle paired poles via ESP-NOW
+        xSemaphoreTake(paired_poles_mutex, portMAX_DELAY);
+        
+        for (int i = 0; i < paired_pole_count; i++) {
+            if (paired_poles[i].enabled) {
+                bool result = send_esp_now_command_to_pole(
+                    paired_poles[i].mac, 
+                    CMD_HSEARCH, 
+                    &hsearch_channel, 
+                    sizeof(hsearch_channel)
+                );
+                
+                if (result) {
+                    ESP_LOGI(TAG, "✅ ESP-NOW hsearch sendt til %s", paired_poles[i].name);
+                    esp_now_sent = true;
+                } else {
+                    ESP_LOGW(TAG, "❌ ESP-NOW hsearch feilet for %s", paired_poles[i].name);
+                }
+            }
+        }
+        
+        xSemaphoreGive(paired_poles_mutex);
+    }
+    
+    // Fortsett med TCP for bakoverkompatibilitet
+
+
+
+
     
     // Send kommando til spesifikk målestolpe hvis MAC er angitt
     if (strlen(mac) > 0) {
@@ -1379,6 +1584,45 @@ esp_err_t pole_break_handler(httpd_req_t *req) {
         // Bygg kommandoen som skal sendes til målestolpen
         char command[64];
         sprintf(command, "break: %d %d\n", adc, break_val);
+
+
+        // NYTT: Send break-konfigurasjon via ESP-NOW
+        ESP_LOGI(TAG, "🔧 Sender break-konfigurasjon via ESP-NOW (MAC: %s, ADC: %d, Break: %d)", 
+                 mac, adc, break_val);
+        
+        // Konverter MAC-streng til bytes
+        uint8_t target_mac[6];
+        bool esp_now_sent = false;
+        
+        if (sscanf(mac, "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx", 
+                  &target_mac[0], &target_mac[1], &target_mac[2],
+                  &target_mac[3], &target_mac[4], &target_mac[5]) == 6) {
+            
+            // Opprett kommando-data for break-konfigurasjon
+            struct {
+                uint32_t adc_channel;
+                uint32_t break_value;
+            } break_data = {
+                .adc_channel = adc,
+                .break_value = break_val
+            };
+            
+            esp_now_sent = send_esp_now_command_to_pole(
+                target_mac, 
+                CMD_SET_BREAK, 
+                &break_data, 
+                sizeof(break_data)
+            );
+            
+            if (esp_now_sent) {
+                ESP_LOGI(TAG, "✅ ESP-NOW break-konfigurasjon sendt til %s", mac);
+            } else {
+                ESP_LOGW(TAG, "❌ ESP-NOW break-konfigurasjon feilet for %s", mac);
+            }
+        }
+        
+        // Fortsett med TCP for bakoverkompatibilitet
+
         
         // Send kommandoen
         if (send_command_to_pole_by_mac(mac, command)) {
@@ -2669,6 +2913,45 @@ esp_err_t pole_enabled_handler(httpd_req_t *req) {
        // Bygg kommandoen som skal sendes til målestolpen
        char command[64];
        sprintf(command, "enabled: %d %d\n", sensor_nr, enabled);
+
+
+    // NYTT: Send enabled-konfigurasjon via ESP-NOW
+       ESP_LOGI(TAG, "⚙️ Sender enabled-konfigurasjon via ESP-NOW (MAC: %s, Sensor: %d, Enabled: %d)", 
+                mac, sensor_nr, enabled);
+       
+       // Konverter MAC-streng til bytes
+       uint8_t target_mac[6];
+       bool esp_now_sent = false;
+       
+       if (sscanf(mac, "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx", 
+                 &target_mac[0], &target_mac[1], &target_mac[2],
+                 &target_mac[3], &target_mac[4], &target_mac[5]) == 6) {
+           
+           // Opprett kommando-data for enabled-konfigurasjon
+           struct {
+               uint32_t sensor_number;
+               uint32_t enabled_state;
+           } enabled_data = {
+               .sensor_number = sensor_nr,
+               .enabled_state = enabled
+           };
+           
+           esp_now_sent = send_esp_now_command_to_pole(
+               target_mac, 
+               CMD_SET_ENABLED, 
+               &enabled_data, 
+               sizeof(enabled_data)
+           );
+           
+           if (esp_now_sent) {
+               ESP_LOGI(TAG, "✅ ESP-NOW enabled-konfigurasjon sendt til %s", mac);
+           } else {
+               ESP_LOGW(TAG, "❌ ESP-NOW enabled-konfigurasjon feilet for %s", mac);
+           }
+       }
+       
+       // Fortsett med TCP for bakoverkompatibilitet
+
        
        // Send kommandoen
        if (send_command_to_pole_by_mac(mac, command)) {
@@ -4550,6 +4833,56 @@ esp_err_t send_esp_now_message(const uint8_t *dest_mac, uint8_t msg_type,
     
     return result;
 }
+
+
+// Funksjon for å sende ESP-NOW kommando til målestolpe
+bool send_esp_now_command_to_pole(const uint8_t *mac, uint8_t cmd_type, 
+                                  const void *data, size_t data_len) {
+    if (!mac) {
+        ESP_LOGE(TAG, "Ugyldig MAC-adresse for ESP-NOW kommando");
+        return false;
+    }
+    
+    // Beregn total størrelse for kommando-melding
+    size_t total_len = sizeof(command_msg_t) + data_len;
+    command_msg_t *cmd = malloc(total_len);
+    if (!cmd) {
+        ESP_LOGE(TAG, "Minneallokering feilet for ESP-NOW kommando");
+        return false;
+    }
+    
+    // Fyll ut kommando-struktur
+    cmd->system_id = current_system_id;
+    cmd->msg_type = MSG_COMMAND;
+    memcpy(cmd->target_mac, mac, 6);
+    cmd->command_type = cmd_type;
+    
+    // Kopier kommando-data hvis det finnes
+    if (data && data_len > 0) {
+        memcpy(cmd->data, data, data_len);
+    }
+    
+    char mac_str[18];
+    sprintf(mac_str, "%02x:%02x:%02x:%02x:%02x:%02x", 
+           mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    
+    ESP_LOGI(TAG, "📡 Sender ESP-NOW kommando type %d til %s (System ID: %08X)", 
+             cmd_type, mac_str, current_system_id);
+    
+    // Send via ESP-NOW
+    esp_err_t result = esp_now_send(mac, (uint8_t*)cmd, total_len);
+    free(cmd);
+    
+    if (result == ESP_OK) {
+        ESP_LOGI(TAG, "✅ ESP-NOW kommando sendt vellykket");
+        return true;
+    } else {
+        ESP_LOGE(TAG, "❌ ESP-NOW kommando sending feilet: %s", esp_err_to_name(result));
+        return false;
+    }
+}
+
+
 
 
 
