@@ -209,6 +209,10 @@ export default {
   },
   data() {
     return {
+      discoveredPolesInternal: [],
+      pairedPolesInternal: [],
+
+
       // Expanded state
       expandedPoles: {},
       // Discovery state
@@ -255,7 +259,7 @@ export default {
   // Kombinerte tilkoblede enheter (både paired og gamle poles)
   connectedPoles() {
       // Kombiner paired poles med eksisterende poles for bakoverkompatibilitet
-      const combined = [...this.pairedPolesInternal];
+      const combined = [...(this.pairedPolesInternal || [])];
       
       // Legg til gamle poles som ikke finnes i paired
       this.poles.forEach(pole => {
@@ -281,7 +285,7 @@ export default {
       }
       return this.discoveredPolesInternal.filter(pole => {
         // Vis kun poles som ikke allerede er paired
-        return !this.pairedPolesInternal.some(paired => 
+        return !(this.pairedPolesInternal || []).some(paired =>
           this.macAddressesEqual(paired.mac, pole.mac)
         );
       });
