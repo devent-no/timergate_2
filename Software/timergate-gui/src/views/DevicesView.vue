@@ -22,7 +22,7 @@
       <!-- Status-sammendrag -->
       <div class="status-summary">
         <div class="status-card">
-          <div class="status-value">{{ pairedPolesInternal.length }}</div>
+          <div class="status-value">{{ (pairedPolesInternal || []).length }}</div>
           <div class="status-label">Tilknyttede målestolper</div>
         </div>
         <div class="status-card">
@@ -101,8 +101,8 @@
       </div>
 
       <!-- Tilknyttede målestolper -->
-      <div class="paired-poles" v-if="pairedPolesInternal.length > 0">
-        <h2>🔗 Tilknyttede målestolper ({{ pairedPolesInternal.length }})</h2>
+      <div class="paired-poles" v-if="(pairedPolesInternal || []).length > 0">
+        <h2>🔗 Tilknyttede målestolper ({{ (pairedPolesInternal || []).length }})</h2>
         
         <div class="poles-grid">
           <div v-for="pole in pairedPolesInternal" :key="pole.mac" class="pole-card paired">
@@ -166,7 +166,7 @@
       </div>
       
       <!-- Ferdig oppsatt system eller ingen enheter -->
-      <div v-if="pairedPolesInternal.length === 0 && discoveredPolesFiltered.length === 0" class="no-devices">
+      <div v-if="(pairedPolesInternal || []).length === 0 && (discoveredPolesInternal || []).length === 0" class="no-devices">
         <div class="empty-state">
           <div class="empty-icon">📡</div>
           <h3>Ingen målestolper funnet</h3>
