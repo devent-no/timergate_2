@@ -256,7 +256,7 @@ export default {
     };
   },
 
-
+  computed: {
   // Kombinerte tilkoblede enheter (både paired og gamle poles)
   connectedPoles() {
     console.log('connectedPoles kjører, pairedPolesInternal:', this.pairedPolesInternal);
@@ -268,7 +268,7 @@ export default {
         const existsInPaired = this.pairedPolesInternal.some(paired => 
           paired.mac === pole.mac
         );
-        if (!existsInPaired && pole.values && pole.values.some(v => v > 0)) {
+        if (!existsInPaired && pole.values && Array.isArray(pole.values) && pole.values.some(v => v > 0)) {
           combined.push({
             ...pole,
             name: pole.name || `Pole ${pole.id}`,
@@ -288,9 +288,10 @@ export default {
       }
       return this.discoveredPolesInternal.filter(pole => {
         // Vis kun poles som ikke allerede er paired
-        return !(this.pairedPolesInternal || []).some(paired =>
-          this.macAddressesEqual(paired.mac, pole.mac)
-        );
+        return !(this.pairedPolesInternal || []).some(paired => {
+          if (!paired || !paired.mac || !pole || !pole.mac) return false;
+          return this.macAddressesEqual(paired.mac, pole.mac);
+        });
       });
     },
     
@@ -298,7 +299,7 @@ export default {
       return this.discoveredPolesFiltered ? this.discoveredPolesFiltered.length : 0;
     },
 
-
+  },
 
 
 
