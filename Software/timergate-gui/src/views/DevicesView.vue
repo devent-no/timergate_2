@@ -595,6 +595,46 @@ async assignPole(pole) {
 
 
 
+    async identifyPole(pole) {
+      try {
+        this.showToast('info', `Sender blinksignal til ${pole.device_name || pole.name}...`);
+        
+        const response = await fetch(`http://${this.serverAddress}/api/v1/poles/identify`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            mac: this.formatMac(pole.mac),
+            duration: 10  // 10 sekunder blinking
+          })
+        });
+        
+        const data = await response.json();
+        
+        if (data.status === 'success') {
+          this.showToast('success', `${pole.device_name || pole.name} blinker nå for identifikasjon`);
+          
+          // Oppdater identifying status lokalt hvis det er en discovered pole
+          if (pole.device_name) {
+            pole.identifying = true;
+            setTimeout(() => {
+              pole.identifying = false;
+            }, 10000); // Tilbakestill etter 10 sekunder
+          }
+        } else {
+          this.showToast('error', `Kunne ikke sende blinksignal: ${data.message || 'Ukjent feil'}`);
+        }
+      } catch (error) {
+        console.error('Feil ved identifisering av målestolpe:', error);
+        this.showToast('error', 'Feil ved kommunikasjon med serveren');
+      }
+    },
+
+
+
+
+
 
     // Restart Modal
     openRestartModal(pole) {

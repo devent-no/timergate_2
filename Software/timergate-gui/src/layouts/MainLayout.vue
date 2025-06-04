@@ -43,9 +43,14 @@ export default {
   },
   data() {
     return {
-      currentView: "dashboard" // Standard visning
+      currentView: "dashboard", // Standard visning
+      // Nye data for discovery og pairing
+      discoveredPoles: [],
+      pairedPoles: [],
+      systemId: ""
     };
   },
+
   methods: {
     navigateTo(view) {
       this.currentView = view;
@@ -66,8 +71,57 @@ export default {
     // Bytt til utviklingsvisning
     switchToDevView() {
       this.$emit('toggle-dev');
+    },
+    
+    // Nye metoder for å laste discovery og pairing data
+    async loadDiscoveryData() {
+      try {
+        // Last system info
+        const systemResponse = await fetch(`http://${this.serverAddress}/api/v1/system/id`);
+        const systemData = await systemResponse.json();
+        if (systemData.status === 'success') {
+          this.systemId = systemData.system_id || '';
+        }
+        
+        // Last discovered poles
+        const discoveredResponse = await fetch(`http://${this.serverAddress}/api/v1/poles/discovered`);
+        const discoveredData = await discoveredResponse.json();
+        if (discoveredData.status === 'success') {
+          this.discoveredPoles = discoveredData.poles || [];
+        }
+        
+        // Last paired poles
+        const pairedResponse = await fetch(`http://${this.serverAddress}/api/v1/poles/paired`);
+        const pairedData = await pairedResponse.json();
+        if (pairedData.status === 'success') {
+          this.pairedPoles = pairedData.poles || [];
+        }
+      } catch (error) {
+        console.error('Feil ved lasting av discovery data:', error);
+      }
     }
+
+
+  },
+
+  mounted() {
+    // Last discovery data ved oppstart
+    this.loadDiscoveryData();
+    
+    // Sett opp periodisk oppdatering
+    this.discoveryInterval = setInterval(() => {
+      this.loadDiscoveryData();
+    }, 10000); // Oppdater hvert 10. sekund
+  },
+
+  beforeDestroy() {
+    if (this.discoveryInterval) {
+      clearInterval(this.discoveryInterval);
+    }
+
+
   }
+
 };
 </script>
 
@@ -151,6 +205,9 @@ export default {
         v-else-if="currentView === 'devices'" 
         :poles="poles" 
         :serverAddress="serverAddress"
+        :discoveredPoles="discoveredPoles"
+        :pairedPoles="pairedPoles"
+        :systemId="systemId"
       />
       <config-view 
         v-else-if="currentView === 'config'" 

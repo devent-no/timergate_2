@@ -17,15 +17,39 @@ export default {
       saveStatus: ""
     };
   },
+  // Nye data for system info
+    systemId: "",
+    systemName: "",
+    discoveryActive: false,
+    isLoadingSystemInfo: false,
   computed: {
     // Bruk API base URL fra nettleserens lokasjon
     apiBaseUrl() {
       return `${window.location.protocol}//${this.serverAddress || window.location.host}`;
     }
   },
+  computed: {
+    // Beregnet API base URL
+    apiBaseUrl() {
+      return `${window.location.protocol}//${this.serverAddress || window.location.host}`;
+    },
+    
+    // Nye computed properties for reactivity
+    displaySystemId() {
+      return this.systemId || 'Laster...';
+    },
+    
+    displaySystemName() {
+      return this.systemName || '';
+    }
+  },
+
+
   mounted() {
     this.fetchCurrentConfig();
+    this.fetchSystemInfo();
   },
+  
   methods: {
     async fetchCurrentConfig() {
       try {
@@ -41,6 +65,60 @@ export default {
         console.error("Feil ved henting av passering-konfigurasjon:", error);
       }
     },
+
+    async fetchSystemInfo() {
+      this.isLoadingSystemInfo = true;
+      try {
+        const response = await fetch(`${this.apiBaseUrl}/api/v1/system/id`);
+        const data = await response.json();
+        
+        if (data.status === "success") {
+          this.systemId = data.system_id || "";
+          this.systemName = data.system_name || "Timergate System";
+          this.discoveryActive = data.discovery_active || false;
+          console.log("Loaded system info:", { systemId: this.systemId, systemName: this.systemName });
+        }
+      } catch (error) {
+        console.error("Feil ved henting av system-informasjon:", error);
+      } finally {
+        this.isLoadingSystemInfo = false;
+      }
+    },
+    
+    async saveSystemName() {
+      if (!this.systemName || !this.systemName.trim()) {
+        return;
+      }
+      
+      try {
+        const response = await fetch(`${this.apiBaseUrl}/api/v1/system/name`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Accept": "application/json"
+          },
+          body: JSON.stringify({
+            name: this.systemName.trim()
+          })
+        });
+        
+        const data = await response.json();
+        
+        if (data.status === "success") {
+          this.saveMessage = "Systemnavn lagret";
+          this.saveStatus = "success";
+        } else {
+          this.saveMessage = "Kunne ikke lagre systemnavn";
+          this.saveStatus = "error";
+        }
+      } catch (error) {
+        console.error("Feil ved lagring av systemnavn:", error);
+        this.saveMessage = "Feil ved kommunikasjon med serveren";
+        this.saveStatus = "error";
+      }
+    },
+
+
     async saveConfig() {
       this.isSaving = true;
       this.saveMessage = "";
@@ -93,6 +171,50 @@ export default {
     <h1>Konfigurering</h1>
     
     <div class="config-container">
+      <!-- System-informasjon seksjon -->
+      <div class="config-section">
+        <h2>System Identifikasjon</h2>
+        
+        <div class="form-group">
+          <label>System ID:</label>
+          <div class="system-id-display">
+            <span class="system-id-value">{{ displaySystemId }}</span>
+            <div class="system-id-note">
+              Generert automatisk fra enhetens MAC-adresse. Dette ID-et brukes for å isolere systemet fra andre Timergate-systemer i nærheten.
+            </div>
+          </div>
+        </div>
+        
+        <div class="form-group">
+          <label for="system-name">Systemnavn:</label>
+          <div class="system-name-input">
+            <input 
+              id="system-name"
+              type="text" 
+              v-model="displaySystemName"
+              placeholder="F.eks. Timergate Nord" 
+              class="text-input"
+              :disabled="isLoadingSystemInfo"
+            />
+            <button 
+              @click="saveSystemName" 
+              class="save-name-button"
+              :disabled="!systemName || !systemName.trim() || isLoadingSystemInfo"
+            >
+              Lagre navn
+            </button>
+          </div>
+        </div>
+        
+        <div class="form-group">
+          <label>Discovery-status:</label>
+          <div class="discovery-status-display">
+            <span class="discovery-indicator" :class="{ active: discoveryActive }">
+              {{ discoveryActive ? 'Aktiv - leter etter nye målestolper' : 'Inaktiv' }}
+            </span>
+          </div>
+        </div>
+      </div>
       <div class="config-section">
         <h2>Passerings-deteksjon</h2>
         
@@ -248,4 +370,101 @@ export default {
   color: #c62828;
   border: 1px solid #ffcdd2;
 }
+
+
+/* System informasjon styling */
+.system-id-display {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.system-id-value {
+  font-family: monospace;
+  font-size: 18px;
+  font-weight: bold;
+  background-color: #f5f5f5;
+  padding: 12px 16px;
+  border-radius: 4px;
+  border: 1px solid #ddd;
+  color: #333;
+  letter-spacing: 1px;
+}
+
+.system-id-note {
+  font-size: 12px;
+  color: #666;
+  line-height: 1.4;
+  font-style: italic;
+}
+
+.system-name-input {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.system-name-input .text-input {
+  flex: 1;
+}
+
+.save-name-button {
+  background-color: #0078D7;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  padding: 10px 16px;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.save-name-button:hover:not(:disabled) {
+  background-color: #0063b1;
+}
+
+.save-name-button:disabled {
+  background-color: #ccc;
+  cursor: not-allowed;
+}
+
+.discovery-status-display {
+  padding: 8px 0;
+}
+
+.discovery-indicator {
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 500;
+  display: inline-block;
+}
+
+.discovery-indicator.active {
+  background-color: #e8f5e9;
+  color: #2e7d32;
+  border: 1px solid #c8e6c9;
+}
+
+.discovery-indicator:not(.active) {
+  background-color: #ffebee;
+  color: #c62828;
+  border: 1px solid #ffcdd2;
+}
+
+/* Responsive adjustments for system config */
+@media (max-width: 768px) {
+  .system-name-input {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  
+  .save-name-button {
+    width: 100%;
+  }
+}
+
+
+
+
 </style>
