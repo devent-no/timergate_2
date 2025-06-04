@@ -14,19 +14,13 @@ export default {
       timeoutMs: 250,
       isSaving: false,
       saveMessage: "",
-      saveStatus: ""
+      saveStatus: "",
+      // Nye data for system info
+      systemId: "",
+      systemName: "",
+      discoveryActive: false,
+      isLoadingSystemInfo: false
     };
-  },
-  // Nye data for system info
-    systemId: "",
-    systemName: "",
-    discoveryActive: false,
-    isLoadingSystemInfo: false,
-  computed: {
-    // Bruk API base URL fra nettleserens lokasjon
-    apiBaseUrl() {
-      return `${window.location.protocol}//${this.serverAddress || window.location.host}`;
-    }
   },
   computed: {
     // Beregnet API base URL

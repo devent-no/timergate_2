@@ -192,20 +192,20 @@ export default {
     serverAddress: {
       type: String,
       default: "timergate.local"
+    },
+    // FIKSET: Flyttet disse inn i props-objektet
+    discoveredPoles: {
+      type: Array,
+      default: () => []
+    },
+    pairedPoles: {
+      type: Array,
+      default: () => []
+    },
+    systemId: {
+      type: String,
+      default: ""
     }
-  },
-  // Nye props for discovery og pairing
-  discoveredPoles: {
-    type: Array,
-    default: () => []
-  },
-  pairedPoles: {
-    type: Array,
-    default: () => []
-  },
-  systemId: {
-    type: String,
-    default: ""
   },
   data() {
     return {
@@ -276,6 +276,9 @@ export default {
     
     // Nye computed properties for discovery
     discoveredPolesFiltered() {
+      if (!Array.isArray(this.discoveredPolesInternal)) {
+         return [];
+      }
       return this.discoveredPolesInternal.filter(pole => {
         // Vis kun poles som ikke allerede er paired
         return !this.pairedPolesInternal.some(paired => 
@@ -285,7 +288,7 @@ export default {
     },
     
     totalDiscoveredPoles() {
-      return this.discoveredPolesFiltered.length;
+      return this.discoveredPolesFiltered ? this.discoveredPolesFiltered.length : 0;
     },
 
 
