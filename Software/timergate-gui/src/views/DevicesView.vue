@@ -3,311 +3,183 @@
     <h1>Enheter</h1>
     
     <div class="devices-container">
+      <!-- System-info øverst -->
+      <div class="system-info-panel">
+        <div class="system-info-content">
+          <div class="system-id-display">
+            <span class="system-label">System ID:</span>
+            <span class="system-id-value">{{ formatSystemId(systemId) }}</span>
+          </div>
+          <div class="discovery-status">
+            <span class="discovery-label">Discovery:</span>
+            <span class="discovery-indicator" :class="{ active: discoveryActive }">
+              {{ discoveryActive ? 'Aktiv' : 'Inaktiv' }}
+            </span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Status-sammendrag -->
       <div class="status-summary">
         <div class="status-card">
-          <div class="status-value">{{ connectedPoles.length }}</div>
-          <div class="status-label">Tilkoblede enheter</div>
+          <div class="status-value">{{ pairedPolesInternal.length }}</div>
+          <div class="status-label">Tilknyttede målestolper</div>
+        </div>
+        <div class="status-card">
+          <div class="status-value">{{ totalDiscoveredPoles }}</div>
+          <div class="status-label">Nye målestolper funnet</div>
         </div>
         <div class="status-card">
           <div class="status-value">{{ countActiveSensors() }}</div>
           <div class="status-label">Aktive sensorer</div>
         </div>
-        <button @click="scanForDevices" class="scan-button">
+        <button @click="loadDiscoveredPoles" class="scan-button" :disabled="isScanning">
           <span class="icon">🔍</span>
-          Søk etter enheter
+          {{ isScanning ? 'Søker...' : 'Oppdater liste' }}
         </button>
       </div>
-      
-      <div v-if="connectedPoles.length > 0" class="devices-list">
-        <div v-for="pole in connectedPoles" :key="pole.id" class="device-card">
-          <div class="device-header">
-            <div class="device-title">
-              <h2>{{ pole.name }}</h2>
-              <div class="device-status" :class="getStatusClass(pole)">
-                {{ getConnectionStatus(pole) }}
-              </div>
-            </div>
-            <div class="device-actions-compact">
-              <button @click="expandDevice(pole)" class="icon-button" v-if="!isExpanded(pole)">
-                <span class="icon">⬇️</span>
-              </button>
-              <button @click="collapseDevice(pole)" class="icon-button" v-else>
-                <span class="icon">⬆️</span>
-              </button>
-            </div>
-          </div>
-          
-          <div class="device-info">
-            <div class="info-row">
-              <div class="info-label">MAC-adresse:</div>
-              <div class="info-value">{{ pole.mac }}</div>
-            </div>
-            <div class="info-row">
-              <div class="info-label">Aktive sensorer:</div>
-              <div class="info-value">{{ countPoleActiveSensors(pole) }} / {{ getEnabledSensors(pole).length }}</div>
-            </div>
-            <div class="info-row">
-              <div class="info-label">Batteristatus:</div>
-              <div class="info-value">{{ pole.battery || 'N/A' }}</div>
-            </div>
-            <div class="info-row">
-              <div class="info-label">Sist aktivitet:</div>
-              <div class="info-value">{{ getLastActivity(pole) }}</div>
-            </div>
-          </div>
-          
-          <div v-if="isExpanded(pole)" class="device-expanded">
-            <div class="sensor-section">
-              <h3>Sensorstatus</h3>
-              <div class="sensor-grid">
-                <div v-for="(value, index) in pole.values" :key="index" class="sensor-item">
-                  <div class="sensor-label">Sensor {{ index }}</div>
-                  <div class="sensor-value" :class="{ 'sensor-active': isSensorActive(value), 'sensor-inactive': !isSensorActive(value) }">
-                    {{ value || 0 }}
-                  </div>
-                  <div class="sensor-bar-container">
-                    <div class="sensor-bar" :style="{ width: getSensorBarWidth(value) }"></div>
-                    <div class="sensor-threshold" :style="{ left: getSensorThresholdPosition(pole, index) }"></div>
-                  </div>
+
+      <!-- Nye målestolper som søker tilknytning -->
+      <div class="unassigned-poles" v-if="discoveredPolesFiltered.length > 0">
+        <h2>🆕 Nye målestolper ({{ discoveredPolesFiltered.length }})</h2>
+        
+        <div class="poles-grid">
+          <div v-for="pole in discoveredPolesFiltered" :key="pole.mac" class="pole-card unassigned">
+            <div class="pole-header">
+              <div class="pole-title">
+                <h3>{{ pole.device_name }}</h3>
+                <div class="pole-status new">
+                  Ny enhet
                 </div>
               </div>
             </div>
             
-            <div class="action-section">
-              <h3>Handlinger</h3>
-              <div class="action-buttons">
-                <button @click="openRestartModal(pole)" class="action-button restart">
-                  <span class="icon">🔄</span>
-                  Restart enhet
+            <div class="pole-info">
+              <div class="info-row">
+                <div class="info-label">MAC-adresse:</div>
+                <div class="info-value">{{ formatMac(pole.mac) }}</div>
+              </div>
+              <div class="info-row">
+                <div class="info-label">Avstand:</div>
+                <div class="info-value">~{{ pole.estimated_distance || 'Ukjent' }}m</div>
+              </div>
+              <div class="info-row">
+                <div class="info-label">Signalstyrke:</div>
+                <div class="info-value">{{ pole.rssi || 'Ukjent' }} dBm</div>
+              </div>
+              <div class="info-row">
+                <div class="info-label">Sist sett:</div>
+                <div class="info-value">{{ formatTimeSince(pole.last_seen) }}</div>
+              </div>
+            </div>
+            
+            <div class="pole-actions-unassigned">
+              <button @click="identifyPole(pole)" :disabled="pole.identifying" class="action-button identify">
+                <span v-if="pole.identifying" class="icon">🔶</span>
+                <span v-else class="icon">🔍</span>
+                {{ pole.identifying ? 'Blinker...' : 'Identifiser' }}
+              </button>
+              <button @click="assignPole(pole)" class="action-button assign">
+                <span class="icon">✅</span>
+                Tilknytt
+              </button>
+            </div>
+          </div>
+        </div>
+        
+        <div class="instructions">
+          <div class="instructions-header">
+            <span class="icon">💡</span>
+            <strong>Bruksanvisning:</strong>
+          </div>
+          <ol>
+            <li>Klikk <strong>"Identifiser"</strong> på en målestolpe</li>
+            <li>Gå til den fysiske målestolpen som blinker oransje</li>
+            <li>Kom tilbake og klikk <strong>"Tilknytt"</strong> hvis det var riktig målestolpe</li>
+          </ol>
+        </div>
+      </div>
+
+      <!-- Tilknyttede målestolper -->
+      <div class="paired-poles" v-if="pairedPolesInternal.length > 0">
+        <h2>🔗 Tilknyttede målestolper ({{ pairedPolesInternal.length }})</h2>
+        
+        <div class="poles-grid">
+          <div v-for="pole in pairedPolesInternal" :key="pole.mac" class="pole-card paired">
+            <div class="pole-header">
+              <div class="pole-title">
+                <h3>{{ pole.name || 'Navnløs målestolpe' }}</h3>
+                <div class="pole-status" :class="getConnectionStatus(pole)">
+                  {{ getConnectionText(pole) }}
+                </div>
+              </div>
+              <div class="pole-actions-compact">
+                <button @click="expandDevice(pole)" class="icon-button" v-if="!isExpanded(pole)">
+                  <span class="icon">⬇️</span>
                 </button>
-                <button @click="calibrateSensors(pole)" class="action-button calibrate">
-                  <span class="icon">⚙️</span>
-                  Kalibrer sensorer
-                </button>
-                <button @click="identifyDevice(pole)" class="action-button identify">
-                  <span class="icon">💡</span>
-                  Finn enhet
-                </button>
-                <button @click="openRenameModal(pole)" class="action-button rename">
-                  <span class="icon">✏️</span>
-                  Endre navn
-                </button>
-                <button @click="openPowerModal(pole)" class="action-button power" :class="{ 'power-off': !isPowerOn(pole) }">
-                  <span class="icon">{{ isPowerOn(pole) ? '🔌' : '💤' }}</span>
-                  {{ isPowerOn(pole) ? 'Slå av enhet' : 'Slå på enhet' }}
+                <button @click="collapseDevice(pole)" class="icon-button" v-else>
+                  <span class="icon">⬆️</span>
                 </button>
               </div>
             </div>
             
-            <div class="diagnostics-section">
-              <h3>Diagnostikk</h3>
-              <div class="action-buttons">
-                <button @click="checkDiagnostics(pole)" class="action-button diagnostics">
-                  <span class="icon">🩺</span>
-                  Kjør diagnostikk
-                </button>
-                <button @click="viewDeviceLog(pole)" class="action-button logs">
-                  <span class="icon">📋</span>
-                  Vis logg
-                </button>
+            <div class="pole-info">
+              <div class="info-row">
+                <div class="info-label">MAC-adresse:</div>
+                <div class="info-value">{{ formatMac(pole.mac) }}</div>
+              </div>
+              <div class="info-row">
+                <div class="info-label">Tilknyttet:</div>
+                <div class="info-value">{{ formatTimeSince(pole.paired_time) }}</div>
+              </div>
+              <div class="info-row">
+                <div class="info-label">Sist aktiv:</div>
+                <div class="info-value">{{ formatTimeSince(pole.last_seen) }}</div>
               </div>
             </div>
-          </div>
-          
-          <div class="device-actions-footer" v-if="!isExpanded(pole)">
-            <button @click="expandDevice(pole)" class="expand-button">
-              Vis detaljer
-            </button>
+            
+            <div class="pole-actions-footer">
+              <button @click="identifyPole(pole)" class="action-button identify">
+                <span class="icon">🔍</span>
+                Identifiser
+              </button>
+              <button @click="openRenameModal(pole)" class="action-button rename">
+                <span class="icon">✏️</span>
+                Endre navn
+              </button>
+              <button @click="unpairPole(pole)" class="action-button unpair">
+                <span class="icon">🗑️</span>
+                Fjern
+              </button>
+            </div>
+            
+            <!-- Utvidet visning for paired poles -->
+            <div v-if="isExpanded(pole)" class="device-expanded">
+              <!-- Her kan vi legge til mer detaljert visning senere -->
+              <div class="sensor-section">
+                <h3>Sensorer</h3>
+                <p>Detaljert sensorvisning kommer senere...</p>
+              </div>
+            </div>
           </div>
         </div>
       </div>
       
-      <div v-else class="no-devices">
+      <!-- Ferdig oppsatt system eller ingen enheter -->
+      <div v-if="pairedPolesInternal.length === 0 && discoveredPolesFiltered.length === 0" class="no-devices">
         <div class="empty-state">
           <div class="empty-icon">📡</div>
-          <h3>Ingen enheter tilkoblet</h3>
-          <p>Søk etter enheter eller koble til en ny målestolpe for å komme i gang.</p>
-          <button @click="scanForDevices" class="scan-button">Søk etter enheter</button>
-        </div>
-      </div>
-    </div>
-    
-    <!-- Restart Modal -->
-    <div v-if="showRestartModal" class="modal-overlay">
-      <div class="modal-content">
-        <div class="modal-header">
-          <h2>Restart enhet</h2>
-          <button @click="cancelRestart" class="close-button">×</button>
-        </div>
-        
-        <div class="modal-body">
-          <p>Velg type restart for <strong>{{ selectedPole ? selectedPole.name : '' }}</strong> ({{ selectedPole ? selectedPole.mac : '' }})</p>
-          
-          <div class="restart-options">
-            <div class="restart-option">
-              <input type="radio" id="restart-soft" name="restart-type" value="1" v-model="restartType">
-              <label for="restart-soft">
-                <strong>Myk restart</strong>
-                <p>Standard restart av enheten. Beholder alle innstillinger.</p>
-              </label>
-            </div>
-            
-            <div class="restart-option">
-              <input type="radio" id="restart-hard" name="restart-type" value="2" v-model="restartType">
-              <label for="restart-hard">
-                <strong>Hard restart</strong>
-                <p>Tvungen restart. Bruk hvis enheten ikke responderer normalt.</p>
-              </label>
-            </div>
-            
-            <div class="restart-option">
-              <input type="radio" id="restart-factory" name="restart-type" value="3" v-model="restartType">
-              <label for="restart-factory">
-                <strong>Factory reset</strong>
-                <p>Tilbakestill enheten til fabrikkinnstillinger. Alle konfigurasjoner vil gå tapt.</p>
-              </label>
-            </div>
-          </div>
-          
-          <div class="warning-message" v-if="restartType === '3'">
-            <strong>Advarsel:</strong> Factory reset vil slette alle lagrede innstillinger og kalibreringer. 
-            Enheten må konfigureres på nytt etter restart.
-          </div>
-        </div>
-        
-        <div class="modal-footer">
-          <button @click="cancelRestart" class="cancel-button">Avbryt</button>
-          <button @click="confirmRestart" class="confirm-button restart" :disabled="isRestarting">
-            {{ isRestarting ? 'Restarter...' : 'Restart' }}
+          <h3>Ingen målestolper funnet</h3>
+          <p v-if="!discoveryActive">Discovery er ikke aktiv. Systemet leter ikke etter nye målestolper.</p>
+          <p v-else>Systemet leter etter målestolper. Sørg for at målestolpene er påslått og innenfor rekkevidde.</p>
+          <button @click="loadDiscoveredPoles" class="scan-button">
+            <span class="icon">🔄</span>
+            Søk igjen
           </button>
         </div>
       </div>
     </div>
-    
-    <!-- Rename Modal -->
-    <div v-if="showRenameModal" class="modal-overlay">
-      <div class="modal-content">
-        <div class="modal-header">
-          <h2>Endre navn</h2>
-          <button @click="cancelRename" class="close-button">×</button>
-        </div>
-        
-        <div class="modal-body">
-          <p>Angi nytt navn for enheten ({{ selectedPole ? selectedPole.mac : '' }})</p>
-          
-          <div class="form-group">
-            <label for="device-name">Navn:</label>
-            <input 
-              type="text" 
-              id="device-name" 
-              v-model="newDeviceName" 
-              placeholder="F.eks. Målestolpe Start"
-              class="text-input"
-            >
-          </div>
-        </div>
-        
-        <div class="modal-footer">
-          <button @click="cancelRename" class="cancel-button">Avbryt</button>
-          <button @click="confirmRename" class="confirm-button" :disabled="!newDeviceName">
-            Lagre
-          </button>
-        </div>
-      </div>
     </div>
-    
-    <!-- Logs Modal -->
-    <div v-if="showLogsModal" class="modal-overlay">
-      <div class="modal-content logs-modal">
-        <div class="modal-header">
-          <h2>Enhetslogg: {{ selectedPole ? selectedPole.name : '' }}</h2>
-          <button @click="closeLogsModal" class="close-button">×</button>
-        </div>
-        
-        <div class="modal-body">
-          <div class="log-filters">
-            <select v-model="logLevel" class="select-input">
-              <option value="all">Alle nivåer</option>
-              <option value="info">Info</option>
-              <option value="warning">Advarsel</option>
-              <option value="error">Feil</option>
-            </select>
-            <button @click="refreshLogs" class="refresh-button">
-              <span class="icon">🔄</span> Oppdater
-            </button>
-          </div>
-          
-          <div class="log-entries">
-            <div v-if="deviceLogs.length === 0" class="empty-logs">
-              Ingen logginnslag funnet
-            </div>
-            <div v-for="(log, index) in filteredLogs" :key="index" class="log-entry" :class="getLogClass(log)">
-              <div class="log-time">{{ formatLogTime(log.time) }}</div>
-              <div class="log-level">{{ log.level }}</div>
-              <div class="log-message">{{ log.message }}</div>
-            </div>
-          </div>
-        </div>
-        
-        <div class="modal-footer">
-          <button @click="closeLogsModal" class="cancel-button">Lukk</button>
-          <button @click="downloadLogs" class="confirm-button">
-            <span class="icon">💾</span> Last ned logg
-          </button>
-        </div>
-      </div>
-    </div>
-
-
-    <!-- Power Off Modal -->
-    <div v-if="showPowerModal" class="modal-overlay">
-      <div class="modal-content">
-        <div class="modal-header">
-          <h2>Slå av enhet</h2>
-          <button @click="cancelPowerOff" class="close-button">×</button>
-        </div>
-        
-        <div class="modal-body">
-          <div class="warning-message">
-            <strong>⚠️ Advarsel:</strong> Dette vil sette enheten i deep sleep-modus.
-          </div>
-          
-          <p>Er du sikker på at du vil slå av <strong>{{ selectedPole ? selectedPole.name : '' }}</strong>?</p>
-          
-          <div class="power-off-info">
-            <h4>Viktig informasjon:</h4>
-            <ul>
-              <li>Enheten vil gå i deep sleep og bruke minimal strøm</li>
-              <li>Enheten vil <strong>ikke</strong> motta nettverkskommandoer</li>
-              <li>Du må <strong>fysisk trykke reset-knappen</strong> på enheten for å slå den på igjen</li>
-              <li>All nettverkstilkobling vil bli brutt</li>
-            </ul>
-          </div>
-        </div>
-        
-        <div class="modal-footer">
-          <button @click="cancelPowerOff" class="cancel-button">Avbryt</button>
-          <button @click="confirmPowerOff" class="confirm-button power-off" :disabled="isPoweringOff">
-            {{ isPoweringOff ? 'Slår av...' : 'Slå av enhet' }}
-          </button>
-        </div>
-      </div>
-    </div>
-
-
-
-    
-    <!-- Toast notifications -->
-    <div class="toast-container">
-      <div v-for="(toast, index) in toasts" :key="index" class="toast" :class="toast.type">
-        <div class="toast-content">
-          <span class="toast-icon">{{ getToastIcon(toast.type) }}</span>
-          <span class="toast-message">{{ toast.message }}</span>
-        </div>
-        <button @click="dismissToast(index)" class="toast-close">×</button>
-      </div>
-    </div>
-  </div>
 </template>
 
 <script>
@@ -322,10 +194,30 @@ export default {
       default: "timergate.local"
     }
   },
+  // Nye props for discovery og pairing
+  discoveredPoles: {
+    type: Array,
+    default: () => []
+  },
+  pairedPoles: {
+    type: Array,
+    default: () => []
+  },
+  systemId: {
+    type: String,
+    default: ""
+  },
   data() {
     return {
       // Expanded state
       expandedPoles: {},
+      // Discovery state
+      discoveryActive: false,
+      isScanning: false,
+      
+      // Discovered poles state
+      discoveredPolesInternal: [],
+      pairedPolesInternal: [],
 
       // Power modal
       showPowerModal: false,
@@ -358,37 +250,113 @@ export default {
 
     };
   },
-  computed: {
-    // Filtrer kun aktive/tilkoblede enheter
-    connectedPoles() {
-      return this.poles.filter(pole => {
-        // Sjekk om pole har verdier og at minst én verdi er større enn 0
-        const hasValues = pole.values && Array.isArray(pole.values) && pole.values.length > 0;
-        const hasValidValues = hasValues && pole.values.some(value => 
-          value !== undefined && value !== null && value > 0
+
+
+  // Kombinerte tilkoblede enheter (både paired og gamle poles)
+  connectedPoles() {
+      // Kombiner paired poles med eksisterende poles for bakoverkompatibilitet
+      const combined = [...this.pairedPolesInternal];
+      
+      // Legg til gamle poles som ikke finnes i paired
+      this.poles.forEach(pole => {
+        const existsInPaired = this.pairedPolesInternal.some(paired => 
+          paired.mac === pole.mac
         );
-        
-        // Sjekk også om pole eksplisitt er markert som tilkoblet
-        const isConnected = pole.connected !== false;
-        
-        // Debug-logging for å se hva som skjer
-        if (!hasValidValues && pole.mac) {
-          console.log(`Filtrerer bort pole ${pole.mac}: hasValues=${hasValues}, values=`, pole.values);
+        if (!existsInPaired && pole.values && pole.values.some(v => v > 0)) {
+          combined.push({
+            ...pole,
+            name: pole.name || `Pole ${pole.id}`,
+            paired: false
+          });
         }
-        
-        return hasValidValues && isConnected;
+      });
+      
+      return combined;
+    },
+    
+    // Nye computed properties for discovery
+    discoveredPolesFiltered() {
+      return this.discoveredPolesInternal.filter(pole => {
+        // Vis kun poles som ikke allerede er paired
+        return !this.pairedPolesInternal.some(paired => 
+          this.macAddressesEqual(paired.mac, pole.mac)
+        );
       });
     },
     
-    filteredLogs() {
-      if (this.logLevel === "all") {
-        return this.deviceLogs;
+    totalDiscoveredPoles() {
+      return this.discoveredPolesFiltered.length;
+    },
+
+
+
+
+
+
+  methods: {
+    // Hjelpemetoder for MAC-adresse håndtering
+  macAddressesEqual(mac1, mac2) {
+    if (!mac1 || !mac2) return false;
+    
+    // Normaliser MAC-adresser (fjern : og gjør lowercase)
+    const normalize = (mac) => {
+      if (Array.isArray(mac)) {
+        // Konverter array til string format
+        return mac.map(b => b.toString(16).padStart(2, '0')).join('').toLowerCase();
       }
-      return this.deviceLogs.filter(log => log.level.toLowerCase() === this.logLevel);
+      return mac.replace(/:/g, '').toLowerCase();
+    };
+    
+    return normalize(mac1) === normalize(mac2);
+  },
+  
+  formatMac(mac) {
+    if (Array.isArray(mac)) {
+      return mac.map(b => b.toString(16).padStart(2, '0')).join(':');
+    }
+    return mac;
+  },
+  
+  formatSystemId(systemId) {
+    if (!systemId) return 'Ukjent';
+    return systemId.toUpperCase();
+  },
+
+
+  formatTimeSince(timestamp) {
+    if (!timestamp) return 'Ukjent';
+    
+    const now = Date.now() / 1000;
+    const diff = now - timestamp;
+    
+    if (diff < 60) return 'Nettopp';
+    if (diff < 3600) return `${Math.floor(diff / 60)} min siden`;
+    if (diff < 86400) return `${Math.floor(diff / 3600)} timer siden`;
+    return `${Math.floor(diff / 86400)} dager siden`;
+  },
+  
+  getConnectionStatus(pole) {
+    if (!pole.last_seen) return 'unknown';
+    
+    const now = Date.now() / 1000;
+    const timeSince = now - pole.last_seen;
+    
+    if (timeSince < 300) return 'connected';      // Mindre enn 5 min
+    if (timeSince < 3600) return 'idle';          // Mindre enn 1 time
+    return 'disconnected';                        // Mer enn 1 time
+  },
+  
+  getConnectionText(pole) {
+    const status = this.getConnectionStatus(pole);
+    switch (status) {
+      case 'connected': return 'Tilkoblet';
+      case 'idle': return 'Inaktiv';
+      case 'disconnected': return 'Frakoblet';
+      default: return 'Ukjent';
     }
   },
 
-  methods: {
+
     countActiveSensors() {
       let count = 0;
       // Bruk connectedPoles i stedet for poles
@@ -511,6 +479,123 @@ export default {
       }
     },
     
+
+    // API-metoder for discovery og pairing
+    async loadDiscoveredPoles() {
+      try {
+        const response = await fetch(`http://${this.serverAddress}/api/v1/poles/discovered`);
+        const data = await response.json();
+        
+        if (data.status === 'success') {
+          this.discoveredPolesInternal = data.poles || [];
+          this.discoveryActive = data.discovery_active || false;
+          console.log('Lastet discovered poles:', this.discoveredPolesInternal.length);
+        }
+      } catch (error) {
+        console.error('Feil ved lasting av discovered poles:', error);
+        this.showToast('error', 'Kunne ikke laste oppdagede målestolper');
+      }
+    },
+    
+    async loadPairedPoles() {
+      try {
+        const response = await fetch(`http://${this.serverAddress}/api/v1/poles/paired`);
+        const data = await response.json();
+        
+        if (data.status === 'success') {
+          this.pairedPolesInternal = data.poles || [];
+          console.log('Lastet paired poles:', this.pairedPolesInternal.length);
+        }
+      } catch (error) {
+        console.error('Feil ved lasting av paired poles:', error);
+        this.showToast('error', 'Kunne ikke laste tilknyttede målestolper');
+      }
+    },
+    
+    async loadSystemInfo() {
+      try {
+        const response = await fetch(`http://${this.serverAddress}/api/v1/system/id`);
+        const data = await response.json();
+        
+        if (data.status === 'success') {
+          this.systemId = data.system_id || '';
+          console.log('System ID:', this.systemId);
+        }
+      } catch (error) {
+        console.error('Feil ved lasting av system-info:', error);
+      }
+    },
+
+
+// Pairing og administrasjon
+async assignPole(pole) {
+      try {
+        this.showToast('info', `Tilknytter ${pole.device_name}...`);
+        
+        const response = await fetch(`http://${this.serverAddress}/api/v1/poles/assign`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            mac: this.formatMac(pole.mac)
+          })
+        });
+        
+        const data = await response.json();
+        
+        if (data.status === 'success') {
+          this.showToast('success', `${pole.device_name} tilknyttet systemet`);
+          
+          // Oppdater lister
+          await this.loadDiscoveredPoles();
+          await this.loadPairedPoles();
+        } else {
+          this.showToast('error', `Kunne ikke tilknytte målestolpe: ${data.message || 'Ukjent feil'}`);
+        }
+      } catch (error) {
+        console.error('Feil ved tilknytning av målestolpe:', error);
+        this.showToast('error', 'Feil ved kommunikasjon med serveren');
+      }
+    },
+    
+    async unpairPole(pole) {
+      if (!confirm(`Er du sikker på at du vil fjerne "${pole.name}" fra systemet?`)) {
+        return;
+      }
+      
+      try {
+        this.showToast('info', `Fjerner ${pole.name}...`);
+        
+        const response = await fetch(`http://${this.serverAddress}/api/v1/poles/unpair`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            mac: this.formatMac(pole.mac)
+          })
+        });
+        
+        const data = await response.json();
+        
+        if (data.status === 'success') {
+          this.showToast('success', `${pole.name} fjernet fra systemet`);
+          await this.loadPairedPoles();
+        } else {
+          this.showToast('error', `Kunne ikke fjerne målestolpe: ${data.message || 'Ukjent feil'}`);
+        }
+      } catch (error) {
+        console.error('Feil ved fjerning av målestolpe:', error);
+        this.showToast('error', 'Feil ved kommunikasjon med serveren');
+      }
+    },
+
+
+
+
+
+
     // Restart Modal
     openRestartModal(pole) {
       this.selectedPole = pole;
@@ -886,14 +971,34 @@ export default {
     dismissToast(index) {
       this.toasts.splice(index, 1);
     },
+    
     mounted() {
-      // Initialiser strømstatus for alle målestolper
+      console.log('DevicesView mounted');
+      
+      // Last inn initial data
+      this.loadSystemInfo();
+      this.loadDiscoveredPoles();
+      this.loadPairedPoles();
+      
+      // Initialiser strømstatus for alle målestolper (eksisterende kode)
       this.poles.forEach(pole => {
         if (!(pole.mac in this.powerStatus)) {
           this.powerStatus[pole.mac] = true; // Anta at alle er på ved oppstart
         }
       });
+      
+      // Sett opp periodisk oppdatering av discovered poles
+      this.discoveryInterval = setInterval(() => {
+        if (this.discoveryActive) {
+          this.loadDiscoveredPoles();
+        }
+      }, 5000); // Oppdater hvert 5. sekund
     },
+
+
+
+
+
     watch: {
       poles: {
         handler(newPoles) {
@@ -907,6 +1012,12 @@ export default {
         deep: true,
         immediate: true
       }
+    }
+  },
+  // Lifecycle hooks
+  beforeDestroy() {
+    if (this.discoveryInterval) {
+      clearInterval(this.discoveryInterval);
     }
   }
 };
@@ -1671,6 +1782,196 @@ h2, h3 {
   background-color: #b71c1c;
 }
 
+
+
+/* Nye stiler for discovery og pairing */
+.system-info-panel {
+  background-color: #e3f2fd;
+  border-radius: 8px;
+  padding: 16px;
+  margin-bottom: 24px;
+  border-left: 4px solid #2196f3;
+}
+
+.system-info-content {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+
+.system-id-display, .discovery-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.system-label, .discovery-label {
+  font-weight: bold;
+  color: #1976d2;
+}
+
+.system-id-value {
+  font-family: monospace;
+  background-color: white;
+  padding: 4px 8px;
+  border-radius: 4px;
+  border: 1px solid #bbdefb;
+}
+
+.discovery-indicator {
+  padding: 4px 8px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: bold;
+}
+
+.discovery-indicator.active {
+  background-color: #e8f5e9;
+  color: #2e7d32;
+}
+
+.discovery-indicator:not(.active) {
+  background-color: #ffebee;
+  color: #c62828;
+}
+
+/* Poles grid layout */
+.poles-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
+  gap: 20px;
+  margin-bottom: 24px;
+}
+
+/* Unassigned poles styling */
+.unassigned-poles {
+  margin-bottom: 32px;
+}
+
+.unassigned-poles h2 {
+  color: #f57c00;
+  margin-bottom: 16px;
+  font-size: 20px;
+}
+
+.pole-card.unassigned {
+  border-left: 4px solid #ff9800;
+  background-color: #fff8e1;
+}
+
+.pole-card.unassigned .pole-status.new {
+  background-color: #ffecb3;
+  color: #f57c00;
+}
+
+/* Paired poles styling */
+.paired-poles h2 {
+  color: #388e3c;
+  margin-bottom: 16px;
+  font-size: 20px;
+}
+
+.pole-card.paired {
+  border-left: 4px solid #4caf50;
+  background-color: #f1f8e9;
+}
+
+/* Actions for unassigned poles */
+.pole-actions-unassigned {
+  display: flex;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.action-button.assign {
+  background-color: #4caf50;
+  color: white;
+  flex: 1;
+}
+
+.action-button.assign:hover {
+  background-color: #45a049;
+}
+
+.action-button.unpair {
+  background-color: #f44336;
+  color: white;
+}
+
+.action-button.unpair:hover {
+  background-color: #da190b;
+}
+
+/* Instructions styling */
+.instructions {
+  background-color: #e8f5e9;
+  border-radius: 8px;
+  padding: 16px;
+  margin-top: 16px;
+  border-left: 4px solid #4caf50;
+}
+
+.instructions-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  color: #2e7d32;
+  font-weight: bold;
+}
+
+.instructions ol {
+  margin: 0;
+  padding-left: 20px;
+  color: #2e7d32;
+}
+
+.instructions li {
+  margin-bottom: 4px;
+}
+
+/* Enhanced empty state */
+.empty-state {
+  text-align: center;
+  padding: 48px 24px;
+}
+
+.empty-state .empty-icon {
+  font-size: 64px;
+  margin-bottom: 16px;
+}
+
+.empty-state h3 {
+  color: #666;
+  margin-bottom: 8px;
+}
+
+.empty-state p {
+  color: #888;
+  margin-bottom: 24px;
+  max-width: 400px;
+  margin-left: auto;
+  margin-right: auto;
+  line-height: 1.5;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+  .poles-grid {
+    grid-template-columns: 1fr;
+  }
+  
+  .system-info-content {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  
+  .pole-actions-unassigned {
+    flex-direction: column;
+  }
+}
 
 
 
