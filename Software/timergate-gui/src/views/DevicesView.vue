@@ -208,6 +208,7 @@ export default {
     }
   },
   data() {
+    console.log('DevicesView data() kjører');
     return {
       discoveredPolesInternal: [],
       pairedPolesInternal: [],
@@ -258,6 +259,7 @@ export default {
 
   // Kombinerte tilkoblede enheter (både paired og gamle poles)
   connectedPoles() {
+    console.log('connectedPoles kjører, pairedPolesInternal:', this.pairedPolesInternal);
       // Kombiner paired poles med eksisterende poles for bakoverkompatibilitet
       const combined = [...(this.pairedPolesInternal || [])];
       
@@ -280,6 +282,7 @@ export default {
     
     // Nye computed properties for discovery
     discoveredPolesFiltered() {
+      console.log('discoveredPolesFiltered kjører, discoveredPolesInternal:', this.discoveredPolesInternal);
       if (!Array.isArray(this.discoveredPolesInternal)) {
          return [];
       }
@@ -1020,6 +1023,17 @@ async assignPole(pole) {
     },
     
     mounted() {
+      console.log('DevicesView mounted');
+      console.log('discoveredPoles prop:', this.discoveredPoles);
+      console.log('pairedPoles prop:', this.pairedPoles);
+      console.log('discoveredPolesInternal:', this.discoveredPolesInternal);
+      console.log('pairedPolesInternal:', this.pairedPolesInternal);
+
+
+
+
+
+
       console.log('DevicesView mounted');
       
       // Last inn initial data
