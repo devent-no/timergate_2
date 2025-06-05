@@ -185,14 +185,100 @@
           <h3>Ingen målestolper funnet</h3>
           <p v-if="!discoveryActive">Discovery er ikke aktiv. Systemet leter ikke etter nye målestolper.</p>
           <p v-else>Systemet leter etter målestolper. Sørg for at målestolpene er påslått og innenfor rekkevidde.</p>
-          <button @click="loadDiscoveredPoles" class="scan-button">
-            <span class="icon">🔄</span>
-            Søk igjen
+        </div>
+      </div>
+    </div>
+
+    <!-- Restart Modal -->
+    <div v-if="showRestartModal" class="modal-overlay" @click="cancelRestart">
+      <div class="modal-content" @click.stop>
+        <div class="modal-header">
+          <h2>Restart {{ selectedPole?.name }}</h2>
+          <button @click="cancelRestart" class="close-button">×</button>
+        </div>
+        <div class="modal-body">
+          <div class="restart-options">
+            <div class="restart-option">
+              <input type="radio" id="restart1" value="1" v-model="restartType">
+              <label for="restart1">
+                <strong>Soft Restart</strong>
+                <p>Vanlig restart - bevarer alle innstillinger</p>
+              </label>
+            </div>
+            <div class="restart-option">
+              <input type="radio" id="restart2" value="2" v-model="restartType">
+              <label for="restart2">
+                <strong>Hard Restart</strong>
+                <p>Tvungen restart - nullstiller midlertidige data</p>
+              </label>
+            </div>
+            <div class="restart-option">
+              <input type="radio" id="restart3" value="3" v-model="restartType">
+              <label for="restart3">
+                <strong>Factory Reset</strong>
+                <p>Sletter systemtilknytning - krever ny pairing</p>
+              </label>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button @click="cancelRestart" class="cancel-button">Avbryt</button>
+          <button @click="confirmRestart" :disabled="isRestarting" class="confirm-button restart">
+            {{ isRestarting ? 'Restarter...' : 'Restart' }}
           </button>
         </div>
       </div>
     </div>
+
+    <!-- Power Modal -->
+    <div v-if="showPowerModal" class="modal-overlay" @click="cancelPowerOff">
+      <div class="modal-content" @click.stop>
+        <div class="modal-header">
+          <h2>Slå av {{ selectedPole?.name }}</h2>
+          <button @click="cancelPowerOff" class="close-button">×</button>
+        </div>
+        <div class="modal-body">
+          <p>Er du sikker på at du vil slå av denne enheten?</p>
+          <div class="power-off-info">
+            <h4>Viktig informasjon:</h4>
+            <ul>
+              <li>Enheten går i deep sleep-modus</li>
+              <li>All kommunikasjon stoppes</li>
+              <li>Enheten må startes manuelt med reset-knappen</li>
+            </ul>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button @click="cancelPowerOff" class="cancel-button">Avbryt</button>
+          <button @click="confirmPowerOff" :disabled="isPoweringOff" class="confirm-button power-off">
+            {{ isPoweringOff ? 'Slår av...' : 'Slå av' }}
+          </button>
+        </div>
+      </div>
     </div>
+
+    <!-- Rename Modal -->
+    <div v-if="showRenameModal" class="modal-overlay" @click="cancelRename">
+      <div class="modal-content" @click.stop>
+        <div class="modal-header">
+          <h2>Endre navn</h2>
+          <button @click="cancelRename" class="close-button">×</button>
+        </div>
+        <div class="modal-body">
+          <div class="form-group">
+            <label for="device-name">Nytt navn:</label>
+            <input type="text" id="device-name" v-model="newDeviceName" class="text-input" placeholder="Skriv inn nytt navn">
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button @click="cancelRename" class="cancel-button">Avbryt</button>
+          <button @click="confirmRename" class="confirm-button">Lagre</button>
+        </div>
+      </div>
+    </div>
+
+  
+  </div>
 </template>
 
 <script>
@@ -266,6 +352,8 @@ export default {
       isCalibratingMap: {},
       isDiagnosticsRunning: false,
 
+      currentRoute: this.$route?.path || ''      
+
     };
   },
 
@@ -318,6 +406,13 @@ export default {
 
 
   methods: {
+
+
+    activated() {
+      console.log('DevicesView aktivert - laster data automatisk');
+      this.refreshAllData();
+    },
+
 
     async refreshAllData() {
       console.log('🔄 Refreshing all device data...');
@@ -1098,17 +1193,10 @@ async assignPole(pole) {
       console.log('discoveredPolesInternal:', this.discoveredPolesInternal);
       console.log('pairedPolesInternal:', this.pairedPolesInternal);
 
-
-
-
-
-
       console.log('DevicesView mounted');
       
       // Last inn initial data
-      this.loadSystemInfo();
-      this.loadDiscoveredPoles();
-      this.loadPairedPoles();
+      this.refreshAllData();  
       
       // Initialiser strømstatus for alle målestolper (eksisterende kode)
       this.poles.forEach(pole => {
@@ -1141,6 +1229,15 @@ async assignPole(pole) {
         },
         deep: true,
         immediate: true
+      },
+      '$route'(newRoute, oldRoute) {
+        console.log('Route endret fra:', oldRoute?.path, 'til:', newRoute.path);
+        if (newRoute.path === '/devices' || newRoute.name === 'devices' || this.currentView === 'devices') {
+          console.log('Navigert til enheter-siden - refresher data automatisk');
+          this.$nextTick(() => {
+            this.refreshAllData();
+          });
+        }
       }
     }
   },
