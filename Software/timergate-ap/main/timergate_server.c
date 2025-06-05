@@ -3597,9 +3597,9 @@ bool process_break_for_passage_detection(const uint8_t *mac_addr, int32_t sensor
                 passage_detectors[detector_idx].unique_sensors_count);
             
             // Lagre denne passeringens tidspunkt for debouncing - bruk målestolpe-tid
-            passage_detectors[detector_idx].last_passage_time = passage_detectors[detector_idx].first_break_time;
-            passage_detectors[detector_idx].last_passage_micros = passage_detectors[detector_idx].first_break_micros;
-            
+            passage_detectors[detector_idx].last_passage_time = sensor_time_sec;
+            passage_detectors[detector_idx].last_passage_micros = sensor_time_micros;
+                
             // Tilbakestill tellere for neste sekvens
             for (int i = 0; i < MAX_SENSORS_PER_POLE; i++) {
                 passage_detectors[detector_idx].sensor_triggered[i] = false;
@@ -3925,121 +3925,95 @@ void clean_old_passages(void *pvParameters) {
 
 
 // ESP-NOW mottaker callback
+// ESP-NOW mottaker callback - KOMPLETT FIKSET VERSJON
 void esp_now_recv_cb(const esp_now_recv_info_t *recv_info, const uint8_t *data, int len) {
+    // Hent MAC-adressen fra recv_info
+    const uint8_t *mac_addr = recv_info->src_addr;
+    
+    ESP_LOGI(TAG, "ESP-NOW data mottatt fra %02x:%02x:%02x:%02x:%02x:%02x, len=%d", 
+             mac_addr[0], mac_addr[1], mac_addr[2], mac_addr[3], mac_addr[4], mac_addr[5], len);
+    
+    // DEBUG: Vis første 10 bytes av meldingen
+    ESP_LOGI(TAG, "DEBUG: Data bytes: [%02x %02x %02x %02x %02x %02x %02x %02x %02x %02x]",
+             data[0], data[1], data[2], data[3], data[4], 
+             data[5], data[6], data[7], data[8], data[9]);
+    
+    // DEBUG: Sjekk første byte (K-verdi)
+    ESP_LOGI(TAG, "DEBUG: K-verdi = %d (0x%02x)", data[0], data[0]);
 
-   // Sjekk om meldingen har riktig format med System ID
-   if (len < sizeof(timergate_msg_t)) {
-       ESP_LOGD(TAG, "ESP-NOW melding for kort (%d bytes), antar gammel format", len);
-       // Fall tilbake til gammel behandling for bakoverkompatibilitet
-   } else {
-       // Sjekk om dette er en ny timergate_msg_t med System ID
-       timergate_msg_t *msg = (timergate_msg_t *)data;
-       if (!is_message_for_us(msg)) {
-           ESP_LOGD(TAG, "ESP-NOW melding ikke for vårt system (ID: %08X vs vårt: %08X)", 
-                   msg->system_id, current_system_id);
-           return; // Ignorer meldinger fra andre systemer
-       }
-       ESP_LOGI(TAG, "ESP-NOW melding bekreftet for vårt system (ID: %08X)", msg->system_id);
-   }
-
-
-
-
-
-   // Hent MAC-adressen fra recv_info
-   const uint8_t *mac_addr = recv_info->src_addr;
-   
-   ESP_LOGI(TAG, "ESP-NOW data mottatt fra %02x:%02x:%02x:%02x:%02x:%02x, len=%d", 
-            mac_addr[0], mac_addr[1], mac_addr[2], mac_addr[3], mac_addr[4], mac_addr[5], len);
-   
-   // Sjekk at lengden er riktig for vår struktur
-   if (len < 10) {
-       ESP_LOGE(TAG, "Mottok data med feil lengde: %d (forventet minst 10 bytes)", len);
-       return;
-   }
-   
-
-
-
-    // Sjekk om dette er en ny discovery-melding (med system_id)
-   if (len >= sizeof(pole_announce_t)) {
-       pole_announce_t *announce = (pole_announce_t*)data;
-       
-       // Sjekk om dette er en pole announce-melding
-       if (announce->msg_type == MSG_POLE_ANNOUNCE && announce->system_id == 0x00000000) {
-           ESP_LOGI(TAG, "📢 Mottok pole announce via ESP-NOW");
-           
-           // Estimer RSSI fra ESP-NOW info (hvis tilgjengelig)
-           int8_t rssi = recv_info->rx_ctrl ? recv_info->rx_ctrl->rssi : -70;
-           
-           handle_pole_announce(announce, rssi);
-           return;  // Ikke behandle som vanlig sensordata
-       }
-       
-       // Sjekk om dette er en melding for vårt system
-       uint32_t msg_system_id;
-       memcpy(&msg_system_id, data, sizeof(uint32_t));
-       
-       if (msg_system_id != current_system_id && msg_system_id != 0x00000000) {
-           // Dette er ikke for vårt system, ignorer
-           ESP_LOGD(TAG, "Ignorerer melding for annet system: %08X (vårt: %08X)", 
-                   msg_system_id, current_system_id);
-           return;
-       }
-       
-       // Hvis meldingen har system_id, hopp over de første 4 bytene
-       if (msg_system_id == current_system_id) {
-           data += sizeof(uint32_t);
-           len -= sizeof(uint32_t);
-           ESP_LOGI(TAG, "Behandler melding for vårt system: %08X", current_system_id);
-       }
-   }
-
-
-
-
-
-
-
-
-   // Logg raw data for debugging
-   ESP_LOGI(TAG, "Data header: k=%d, t=%02x%02x%02x%02x, u=%02x%02x%02x%02x", 
-            data[0], 
-            data[1], data[2], data[3], data[4],
-            data[5], data[6], data[7], data[8]);
-   
-   xSemaphoreTake(pole_data_mutex, portMAX_DELAY);
-   
-   // Finn pole i vår liste eller legg til en ny
-   int pole_idx = -1;
-   for (int i = 0; i < pole_count; i++) {
-       if (memcmp(pole_data[i].mac, mac_addr, ESP_NOW_ETH_ALEN) == 0) {
-           pole_idx = i;
-           break;
-       }
-   }
-   
-   if (pole_idx < 0 && pole_count < MAX_POLES) {
-       pole_idx = pole_count++;
-       memcpy(pole_data[pole_idx].mac, mac_addr, ESP_NOW_ETH_ALEN);
-       ESP_LOGI(TAG, "Ny målestolpe lagt til, indeks=%d, totalt: %d", pole_idx, pole_count);
-   } else if (pole_idx < 0) {
-       ESP_LOGW(TAG, "Maks antall målestolper nådd (%d), ignorerer ny tilkobling", MAX_POLES);
-       xSemaphoreGive(pole_data_mutex);
-       return;
-   }
-   
-   // Parse data
-   uint8_t k = data[0];
-   pole_data[pole_idx].k = k;
-   
-   // Les timestamp
-   memcpy(&pole_data[pole_idx].t, &data[1], sizeof(uint32_t));
-   memcpy(&pole_data[pole_idx].u, &data[5], sizeof(uint32_t));
-   
-   ESP_LOGI(TAG, "Mottok data type %d fra målestolpe %d, timestamp=%u.%06u", 
-           k, pole_idx, pole_data[pole_idx].t, pole_data[pole_idx].u);
-
+    
+    // Sjekk at lengden er riktig for vår struktur
+    if (len < 10) {
+        ESP_LOGE(TAG, "Mottok data med feil lengde: %d (forventet minst 10 bytes)", len);
+        return;
+    }
+    
+    // FIKSET: Sjekk om dette er en pole announce-melding FØRST
+    if (len >= sizeof(pole_announce_t)) {
+        pole_announce_t *announce = (pole_announce_t*)data;
+        
+        // Sjekk om dette er en pole announce-melding for discovery
+        if (announce->msg_type == MSG_POLE_ANNOUNCE && announce->system_id == 0x00000000) {
+            ESP_LOGI(TAG, "📢 Mottok pole announce via ESP-NOW");
+            
+            // Estimer RSSI fra ESP-NOW info (hvis tilgjengelig)
+            int8_t rssi = recv_info->rx_ctrl ? recv_info->rx_ctrl->rssi : -70;
+            
+            handle_pole_announce(announce, rssi);
+            return;  // VIKTIG: Return tidlig kun for announce-meldinger
+        }
+    }
+    
+    // FIKSET: Hopp over System ID-sjekk for korte meldinger (legacy format)
+    if (len <= 20) {
+        ESP_LOGI(TAG, "DEBUG: Kort melding (len=%d) - bruker legacy format", len);
+        // Hopp direkte til legacy parsing
+    } else {
+        // System ID-sjekk kun for lange meldinger
+        if (len >= sizeof(timergate_msg_t)) {
+            timergate_msg_t *msg = (timergate_msg_t *)data;
+            if (!is_message_for_us(msg)) {
+                ESP_LOGD(TAG, "ESP-NOW melding ikke for vårt system");
+                return;
+            }
+            // Hopp over System ID header
+            data += sizeof(uint32_t);
+            len -= sizeof(uint32_t);
+        }
+    }
+    
+    // NORMAL SENSORDATA-PROSESSERING (for alle K=0,1,2,3,4 meldinger)
+    xSemaphoreTake(pole_data_mutex, portMAX_DELAY);
+    
+    // Finn pole i vår liste eller legg til en ny
+    int pole_idx = -1;
+    for (int i = 0; i < pole_count; i++) {
+        if (memcmp(pole_data[i].mac, mac_addr, ESP_NOW_ETH_ALEN) == 0) {
+            pole_idx = i;
+            break;
+        }
+    }
+    
+    if (pole_idx < 0 && pole_count < MAX_POLES) {
+        pole_idx = pole_count++;
+        memcpy(pole_data[pole_idx].mac, mac_addr, ESP_NOW_ETH_ALEN);
+        ESP_LOGI(TAG, "Ny målestolpe lagt til, indeks=%d, totalt: %d", pole_idx, pole_count);
+    } else if (pole_idx < 0) {
+        ESP_LOGW(TAG, "Maks antall målestolper nådd (%d), ignorerer ny tilkobling", MAX_POLES);
+        xSemaphoreGive(pole_data_mutex);
+        return;
+    }
+    
+    // Parse data
+    uint8_t k = data[0];
+    pole_data[pole_idx].k = k;
+    
+    // Les timestamp
+    memcpy(&pole_data[pole_idx].t, &data[1], sizeof(uint32_t));
+    memcpy(&pole_data[pole_idx].u, &data[5], sizeof(uint32_t));
+    
+    ESP_LOGI(TAG, "Mottok data type %d fra målestolpe %d, timestamp=%u.%06u", 
+            k, pole_idx, pole_data[pole_idx].t, pole_data[pole_idx].u);
 
     // Oppdater last_seen for paired pole hvis den finnes
     xSemaphoreTake(paired_poles_mutex, portMAX_DELAY);
@@ -4050,129 +4024,121 @@ void esp_now_recv_cb(const esp_now_recv_info_t *recv_info, const uint8_t *data, 
         }
     }
     xSemaphoreGive(paired_poles_mutex);
+    
+    // Les ADC verdier eller andre data basert på type melding
+    if (k == 0 && len >= 9 + sizeof(int32_t) * 14) {  // ADC verdier
+        memcpy(pole_data[pole_idx].v, &data[9], sizeof(int32_t) * 7);
+        memcpy(pole_data[pole_idx].b, &data[9 + sizeof(int32_t) * 7], sizeof(int32_t) * 7);
+        
+        ESP_LOGI(TAG, "ADC verdier: [%" PRId32 ", %" PRId32 ", %" PRId32 ", %" PRId32 ", %" PRId32 ", %" PRId32 ", %" PRId32 "]", 
+                pole_data[pole_idx].v[0], pole_data[pole_idx].v[1], pole_data[pole_idx].v[2],
+                pole_data[pole_idx].v[3], pole_data[pole_idx].v[4], pole_data[pole_idx].v[5],
+                pole_data[pole_idx].v[6]);
 
+        // Konverter mottatte ESP-NOW data til JSON og send via WebSocket
+        char mac_str[18];
+        sprintf(mac_str, "%02x:%02x:%02x:%02x:%02x:%02x", 
+                mac_addr[0], mac_addr[1], mac_addr[2],
+                mac_addr[3], mac_addr[4], mac_addr[5]);
+        
+        char ws_msg[512];
+        sprintf(ws_msg, 
+                "{\"M\":\"%s\",\"K\":0,\"T\":%" PRIu32 ",\"U\":%" PRIu32 ",\"V\":[%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 "],\"B\":[%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 "]}",
+                mac_str, pole_data[pole_idx].t, pole_data[pole_idx].u,
+                pole_data[pole_idx].v[0], pole_data[pole_idx].v[1], pole_data[pole_idx].v[2], 
+                pole_data[pole_idx].v[3], pole_data[pole_idx].v[4], pole_data[pole_idx].v[5], pole_data[pole_idx].v[6],
+                pole_data[pole_idx].b[0], pole_data[pole_idx].b[1], pole_data[pole_idx].b[2], 
+                pole_data[pole_idx].b[3], pole_data[pole_idx].b[4], pole_data[pole_idx].b[5], pole_data[pole_idx].b[6]);
+        
+        // Send til alle WebSocket klienter
+        httpd_ws_frame_t ws_pkt = {
+            .final = true,
+            .fragmented = false,
+            .type = HTTPD_WS_TYPE_TEXT,
+            .payload = (uint8_t *)ws_msg,
+            .len = strlen(ws_msg)
+        };
 
-   
-   // Les ADC verdier eller andre data basert på type melding
-   if (k == 0 && len >= 9 + sizeof(int32_t) * 14) {  // ADC verdier
-       memcpy(pole_data[pole_idx].v, &data[9], sizeof(int32_t) * 7);
-       memcpy(pole_data[pole_idx].b, &data[9 + sizeof(int32_t) * 7], sizeof(int32_t) * 7);
-       
-       ESP_LOGI(TAG, "ADC verdier: [%" PRId32 ", %" PRId32 ", %" PRId32 ", %" PRId32 ", %" PRId32 ", %" PRId32 ", %" PRId32 "]", 
-               pole_data[pole_idx].v[0], pole_data[pole_idx].v[1], pole_data[pole_idx].v[2],
-               pole_data[pole_idx].v[3], pole_data[pole_idx].v[4], pole_data[pole_idx].v[5],
-               pole_data[pole_idx].v[6]);
-       ESP_LOGI(TAG, "Broken status: [%" PRId32 ", %" PRId32 ", %" PRId32 ", %" PRId32 ", %" PRId32 ", %" PRId32 ", %" PRId32 "]", 
-               pole_data[pole_idx].b[0], pole_data[pole_idx].b[1], pole_data[pole_idx].b[2],
-               pole_data[pole_idx].b[3], pole_data[pole_idx].b[4], pole_data[pole_idx].b[5],
-               pole_data[pole_idx].b[6]);
+        xSemaphoreTake(ws_mutex, portMAX_DELAY);
+        for (int i = 0; i < MAX_WS_CLIENTS; ++i) {
+            if (ws_clients[i] != 0) {
+                httpd_ws_send_frame_async(server, ws_clients[i], &ws_pkt);
+            }
+        }
+        xSemaphoreGive(ws_mutex);
+        
+    } else if (k == 1) {  // Break event - KRITISK FOR TIMER-FUNKSJONALITET
+        // Antar at en enkelt break-verdi fins i data[9]
+        int32_t break_value;
+        memcpy(&break_value, &data[9], sizeof(int32_t));
+        int32_t sensor_id = break_value; // Eller hvordan sensor_id faktisk bestemmes
+        
+        ESP_LOGI(TAG, "🚨 SENSORBRUDD MOTTATT: K=1, sensor_id=%d, break_value=%" PRId32, sensor_id, break_value);
 
-       // Konverter mottatte ESP-NOW data til JSON og send via WebSocket
-       char mac_str[18];
-       sprintf(mac_str, "%02x:%02x:%02x:%02x:%02x:%02x", 
-               mac_addr[0], mac_addr[1], mac_addr[2],
-               mac_addr[3], mac_addr[4], mac_addr[5]);
-       
-       char ws_msg[512];
-       sprintf(ws_msg, 
-               "{\"M\":\"%s\",\"K\":0,\"T\":%" PRIu32 ",\"U\":%" PRIu32 ",\"V\":[%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 "],\"B\":[%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 "]}",
-               mac_str, pole_data[pole_idx].t, pole_data[pole_idx].u,
-               pole_data[pole_idx].v[0], pole_data[pole_idx].v[1], pole_data[pole_idx].v[2], 
-               pole_data[pole_idx].v[3], pole_data[pole_idx].v[4], pole_data[pole_idx].v[5], pole_data[pole_idx].v[6],
-               pole_data[pole_idx].b[0], pole_data[pole_idx].b[1], pole_data[pole_idx].b[2], 
-               pole_data[pole_idx].b[3], pole_data[pole_idx].b[4], pole_data[pole_idx].b[5], pole_data[pole_idx].b[6]);
-       
-       // Send til alle WebSocket klienter
-       httpd_ws_frame_t ws_pkt = {
-           .final = true,
-           .fragmented = false,
-           .type = HTTPD_WS_TYPE_TEXT,
-           .payload = (uint8_t *)ws_msg,
-           .len = strlen(ws_msg)
-       };
-
-       xSemaphoreTake(ws_mutex, portMAX_DELAY);
-       for (int i = 0; i < MAX_WS_CLIENTS; ++i) {
-           if (ws_clients[i] != 0) {
-               httpd_ws_send_frame_async(server, ws_clients[i], &ws_pkt);
-           }
-       }
-       xSemaphoreGive(ws_mutex);
-   } else if (k == 1) {  // Break event
-       // Antar at en enkelt break-verdi fins i data[9]
-       int32_t break_value;
-       memcpy(&break_value, &data[9], sizeof(int32_t));
-       int32_t sensor_id = break_value; // Eller hvordan sensor_id faktisk bestemmes
-       
-       ESP_LOGI(TAG, "Break event mottatt: verdi=%" PRId32, break_value);
-
-       // Send alltid rådata (ufiltrert)
-       send_break_to_websocket(mac_addr, pole_data[pole_idx].t, pole_data[pole_idx].u, break_value, false);
-       
-
-       // Behandle brudd for passeringsdeteksjon
-       //process_break_for_passage_detection(mac_addr, sensor_id, pole_data[pole_idx].t, pole_data[pole_idx].u);
-       // Få server-tid ved mottak
+        // Send alltid rådata (ufiltrert) til WebSocket
+        send_break_to_websocket(mac_addr, pole_data[pole_idx].t, pole_data[pole_idx].u, break_value, false);
+        
+        // KRITISK: Behandle brudd for passeringsdeteksjon
         struct timeval server_time;
         gettimeofday(&server_time, NULL);
 
-        // Behandle brudd for passeringsdeteksjon med både målestolpe-tid og server-tid
-        process_break_for_passage_detection(mac_addr, sensor_id, 
+        ESP_LOGI(TAG, "🎯 Kaller process_break_for_passage_detection for timer-funksjonalitet...");
+        bool passage_detected = process_break_for_passage_detection(mac_addr, sensor_id, 
                                         pole_data[pole_idx].t, pole_data[pole_idx].u,     // Målestolpe-tid
                                         server_time.tv_sec, server_time.tv_usec);         // Server-tid
 
+        if (passage_detected) {
+            ESP_LOGI(TAG, "✅ PASSERING DETEKTERT - Timer skal starte!");
+        } else {
+            ESP_LOGI(TAG, "⏳ Venter på flere sensorer for passering (behøver %d sensorer totalt)...", min_sensors_for_passage);
+        }
 
-   } else if (k == 2 && len >= 9 + sizeof(int32_t) * 21) {  // Settings
-       memcpy(pole_data[pole_idx].e, &data[9], sizeof(int32_t) * 7);
-       memcpy(pole_data[pole_idx].o, &data[9 + sizeof(int32_t) * 7], sizeof(int32_t) * 7);
-       memcpy(pole_data[pole_idx].b, &data[9 + sizeof(int32_t) * 14], sizeof(int32_t) * 7);
-       
-       ESP_LOGI(TAG, "Settings mottatt for målestolpe %d:", pole_idx);
-       ESP_LOGI(TAG, "  Enabled: [%" PRId32 ", %" PRId32 ", %" PRId32 ", %" PRId32 ", %" PRId32 ", %" PRId32 ", %" PRId32 "]", 
-               pole_data[pole_idx].e[0], pole_data[pole_idx].e[1], pole_data[pole_idx].e[2],
-               pole_data[pole_idx].e[3], pole_data[pole_idx].e[4], pole_data[pole_idx].e[5],
-               pole_data[pole_idx].e[6]);
+    } else if (k == 2 && len >= 9 + sizeof(int32_t) * 21) {  // Settings
+        memcpy(pole_data[pole_idx].e, &data[9], sizeof(int32_t) * 7);
+        memcpy(pole_data[pole_idx].o, &data[9 + sizeof(int32_t) * 7], sizeof(int32_t) * 7);
+        memcpy(pole_data[pole_idx].b, &data[9 + sizeof(int32_t) * 14], sizeof(int32_t) * 7);
+        
+        ESP_LOGI(TAG, "Settings mottatt for målestolpe %d:", pole_idx);
 
-       // Send settings som JSON til WebSocket
-       char mac_str[18];
-       sprintf(mac_str, "%02x:%02x:%02x:%02x:%02x:%02x", 
-               mac_addr[0], mac_addr[1], mac_addr[2],
-               mac_addr[3], mac_addr[4], mac_addr[5]);
-       
-       char ws_msg[512];
-       sprintf(ws_msg, 
-               "{\"M\":\"%s\",\"K\":2,\"E\":[%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 "],\"O\":[%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 "],\"B\":[%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 "]}",
-               mac_str, 
-               pole_data[pole_idx].e[0], pole_data[pole_idx].e[1], pole_data[pole_idx].e[2], 
-               pole_data[pole_idx].e[3], pole_data[pole_idx].e[4], pole_data[pole_idx].e[5], pole_data[pole_idx].e[6],
-               pole_data[pole_idx].o[0], pole_data[pole_idx].o[1], pole_data[pole_idx].o[2], 
-               pole_data[pole_idx].o[3], pole_data[pole_idx].o[4], pole_data[pole_idx].o[5], pole_data[pole_idx].o[6],
-               pole_data[pole_idx].b[0], pole_data[pole_idx].b[1], pole_data[pole_idx].b[2], 
-               pole_data[pole_idx].b[3], pole_data[pole_idx].b[4], pole_data[pole_idx].b[5], pole_data[pole_idx].b[6]);
-       
-       // Send til alle WebSocket klienter
-       httpd_ws_frame_t ws_pkt = {
-           .final = true,
-           .fragmented = false,
-           .type = HTTPD_WS_TYPE_TEXT,
-           .payload = (uint8_t *)ws_msg,
-           .len = strlen(ws_msg)
-       };
+        // Send settings som JSON til WebSocket
+        char mac_str[18];
+        sprintf(mac_str, "%02x:%02x:%02x:%02x:%02x:%02x", 
+                mac_addr[0], mac_addr[1], mac_addr[2],
+                mac_addr[3], mac_addr[4], mac_addr[5]);
+        
+        char ws_msg[512];
+        sprintf(ws_msg, 
+                "{\"M\":\"%s\",\"K\":2,\"E\":[%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 "],\"O\":[%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 "],\"B\":[%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 "]}",
+                mac_str, 
+                pole_data[pole_idx].e[0], pole_data[pole_idx].e[1], pole_data[pole_idx].e[2], 
+                pole_data[pole_idx].e[3], pole_data[pole_idx].e[4], pole_data[pole_idx].e[5], pole_data[pole_idx].e[6],
+                pole_data[pole_idx].o[0], pole_data[pole_idx].o[1], pole_data[pole_idx].o[2], 
+                pole_data[pole_idx].o[3], pole_data[pole_idx].o[4], pole_data[pole_idx].o[5], pole_data[pole_idx].o[6],
+                pole_data[pole_idx].b[0], pole_data[pole_idx].b[1], pole_data[pole_idx].b[2], 
+                pole_data[pole_idx].b[3], pole_data[pole_idx].b[4], pole_data[pole_idx].b[5], pole_data[pole_idx].b[6]);
+        
+        // Send til alle WebSocket klienter
+        httpd_ws_frame_t ws_pkt = {
+            .final = true,
+            .fragmented = false,
+            .type = HTTPD_WS_TYPE_TEXT,
+            .payload = (uint8_t *)ws_msg,
+            .len = strlen(ws_msg)
+        };
 
-       xSemaphoreTake(ws_mutex, portMAX_DELAY);
-       for (int i = 0; i < MAX_WS_CLIENTS; ++i) {
-           if (ws_clients[i] != 0) {
-               httpd_ws_send_frame_async(server, ws_clients[i], &ws_pkt);
-           }
-       }
-       xSemaphoreGive(ws_mutex);
-   } else {
-       ESP_LOGW(TAG, "Ukjent melding eller ugyldig lengde: k=%d, len=%d", k, len);
-   }
-   
-   xSemaphoreGive(pole_data_mutex);
+        xSemaphoreTake(ws_mutex, portMAX_DELAY);
+        for (int i = 0; i < MAX_WS_CLIENTS; ++i) {
+            if (ws_clients[i] != 0) {
+                httpd_ws_send_frame_async(server, ws_clients[i], &ws_pkt);
+            }
+        }
+        xSemaphoreGive(ws_mutex);
+    } else {
+        ESP_LOGW(TAG, "Ukjent melding eller ugyldig lengde: k=%d, len=%d", k, len);
+    }
+    
+    xSemaphoreGive(pole_data_mutex);
 }
-
 
 
 

@@ -33,7 +33,7 @@
           <div class="status-value">{{ countActiveSensors() }}</div>
           <div class="status-label">Aktive sensorer</div>
         </div>
-        <button @click="loadDiscoveredPoles" class="scan-button" :disabled="isScanning">
+        <button @click="refreshAllData" class="scan-button" :disabled="isScanning">
           <span class="icon">🔍</span>
           {{ isScanning ? 'Søker...' : 'Oppdater liste' }}
         </button>
@@ -142,6 +142,19 @@
               <button @click="identifyPole(pole)" class="action-button identify">
                 <span class="icon">🔍</span>
                 Identifiser
+              </button>
+              <button @click="calibrateSensors(pole)" class="action-button calibrate" 
+                      :disabled="isCalibratingMap[pole.mac]">
+                <span class="icon">⚙️</span>
+                {{ isCalibratingMap[pole.mac] ? 'Kalibrerer...' : 'Kalibrer' }}
+              </button>
+              <button @click="openRestartModal(pole)" class="action-button restart">
+                <span class="icon">🔄</span>
+                Restart
+              </button>
+              <button @click="openPowerModal(pole)" class="action-button power">
+                <span class="icon">⚡</span>
+                {{ isPowerOn(pole) ? 'Slå av' : 'Enheten er av' }}
               </button>
               <button @click="openRenameModal(pole)" class="action-button rename">
                 <span class="icon">✏️</span>
@@ -305,6 +318,16 @@ export default {
 
 
   methods: {
+
+    async refreshAllData() {
+      console.log('🔄 Refreshing all device data...');
+      await this.loadSystemInfo();
+      await this.loadDiscoveredPoles();
+      await this.loadPairedPoles();
+      console.log('✅ All data refreshed');
+    },
+
+
     // Hjelpemetoder for MAC-adresse håndtering
   macAddressesEqual(mac1, mac2) {
     if (!mac1 || !mac2) return false;
