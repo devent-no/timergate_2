@@ -508,20 +508,65 @@ export default {
       }
     },
     
-    async loadPairedPoles() {
-      try {
-        const response = await fetch(`http://${this.serverAddress}/api/v1/poles/paired`);
-        const data = await response.json();
-        
-        if (data.status === 'success') {
-          this.pairedPolesInternal = data.poles || [];
-          console.log('Lastet paired poles:', this.pairedPolesInternal.length);
-        }
-      } catch (error) {
-        console.error('Feil ved lasting av paired poles:', error);
-        this.showToast('error', 'Kunne ikke laste tilknyttede målestolper');
-      }
-    },
+// FIKSET loadPairedPoles() metode i DevicesView.vue
+// Erstatt den eksisterende loadPairedPoles() funksjonen med denne:
+
+async loadPairedPoles() {
+  try {
+    console.log('🔄 Starting loadPairedPoles...');
+    console.log('📍 serverAddress:', this.serverAddress);
+    console.log('📍 Computed apiBaseUrl:', this.apiBaseUrl);
+    
+    // Use the same URL computation as other methods
+    const url = `http://${this.serverAddress}/api/v1/poles/paired`;
+    console.log('📡 Calling URL:', url);
+    
+    const response = await fetch(url);
+    console.log('📡 Response received:', response.status, response.ok);
+    
+    const data = await response.json();
+    console.log('📊 Raw API data:', data);
+    
+    if (data.status === 'success') {
+      console.log('✅ API status success');
+      console.log('📋 data.poles:', data.poles);
+      console.log('📋 data.poles length:', data.poles ? data.poles.length : 'undefined');
+      console.log('📋 data.poles type:', typeof data.poles, Array.isArray(data.poles));
+      
+      // CRITICAL: Log before assignment
+      console.log('🔧 BEFORE assignment:');
+      console.log('  - this.pairedPolesInternal:', this.pairedPolesInternal);
+      console.log('  - this.pairedPolesInternal length:', this.pairedPolesInternal.length);
+      console.log('  - this exists:', !!this);
+      console.log('  - this.pairedPolesInternal exists:', !!this.pairedPolesInternal);
+      
+      // Assignment with extra safety
+      const newPoles = data.poles || [];
+      console.log('🔧 Assigning newPoles:', newPoles);
+      
+      this.pairedPolesInternal = newPoles;
+      
+      // CRITICAL: Verify assignment worked
+      console.log('✅ AFTER assignment:');
+      console.log('  - this.pairedPolesInternal:', this.pairedPolesInternal);
+      console.log('  - this.pairedPolesInternal length:', this.pairedPolesInternal.length);
+      console.log('  - Assignment successful:', this.pairedPolesInternal === newPoles);
+      
+      console.log('💾 Lastet paired poles:', this.pairedPolesInternal.length);
+      
+      // Force Vue reactivity update
+      this.$forceUpdate && this.$forceUpdate();
+      
+    } else {
+      console.error('❌ API status not success:', data.status);
+      this.showToast && this.showToast('error', `API feil: ${data.message || 'Ukjent feil'}`);
+    }
+  } catch (error) {
+    console.error('💥 Feil ved lasting av paired poles:', error);
+    console.error('💥 Error stack:', error.stack);
+    this.showToast && this.showToast('error', 'Kunne ikke laste tilknyttede målestolper');
+  }
+},
     
     async loadSystemInfo() {
       try {
