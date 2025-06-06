@@ -177,7 +177,23 @@ typedef struct {
 
 
 
+// Struktur for å spore kommunikasjonskvalitet per målestolpe
+typedef struct {
+    uint8_t mac[ESP_NOW_ETH_ALEN];
+    int8_t last_rssi;                // Siste RSSI-verdi
+    int8_t avg_rssi;                 // Gjennomsnittlig RSSI (siste 10 målinger)
+    uint32_t packets_received;       // Totalt mottatte pakker
+    uint32_t last_packet_time;       // Tidspunkt for siste pakke
+    int8_t rssi_history[10];         // RSSI-historikk for gjennomsnitt
+    int rssi_history_index;          // Index i RSSI-historikk
+    time_t last_update;              // Siste oppdatering
+} signal_quality_t;
 
+// Array for å holde signalkvalitet per målestolpe
+#define MAX_SIGNAL_TRACKING 10
+static signal_quality_t signal_tracking[MAX_SIGNAL_TRACKING];
+static int signal_tracking_count = 0;
+static SemaphoreHandle_t signal_mutex;
 
 
 
@@ -377,6 +393,13 @@ esp_err_t rename_pole_handler(httpd_req_t *req);
 
 esp_err_t simulate_pole_data_handler(httpd_req_t *req);
 esp_err_t websocket_test_page_handler(httpd_req_t *req);
+
+// Funksjonsdeklarasjoner for signal tracking
+void update_signal_quality(const uint8_t *mac, int8_t rssi);
+int calculate_signal_quality(int8_t rssi, uint32_t packet_loss_percent);
+void init_signal_tracking(void);
+esp_err_t get_signal_quality_handler(httpd_req_t *req);
+
 
 // Nye funksjonsdeklarasjoner for debounce-håndtering
 bool should_ignore_break(const uint8_t *mac, int32_t sensor_id, uint32_t time_sec, uint32_t time_micros);
@@ -1741,6 +1764,88 @@ esp_err_t get_passage_config_handler(httpd_req_t *req) {
     
     return ESP_OK;
 }
+
+
+
+
+
+
+// API handler for signalkvalitet
+esp_err_t get_signal_quality_handler(httpd_req_t *req) {
+    ESP_LOGI(TAG, "get_signal_quality_handler called");
+    
+    // CORS headers
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    
+    if (req->method == HTTP_OPTIONS) {
+        httpd_resp_send(req, NULL, 0);
+        return ESP_OK;
+    }
+    
+    xSemaphoreTake(signal_mutex, portMAX_DELAY);
+
+
+    // Debug logging
+    ESP_LOGI(TAG, "📊 get_signal_quality_handler: signal_tracking_count = %d", signal_tracking_count);
+    for (int i = 0; i < signal_tracking_count; i++) {
+        ESP_LOGI(TAG, "📊 Signal entry %d: MAC=%02x:%02x:%02x:%02x:%02x:%02x, RSSI=%d, packets=%u", 
+                 i, signal_tracking[i].mac[0], signal_tracking[i].mac[1], signal_tracking[i].mac[2],
+                 signal_tracking[i].mac[3], signal_tracking[i].mac[4], signal_tracking[i].mac[5],
+                 signal_tracking[i].last_rssi, signal_tracking[i].packets_received);
+    }
+
+    
+    // Bygg JSON-respons
+    char *response = malloc(2048);
+    if (!response) {
+        xSemaphoreGive(signal_mutex);
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+    
+    int pos = sprintf(response, "{\"status\":\"success\",\"signal_data\":[");
+    
+    for (int i = 0; i < signal_tracking_count; i++) {
+        signal_quality_t *sq = &signal_tracking[i];
+        
+        // Beregn pakketap (forenklet beregning for nå)
+        uint32_t packet_loss_percent = 0; // TODO: Implementer faktisk pakketap-beregning
+        
+        // Beregn overall kvalitet
+        int quality = calculate_signal_quality(sq->avg_rssi, packet_loss_percent);
+        
+        pos += sprintf(response + pos,
+            "%s{\"mac\":\"%02x:%02x:%02x:%02x:%02x:%02x\","
+            "\"rssi\":%d,"
+            "\"avg_rssi\":%d,"
+            "\"quality\":%d,"
+            "\"packets_received\":%" PRIu32 ","
+            "\"packet_loss_percent\":%" PRIu32 ","
+            "\"last_update\":%lld}",
+            (i > 0) ? "," : "",
+            sq->mac[0], sq->mac[1], sq->mac[2], sq->mac[3], sq->mac[4], sq->mac[5],
+            sq->last_rssi,
+            sq->avg_rssi,
+            quality,
+            sq->packets_received,
+            packet_loss_percent,
+            sq->last_update
+        );
+    }
+    
+    pos += sprintf(response + pos, "]}");
+    
+    xSemaphoreGive(signal_mutex);
+    
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, response);
+    
+    free(response);
+    return ESP_OK;
+}
+
+
+
 
 
 
@@ -3360,6 +3465,100 @@ esp_err_t spiffs_get_handler(httpd_req_t *req) {
 
 
 
+
+
+// 
+// 
+//--------------- Del 6.5: Signal Tracking funksjoner ---------------- 
+// 
+//
+
+// Funksjon for å oppdatere signalkvalitet
+void update_signal_quality(const uint8_t *mac, int8_t rssi) {
+    xSemaphoreTake(signal_mutex, portMAX_DELAY);
+    
+    // Finn eksisterende entry eller opprett ny
+    int index = -1;
+    for (int i = 0; i < signal_tracking_count; i++) {
+        if (memcmp(signal_tracking[i].mac, mac, ESP_NOW_ETH_ALEN) == 0) {
+            index = i;
+            break;
+        }
+    }
+    
+    if (index == -1 && signal_tracking_count < MAX_SIGNAL_TRACKING) {
+        index = signal_tracking_count++;
+        memcpy(signal_tracking[index].mac, mac, ESP_NOW_ETH_ALEN);
+        signal_tracking[index].packets_received = 0;
+        signal_tracking[index].rssi_history_index = 0;
+        // Initialiser RSSI-historikk
+        for (int i = 0; i < 10; i++) {
+            signal_tracking[index].rssi_history[i] = rssi;
+        }
+    }
+    
+    if (index != -1) {
+        signal_quality_t *sq = &signal_tracking[index];
+        
+        // Oppdater RSSI
+        sq->last_rssi = rssi;
+        sq->rssi_history[sq->rssi_history_index] = rssi;
+        sq->rssi_history_index = (sq->rssi_history_index + 1) % 10;
+        
+        // Beregn gjennomsnittlig RSSI
+        int32_t sum = 0;
+        for (int i = 0; i < 10; i++) {
+            sum += sq->rssi_history[i];
+        }
+        sq->avg_rssi = sum / 10;
+        
+        // Oppdater pakke-statistikk
+        sq->packets_received++;
+        sq->last_packet_time = esp_timer_get_time() / 1000; // ms
+        sq->last_update = time(NULL);
+        
+        ESP_LOGI(TAG, "📶 Signal oppdatert for %02x:%02x:%02x:%02x:%02x:%02x - RSSI: %d dBm (avg: %d)",
+                mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], rssi, sq->avg_rssi);
+    }
+    
+    xSemaphoreGive(signal_mutex);
+}
+
+// Beregn signalkvalitet (0-100%)
+int calculate_signal_quality(int8_t rssi, uint32_t packet_loss_percent) {
+    int quality = 0;
+    
+    // RSSI-basert kvalitet (0-70%)
+    if (rssi >= -40) quality += 70;       // Utmerket
+    else if (rssi >= -50) quality += 60;  // Meget god
+    else if (rssi >= -60) quality += 50;  // God
+    else if (rssi >= -70) quality += 35;  // Fair
+    else if (rssi >= -80) quality += 20;  // Dårlig
+    else quality += 10;                   // Meget dårlig
+    
+    // Pakketap-basert kvalitet (0-30%)
+    if (packet_loss_percent == 0) quality += 30;
+    else if (packet_loss_percent < 5) quality += 25;
+    else if (packet_loss_percent < 10) quality += 20;
+    else if (packet_loss_percent < 20) quality += 10;
+    else quality += 5;
+    
+    return MIN(100, quality);
+}
+
+// Initialiser signal-tracking
+void init_signal_tracking(void) {
+    signal_mutex = xSemaphoreCreateMutex();
+    memset(signal_tracking, 0, sizeof(signal_tracking));
+    signal_tracking_count = 0;
+    
+    ESP_LOGI(TAG, "📶 Signal tracking initialisert");
+}
+
+
+
+
+
 // 
 // 
 //--------------- Del 7: ESP-NOW og Test-funksjoner ---------------- 
@@ -3924,7 +4123,6 @@ void clean_old_passages(void *pvParameters) {
 }
 
 
-// ESP-NOW mottaker callback
 // ESP-NOW mottaker callback - KOMPLETT FIKSET VERSJON
 void esp_now_recv_cb(const esp_now_recv_info_t *recv_info, const uint8_t *data, int len) {
     // Hent MAC-adressen fra recv_info
@@ -3932,6 +4130,13 @@ void esp_now_recv_cb(const esp_now_recv_info_t *recv_info, const uint8_t *data, 
     
     ESP_LOGI(TAG, "ESP-NOW data mottatt fra %02x:%02x:%02x:%02x:%02x:%02x, len=%d", 
              mac_addr[0], mac_addr[1], mac_addr[2], mac_addr[3], mac_addr[4], mac_addr[5], len);
+
+    // Få RSSI fra ESP-NOW info og oppdater signal tracking
+    int8_t rssi = recv_info->rx_ctrl ? recv_info->rx_ctrl->rssi : -70;
+    update_signal_quality(mac_addr, rssi);
+    ESP_LOGI(TAG, "📶 RSSI: %d dBm", rssi);
+
+
     
     // DEBUG: Vis første 10 bytes av meldingen
     ESP_LOGI(TAG, "DEBUG: Data bytes: [%02x %02x %02x %02x %02x %02x %02x %02x %02x %02x]",
@@ -4731,6 +4936,16 @@ httpd_handle_t start_webserver(void) {
         httpd_register_uri_handler(server_handle, &get_system_id_uri);
 
 
+     // Signal quality API
+        httpd_uri_t get_signal_quality = {
+            .uri = "/api/v1/signal/quality",
+            .method = HTTP_GET,
+            .handler = get_signal_quality_handler,
+            .user_ctx = NULL
+        };
+        httpd_register_uri_handler(server_handle, &get_signal_quality);   
+
+
 
         // All other URIs
         httpd_uri_t common = {
@@ -4909,7 +5124,8 @@ wifi_config_t wifi_config = {
     discovery_mutex = xSemaphoreCreateMutex();
     paired_poles_mutex = xSemaphoreCreateMutex();
 
-
+    // Initialiser signal tracking
+    init_signal_tracking();
 
 
     

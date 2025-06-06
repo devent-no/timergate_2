@@ -47,42 +47,58 @@
           <div v-for="pole in discoveredPolesFiltered" :key="pole.mac" class="pole-card unassigned">
 
             <div class="pole-header">
-            <div class="pole-title-section">
-              <div class="pole-title">
-                <h3>{{ pole.name || 'Navnløs målestolpe' }}</h3>
-                <div class="pole-subtitle">
-                  <span class="mac-address">{{ formatMac(pole.mac) }}</span>
-                  <span class="firmware-version" v-if="pole.firmware_version">
-                    v{{ pole.firmware_version }}
-                  </span>
+              <div class="pole-title-section">
+                <div class="pole-title">
+                  <h3>{{ pole.name || 'Navnløs målestolpe' }}</h3>
+                  <div class="pole-subtitle">
+                    <span class="mac-address">{{ formatMac(pole.mac) }}</span>
+                    <span class="firmware-version" v-if="pole.firmware_version">
+                      v{{ pole.firmware_version }}
+                    </span>
+                  </div>
+                </div>
+                
+                <div class="pole-indicators">                 
+                  <div class="pole-status-badge" :class="getConnectionStatus(pole)">
+                    <span class="status-dot"></span>
+                    {{ getConnectionText(pole) }}
+                  </div>
+
+                  <!-- NY SIGNALKVALITET-INDIKATOR -->
+                  <div class="signal-quality" v-if="getSignalQuality(pole)">
+                    <div class="signal-primary" :class="getSignalQualityClass(getSignalQuality(pole).quality)">
+                      <span class="signal-icon">{{ getSignalIcon(getSignalQuality(pole).rssi) }}</span>
+                      <span class="signal-value">{{ getSignalQuality(pole).quality }}%</span>
+                    </div>
+                    <div class="signal-text">
+                      {{ getSignalText(getSignalQuality(pole).rssi, getSignalQuality(pole).quality) }}
+                    </div>
+                  </div>
+                  
+                  <!-- Fallback for manglende signaldata -->
+                  <div class="signal-quality" v-else>
+                    <div class="signal-primary signal-unknown">
+                      <span class="signal-icon">📶</span>
+                      <span class="signal-value">--</span>
+                    </div>
+                    <div class="signal-text">Ukjent signal</div>
+                  </div>
+
                 </div>
               </div>
               
-              <div class="pole-indicators">
-                <div class="signal-strength" :class="getSignalStrengthClass(pole)">
-                  <span class="signal-icon">📶</span>
-                  <span class="signal-text">{{ getSignalStrengthText(pole) }}</span>
-                </div>
-                
-                <div class="pole-status-badge" :class="getConnectionStatus(pole)">
-                  <span class="status-dot"></span>
-                  {{ getConnectionText(pole) }}
-                </div>
+              <div class="pole-actions-compact">
+                <button @click="identifyPole(pole)" class="icon-button identify-btn" title="Identifiser">
+                  <span class="icon">🔍</span>
+                </button>
+                <button @click="expandDevice(pole)" class="icon-button expand-btn" v-if="!isExpanded(pole)" title="Vis detaljer">
+                  <span class="icon">⬇️</span>
+                </button>
+                <button @click="collapseDevice(pole)" class="icon-button collapse-btn" v-else title="Skjul detaljer">
+                  <span class="icon">⬆️</span>
+                </button>
               </div>
             </div>
-            
-            <div class="pole-actions-compact">
-              <button @click="identifyPole(pole)" class="icon-button identify-btn" title="Identifiser">
-                <span class="icon">🔍</span>
-              </button>
-              <button @click="expandDevice(pole)" class="icon-button expand-btn" v-if="!isExpanded(pole)" title="Vis detaljer">
-                <span class="icon">⬇️</span>
-              </button>
-              <button @click="collapseDevice(pole)" class="icon-button collapse-btn" v-else title="Skjul detaljer">
-                <span class="icon">⬆️</span>
-              </button>
-            </div>
-          </div>
 
 
             
@@ -211,15 +227,9 @@
           </div>
 
 
-            
-            <!-- Utvidet visning for paired poles -->
-            <div v-if="isExpanded(pole)" class="device-expanded">
-              <!-- Her kan vi legge til mer detaljert visning senere -->
-              <div class="sensor-section">
-                <h3>Sensorer</h3>
-                <p>Detaljert sensorvisning kommer senere...</p>
-              </div>
-            </div>
+
+
+
             <!-- Utvidet visning for paired poles -->
             <div v-if="isExpanded(pole)" class="device-expanded">
               <div class="sensor-section">
@@ -415,6 +425,12 @@ export default {
       pairedPolesInternal: [],
 
 
+    // Signal quality tracking
+    signalData: {},
+    signalUpdateInterval: null,
+
+
+
       // Expanded state
       expandedPoles: {},
       // Discovery state
@@ -588,6 +604,102 @@ export default {
     },
 
 
+    // NYE metoder for ekte signalstyrke:
+    
+    /**
+     * Hent signalkvalitet for en målestolpe
+     */
+     getSignalQuality(pole) {
+      if (!pole || !pole.mac) return null;
+      return this.signalData[pole.mac] || null;
+    },
+
+    /**
+     * Få signal-ikon basert på RSSI
+     */
+    getSignalIcon(rssi) {
+      if (rssi >= -40) return '📶'; // 4 streker
+      if (rssi >= -50) return '📶'; // 3 streker
+      if (rssi >= -60) return '📶'; // 2 streker  
+      if (rssi >= -70) return '📶'; // 1 strek
+      return '📶'; // Ingen signal
+    },
+
+    /**
+     * Få signal CSS-klasse basert på kvalitet
+     */
+    getSignalQualityClass(quality) {
+      if (quality >= 80) return 'signal-excellent';
+      if (quality >= 60) return 'signal-good';
+      if (quality >= 40) return 'signal-fair';
+      if (quality >= 20) return 'signal-poor';
+      return 'signal-none';
+    },
+
+    /**
+     * Få signaltekst basert på RSSI
+     */
+    getSignalText(rssi, quality) {
+      if (quality >= 80) return `Utmerket (${rssi} dBm)`;
+      if (quality >= 60) return `Meget god (${rssi} dBm)`;
+      if (quality >= 40) return `God (${rssi} dBm)`;
+      if (quality >= 20) return `Dårlig (${rssi} dBm)`;
+      return `Meget dårlig (${rssi} dBm)`;
+    },
+
+    /**
+     * Last signalkvalitet fra API
+     */
+     async loadSignalQuality() {
+      try {
+        console.log('🔄 Starting loadSignalQuality...');
+        console.log('📍 serverAddress:', this.serverAddress);
+        
+        const url = `http://${this.serverAddress}/api/v1/signal/quality`;
+        console.log('📡 Calling URL:', url);
+        
+        const response = await fetch(url);
+        console.log('📡 Response received:', response.status, response.ok);
+        
+        const data = await response.json();
+        console.log('📊 Raw signal API data:', data);
+        
+        if (data.status === 'success') {
+          console.log('✅ API status success');
+          console.log('📋 data.signal_data:', data.signal_data);
+          console.log('📋 data.signal_data length:', data.signal_data ? data.signal_data.length : 'undefined');
+          
+          // Konverter array til objekt indeksert etter MAC
+          const signalMap = {};
+          data.signal_data.forEach(signal => {
+            signalMap[signal.mac] = signal;
+          });
+          
+          console.log('🔧 BEFORE assignment:');
+          console.log('  - this.signalData:', this.signalData);
+          
+          this.signalData = signalMap;
+          
+          console.log('✅ AFTER assignment:');
+          console.log('  - this.signalData:', this.signalData);
+          console.log('  - Object.keys(signalMap):', Object.keys(signalMap));
+          
+          console.log('📶 Signalkvalitet oppdatert for', Object.keys(signalMap).length, 'målestolper');
+          
+          // Force Vue reactivity update
+          this.$forceUpdate && this.$forceUpdate();
+          
+        } else {
+          console.error('❌ API status not success:', data.status);
+        }
+      } catch (error) {
+        console.error('💥 Feil ved lasting av signalkvalitet:', error);
+        console.error('💥 Error stack:', error.stack);
+      }
+    },
+
+
+
     // Hjelpemetoder for MAC-adresse håndtering
   macAddressesEqual(mac1, mac2) {
     if (!mac1 || !mac2) return false;
@@ -629,6 +741,8 @@ export default {
     return `${Math.floor(diff / 86400)} dager siden`;
   },
   
+
+
   getConnectionStatus(pole) {
     if (!pole.last_seen) return 'unknown';
     
@@ -1358,10 +1472,17 @@ async assignPole(pole) {
       console.log('discoveredPolesInternal:', this.discoveredPolesInternal);
       console.log('pairedPolesInternal:', this.pairedPolesInternal);
 
-      console.log('DevicesView mounted');
       
       // Last inn initial data
       this.refreshAllData();  
+
+      // Start periodisk oppdatering av signalkvalitet
+      this.loadSignalQuality();
+      this.signalUpdateInterval = setInterval(() => {
+        this.loadSignalQuality();
+      }, 5000); // Oppdater hvert 5. sekund
+
+
       
       // Initialiser strømstatus for alle målestolper (eksisterende kode)
       this.poles.forEach(pole => {
@@ -1415,6 +1536,9 @@ async assignPole(pole) {
   beforeDestroy() {
     if (this.discoveryInterval) {
       clearInterval(this.discoveryInterval);
+    }
+    if (this.signalUpdateInterval) {
+      clearInterval(this.signalUpdateInterval);
     }
   }
 };
@@ -2127,6 +2251,89 @@ h2, h3 {
   }
 }
 
+
+
+
+/* NYE signal-quality stiler */
+.signal-quality {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  margin-left: 12px;
+}
+
+.signal-primary {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  border-radius: 12px;
+  font-weight: 600;
+  font-size: 12px;
+  transition: all 0.3s ease;
+}
+
+.signal-icon {
+  font-size: 14px;
+}
+
+.signal-value {
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.signal-text {
+  font-size: 9px;
+  margin-top: 2px;
+  text-align: center;
+  opacity: 0.8;
+}
+
+/* Kvalitet-baserte farger */
+.signal-excellent {
+  background: linear-gradient(135deg, #4caf50, #66bb6a);
+  color: white;
+  box-shadow: 0 2px 8px rgba(76, 175, 80, 0.3);
+}
+
+.signal-good {
+  background: linear-gradient(135deg, #8bc34a, #9ccc65);
+  color: white;
+  box-shadow: 0 2px 8px rgba(139, 195, 74, 0.3);
+}
+
+.signal-fair {
+  background: linear-gradient(135deg, #ff9800, #ffb74d);
+  color: white;
+  box-shadow: 0 2px 8px rgba(255, 152, 0, 0.3);
+}
+
+.signal-poor {
+  background: linear-gradient(135deg, #f44336, #ef5350);
+  color: white;
+  box-shadow: 0 2px 8px rgba(244, 67, 54, 0.3);
+}
+
+.signal-none {
+  background: linear-gradient(135deg, #9e9e9e, #bdbdbd);
+  color: white;
+  box-shadow: 0 2px 8px rgba(158, 158, 158, 0.3);
+}
+
+.signal-unknown {
+  background: linear-gradient(135deg, #607d8b, #78909c);
+  color: white;
+  opacity: 0.7;
+}
+
+.signal-primary:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+}
+
+
+
+
 /* Responsive adjustments */
 @media (max-width: 768px) {
   .devices-list {
@@ -2275,8 +2482,7 @@ h2, h3 {
   background-color: #f1f8e9;
 }
 
-
-
+/* Modern pole card styling */
 .pole-card {
   background: linear-gradient(135deg, #ffffff 0%, #f8f9fa 100%);
   border-radius: 12px;
@@ -2309,6 +2515,243 @@ h2, h3 {
   height: 2px;
   background: linear-gradient(90deg, #4caf50, #66bb6a);
 }
+
+/* Enhanced pole header */
+.pole-title-section {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  flex: 1;
+  gap: 16px;
+}
+
+.pole-title h3 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+  color: #333;
+}
+
+.pole-subtitle {
+  display: flex;
+  gap: 12px;
+  margin-top: 4px;
+}
+
+.mac-address {
+  font-family: monospace;
+  font-size: 12px;
+  color: #666;
+  background: #f5f5f5;
+  padding: 2px 6px;
+  border-radius: 3px;
+}
+
+.firmware-version {
+  font-size: 12px;
+  color: #0078d7;
+  font-weight: 500;
+}
+
+.pole-indicators {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.signal-strength {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  padding: 4px 8px;
+  border-radius: 12px;
+}
+
+.signal-strength.signal-excellent {
+  background: #e8f5e9;
+  color: #2e7d32;
+}
+
+.signal-strength.signal-good {
+  background: #fff3e0;
+  color: #f57c00;
+}
+
+.signal-strength.signal-fair {
+  background: #fff3e0;
+  color: #ff9800;
+}
+
+.signal-strength.signal-poor {
+  background: #ffebee;
+  color: #c62828;
+}
+
+.signal-strength.signal-none {
+  background: #f5f5f5;
+  color: #9e9e9e;
+}
+
+.signal-icon {
+  font-size: 14px;
+}
+
+.pole-status-badge {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.pole-status-badge.connected {
+  background: #e8f5e9;
+  color: #2e7d32;
+}
+
+.pole-status-badge.idle {
+  background: #fff3e0;
+  color: #f57c00;
+}
+
+.pole-status-badge.disconnected {
+  background: #ffebee;
+  color: #c62828;
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.pole-actions-compact {
+  display: flex;
+  gap: 4px;
+}
+
+.icon-button {
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: 6px;
+  background: #f5f5f5;
+  color: #666;
+  cursor: pointer;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.icon-button:hover {
+  background: #e0e0e0;
+  transform: scale(1.05);
+}
+
+.icon-button.identify-btn:hover {
+  background: #e3f2fd;
+  color: #1976d2;
+}
+
+
+/* Action groups styling */
+
+.pole-actions-footer {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+
+.action-group {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  width: 100%;
+}
+
+.action-button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  background: white;
+  border: 1px solid #e0e0e0;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  color: #555;
+}
+
+.action-button:hover {
+  background: #f8f9fa;
+  border-color: #0078d7;
+  color: #0078d7;
+}
+
+.action-button.calibrate {
+  color: #2e7d32;
+}
+
+.action-button.calibrate:hover {
+  background: #f1f8e9;
+  border-color: #4caf50;
+}
+
+.action-button.restart {
+  color: #d32f2f;
+}
+
+.action-button.restart:hover {
+  background: #ffebee;
+  border-color: #f44336;
+}
+
+.action-button .icon {
+  font-size: 16px;
+}
+
+
+
+
+
+
+
+
+
+
+.pole-card {
+  background: linear-gradient(135deg, #ffffff 0%, #f8f9fa 100%);
+  border-radius: 12px;
+  box-shadow: 
+    0 4px 6px rgba(0, 0, 0, 0.05),
+    0 1px 3px rgba(0, 0, 0, 0.1);
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  overflow: hidden;
+  position: relative;
+}
+
+.pole-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 
+    0 8px 25px rgba(0, 0, 0, 0.1),
+    0 3px 6px rgba(0, 0, 0, 0.08);
+}
+
+.pole-card.paired {
+  background: white;
+  border: 1px solid #e0e0e0;
+}
+
 
 
 
@@ -2551,5 +2994,127 @@ h2, h3 {
   color: #999;
 }
 
+
+/* Advanced sensor visualization */
+.sensor-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 16px;
+  margin-top: 16px;
+}
+
+.sensor-item {
+  background: linear-gradient(135deg, #ffffff 0%, #f8f9fa 100%);
+  border-radius: 8px;
+  padding: 16px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+  transition: all 0.3s ease;
+  border: 1px solid #e0e0e0;
+}
+
+.sensor-item.active {
+  border-color: #4caf50;
+  box-shadow: 0 2px 8px rgba(76, 175, 80, 0.2);
+}
+
+.sensor-item:not(.enabled) {
+  opacity: 0.6;
+  background: linear-gradient(135deg, #f5f5f5 0%, #eeeeee 100%);
+}
+
+.sensor-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.sensor-label {
+  font-weight: 600;
+  color: #333;
+  font-size: 14px;
+}
+
+.sensor-status {
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: bold;
+  text-transform: uppercase;
+}
+
+.sensor-status.active { background: #e8f5e9; color: #2e7d32; }
+.sensor-status.inactive { background: #fafafa; color: #757575; }
+.sensor-status.high { background: #ffebee; color: #c62828; }
+.sensor-status.medium { background: #fff3e0; color: #f57c00; }
+.sensor-status.low { background: #e3f2fd; color: #1976d2; }
+
+.sensor-value {
+  font-size: 24px;
+  font-weight: bold;
+  color: #333;
+  margin-bottom: 12px;
+  font-family: 'Roboto Mono', monospace;
+}
+
+.sensor-bar-container {
+  height: 8px;
+  background: #e0e0e0;
+  border-radius: 4px;
+  position: relative;
+  overflow: hidden;
+  margin-bottom: 8px;
+}
+
+.sensor-bar {
+  height: 100%;
+  border-radius: 4px;
+  transition: width 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.sensor-bar.bar-inactive { background: #bdbdbd; }
+.sensor-bar.bar-low { background: linear-gradient(90deg, #2196f3, #42a5f5); }
+.sensor-bar.bar-medium { background: linear-gradient(90deg, #ff9800, #ffb74d); }
+.sensor-bar.bar-high { background: linear-gradient(90deg, #f44336, #ef5350); }
+
+.sensor-threshold {
+  position: absolute;
+  top: 0;
+  width: 2px;
+  height: 100%;
+  background: #d32f2f;
+  z-index: 1;
+}
+
+.sensor-threshold::before {
+  content: '';
+  position: absolute;
+  top: -3px;
+  left: -2px;
+  width: 6px;
+  height: 6px;
+  background: #d32f2f;
+  border-radius: 50%;
+}
+
+.sensor-info {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12px;
+}
+
+.threshold-text {
+  color: #666;
+}
+
+.enabled-text {
+  color: #4caf50;
+  font-weight: 500;
+}
+
+.enabled-text.disabled {
+  color: #f44336;
+}
 
 </style>
