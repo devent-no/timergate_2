@@ -1,3 +1,5 @@
+//Sjekk, er vi i rett fil?
+
 //
 //--------------- Del 1: Inkluderinger, definisjoner og strukturer ----------------
 //

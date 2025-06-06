@@ -161,6 +161,32 @@
                   {{ getConnectionText(pole) }}
                 </div>
               </div>
+
+              <div class="pole-indicators">
+                <!-- Signalkvalitet for paired poles -->
+                <div class="signal-quality" v-if="getSignalQuality(pole)">
+                  <div class="signal-primary" :class="getSignalQualityClass(getSignalQuality(pole).quality)">
+                    <span class="signal-icon">{{ getSignalIcon(getSignalQuality(pole).rssi) }}</span>
+                    <span class="signal-value">{{ getSignalQuality(pole).quality }}%</span>
+                  </div>
+                  <div class="signal-text">
+                    {{ getSignalText(getSignalQuality(pole).rssi, getSignalQuality(pole).quality) }}
+                  </div>
+                </div>
+                
+                <!-- Fallback for manglende signaldata -->
+                <div class="signal-quality" v-else>
+                  <div class="signal-primary signal-unknown">
+                    <span class="signal-icon">📶</span>
+                    <span class="signal-value">--</span>
+                  </div>
+                  <div class="signal-text">Ukjent signal</div>
+                </div>
+              </div>     
+
+
+
+
               <div class="pole-actions-compact">
                 <button @click="expandDevice(pole)" class="icon-button" v-if="!isExpanded(pole)">
                   <span class="icon">⬇️</span>
@@ -433,6 +459,10 @@ export default {
 
       // Expanded state
       expandedPoles: {},
+
+      // Signal quality tracking
+      signalData: {},
+
       // Discovery state
       discoveryActive: false,
       isScanning: false,
@@ -704,7 +734,9 @@ export default {
           console.log('🔧 BEFORE assignment:');
           console.log('  - this.signalData:', this.signalData);
           
-          this.signalData = signalMap;
+         // Force Vue 3 reactivity update
+         Object.assign(this.signalData, signalMap);
+          this.$forceUpdate();
           
           console.log('✅ AFTER assignment:');
           console.log('  - this.signalData:', this.signalData);
@@ -1506,6 +1538,8 @@ async assignPole(pole) {
       console.log('pairedPoles prop:', this.pairedPoles);
       console.log('discoveredPolesInternal:', this.discoveredPolesInternal);
       console.log('pairedPolesInternal:', this.pairedPolesInternal);
+      console.log("POLES (ved mounted):", this.poles);
+      this.poles.forEach(p => console.log("Pole:", p.name, p));
 
       
       // Last inn initial data
