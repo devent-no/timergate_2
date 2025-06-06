@@ -47,7 +47,8 @@ export default {
       // Nye data for discovery og pairing
       discoveredPoles: [],
       pairedPoles: [],
-      systemId: ""
+      systemId: "",
+      signalData: {}
     };
   },
 
@@ -96,10 +97,36 @@ export default {
         if (pairedData.status === 'success') {
           this.pairedPoles = pairedData.poles || [];
         }
+        
+        // LEGG TIL DENNE DELEN:
+        // Last signal quality
+        await this.loadSignalQuality();
+        
       } catch (error) {
         console.error('Feil ved lasting av discovery data:', error);
       }
-    }
+    },
+
+    // LEGG TIL DENNE NYE METODEN:
+    async loadSignalQuality() {
+      try {
+        const response = await fetch(`http://${this.serverAddress}/api/v1/signal/quality`);
+        const data = await response.json();
+        
+        if (data.status === 'success') {
+          const signalMap = {};
+          data.signal_data.forEach(signal => {
+            const normalizedMac = signal.mac.toLowerCase();
+            signalMap[signal.mac] = signal;
+            signalMap[normalizedMac] = signal;
+          });
+          this.signalData = signalMap;
+          console.log('📶 MainLayout: Signalkvalitet lastet', Object.keys(signalMap));
+        }
+      } catch (error) {
+        console.error('Feil ved lasting av signalkvalitet:', error);
+      }
+    },
 
 
   },
@@ -208,6 +235,7 @@ export default {
         :discoveredPoles="discoveredPoles"
         :pairedPoles="pairedPoles"
         :systemId="systemId"
+        :signalData="signalData"
         :currentView="currentView"
       />
       <config-view 

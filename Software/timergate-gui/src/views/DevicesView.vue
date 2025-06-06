@@ -442,7 +442,11 @@ export default {
     currentView: {
       type: String,
       default: ''
-   }
+   },
+   signalData: {
+      type: Object,
+      default: () => ({})
+    }
   },
   data() {
     console.log('DevicesView data() kjører');
@@ -654,7 +658,7 @@ export default {
       //   signalData: this.signalData
       // });
       
-      return this.signalData[originalMac] || this.signalData[normalizedMac] || null;
+      return this.$props.signalData[originalMac] || this.$props.signalData[normalizedMac] || null;
     },
 
     /**
@@ -1535,23 +1539,16 @@ async assignPole(pole) {
     
     mounted() {
       console.log('DevicesView mounted');
-      console.log('discoveredPoles prop:', this.discoveredPoles);
-      console.log('pairedPoles prop:', this.pairedPoles);
-      console.log('discoveredPolesInternal:', this.discoveredPolesInternal);
-      console.log('pairedPolesInternal:', this.pairedPolesInternal);
-      console.log("POLES (ved mounted):", this.poles);
-      this.poles.forEach(p => console.log("Pole:", p.name, p));
+      // console.log('discoveredPoles prop:', this.discoveredPoles);
+      // console.log('pairedPoles prop:', this.pairedPoles);
+      // console.log('discoveredPolesInternal:', this.discoveredPolesInternal);
+      // console.log('pairedPolesInternal:', this.pairedPolesInternal);
+      // console.log("POLES (ved mounted):", this.poles);
+      // this.poles.forEach(p => console.log("Pole:", p.name, p));
 
       
       // Last inn initial data
-      this.refreshAllData();  
-
-      // Start periodisk oppdatering av signalkvalitet
-      this.loadSignalQuality();
-      this.signalUpdateInterval = setInterval(() => {
-        this.loadSignalQuality();
-      }, 30000); // Oppdater hvert 30. sekund
-
+      //this.refreshAllData();  
 
       
       // Initialiser strømstatus for alle målestolper (eksisterende kode)
@@ -1562,14 +1559,41 @@ async assignPole(pole) {
       });
       
       // Sett opp periodisk oppdatering av discovered poles
-      this.discoveryInterval = setInterval(() => {
-        if (this.discoveryActive) {
-          this.loadDiscoveredPoles();
-        }
-      }, 5000); // Oppdater hvert 5. sekund
+      // this.discoveryInterval = setInterval(() => {
+      //   if (this.discoveryActive) {
+      //     this.loadDiscoveredPoles();
+      //   }
+      // }, 5000); // Oppdater hvert 5. sekund
     },
 
+    mounted() {
+      console.log('DevicesView mounted');
+      // console.log('discoveredPoles prop:', this.discoveredPoles);
+      // console.log('pairedPoles prop:', this.pairedPoles);
+      // console.log('discoveredPolesInternal:', this.discoveredPolesInternal);
+      // console.log('pairedPolesInternal:', this.pairedPolesInternal);
+      // console.log("POLES (ved mounted):", this.poles);
+      // this.poles.forEach(p => console.log("Pole:", p.name, p));
 
+      
+      // Last inn initial data
+      //this.refreshAllData();  
+
+      
+      // Initialiser strømstatus for alle målestolper (eksisterende kode)
+      this.poles.forEach(pole => {
+        if (!(pole.mac in this.powerStatus)) {
+          this.powerStatus[pole.mac] = true; // Anta at alle er på ved oppstart
+        }
+      });
+      
+      // Sett opp periodisk oppdatering av discovered poles
+      // this.discoveryInterval = setInterval(() => {
+      //   if (this.discoveryActive) {
+      //     this.loadDiscoveredPoles();
+      //   }
+      // }, 5000); // Oppdater hvert 5. sekund
+    },
 
 
 
@@ -1598,15 +1622,21 @@ async assignPole(pole) {
           }
         },
         immediate: false
+      },
+      signalData: {
+        handler(newSignalData) {
+          console.log('📶 DevicesView: Mottok signal data', Object.keys(newSignalData));
+          // Ingen assignment trengs - bruker direkte fra props
+        },
+        immediate: true
       }
-
     }
   },
   // Lifecycle hooks
   beforeDestroy() {
-    if (this.discoveryInterval) {
-      clearInterval(this.discoveryInterval);
-    }
+    // if (this.discoveryInterval) {
+    //   clearInterval(this.discoveryInterval);
+    // }
     if (this.signalUpdateInterval) {
       clearInterval(this.signalUpdateInterval);
     }

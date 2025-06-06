@@ -416,6 +416,8 @@ bool process_break_for_passage_detection(const uint8_t *mac_addr, int32_t sensor
 int8_t get_tcp_client_rssi(int sock);
 
 
+void clean_old_signal_tracking(void *pvParameters);
+
 
 // Hjelpefunksjon for å estimere TCP-klient RSSI
 int8_t get_tcp_client_rssi(int sock) {
@@ -847,7 +849,7 @@ void tcp_client_handler(void *arg) {
                             int8_t tcp_rssi = get_tcp_client_rssi(sock);
                             update_signal_quality(mac_bytes, tcp_rssi);
                             
-                            ESP_LOGI(TAG, "📶 TCP Signal oppdatert for %s - RSSI: %d dBm", 
+                            ESP_LOGD(TAG, "📶 TCP Signal oppdatert for %s - RSSI: %d dBm", 
                                     tcp_poles[pole_idx].mac, tcp_rssi);
                         }
                     }
@@ -1831,9 +1833,9 @@ esp_err_t get_signal_quality_handler(httpd_req_t *req) {
 
 
     // Debug logging
-    ESP_LOGI(TAG, "📊 get_signal_quality_handler: signal_tracking_count = %d", signal_tracking_count);
+    ESP_LOGD(TAG, "📊 get_signal_quality_handler: signal_tracking_count = %d", signal_tracking_count);
     for (int i = 0; i < signal_tracking_count; i++) {
-        ESP_LOGI(TAG, "📊 Signal entry %d: MAC=%02x:%02x:%02x:%02x:%02x:%02x, RSSI=%d, packets=%u", 
+        ESP_LOGD(TAG, "📊 Signal entry %d: MAC=%02x:%02x:%02x:%02x:%02x:%02x, RSSI=%d, packets=%u", 
                  i, signal_tracking[i].mac[0], signal_tracking[i].mac[1], signal_tracking[i].mac[2],
                  signal_tracking[i].mac[3], signal_tracking[i].mac[4], signal_tracking[i].mac[5],
                  signal_tracking[i].last_rssi, signal_tracking[i].packets_received);
@@ -3562,8 +3564,10 @@ void update_signal_quality(const uint8_t *mac, int8_t rssi) {
         sq->last_packet_time = esp_timer_get_time() / 1000; // ms
         sq->last_update = time(NULL);
         
-        ESP_LOGI(TAG, "📶 Signal oppdatert for %02x:%02x:%02x:%02x:%02x:%02x - RSSI: %d dBm (avg: %d)",
-                mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], rssi, sq->avg_rssi);
+
+        ESP_LOGD(TAG, "📶 Signal oppdatert for %02x:%02x:%02x:%02x:%02x:%02x - RSSI: %d dBm (avg: %d)",
+                mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], rssi, sq->avg_rssi, sq->last_update);
+
     }
     
     xSemaphoreGive(signal_mutex);
@@ -4178,6 +4182,11 @@ void esp_now_recv_cb(const esp_now_recv_info_t *recv_info, const uint8_t *data, 
 
     // Få RSSI fra ESP-NOW info og oppdater signal tracking
     int8_t rssi = recv_info->rx_ctrl ? recv_info->rx_ctrl->rssi : -70;
+
+
+    ESP_LOGI(TAG, "🔍 ESP-NOW: Oppdaterer signal med RSSI %d for %02x:%02x:%02x:%02x:%02x:%02x", 
+            rssi, mac_addr[0], mac_addr[1], mac_addr[2], mac_addr[3], mac_addr[4], mac_addr[5]);
+            
     update_signal_quality(mac_addr, rssi);
     ESP_LOGI(TAG, "📶 RSSI: %d dBm", rssi);
 
@@ -5109,6 +5118,42 @@ bool send_esp_now_command_to_pole(const uint8_t *mac, uint8_t cmd_type,
 }
 
 
+// Task som fjerner gamle signal tracking entries
+void clean_old_signal_tracking(void *pvParameters) {
+    const uint32_t MAX_AGE_SEC = 10; // 10 sek uten signal = fjern
+    
+    while (1) {
+        vTaskDelay(pdMS_TO_TICKS(5000)); // Kjør hver 5. sekund
+        
+        time_t now = time(NULL);
+        xSemaphoreTake(signal_mutex, portMAX_DELAY);
+        
+        int valid_count = 0;
+        for (int i = 0; i < signal_tracking_count; i++) {
+            uint32_t packet_age_ms = esp_timer_get_time() / 1000 - signal_tracking[i].last_packet_time;
+            if (packet_age_ms < (MAX_AGE_SEC * 1000)) {
+                // Behold denne entryen
+                if (valid_count != i) {
+                    signal_tracking[valid_count] = signal_tracking[i];
+                }
+                valid_count++;
+            } else {
+                // Fjern gammel entry
+                ESP_LOGI(TAG, "🗑️ Fjerner gammel signaldata for %02x:%02x:%02x:%02x:%02x:%02x (alder: %u ms)", 
+                        signal_tracking[i].mac[0], signal_tracking[i].mac[1], signal_tracking[i].mac[2],
+                        signal_tracking[i].mac[3], signal_tracking[i].mac[4], signal_tracking[i].mac[5],
+                        packet_age_ms);
+            }
+        }
+        
+        signal_tracking_count = valid_count;
+        xSemaphoreGive(signal_mutex);
+        
+        if (valid_count > 0) {
+            ESP_LOGD(TAG, "📶 Signal tracking cleanup: %d aktive målestolper", valid_count);
+        }
+    }
+}
 
 
 
@@ -5227,4 +5272,5 @@ wifi_config_t wifi_config = {
 
     // Start webserveren
     server = start_webserver();
+    xTaskCreate(clean_old_signal_tracking, "clean_signal", 2048, NULL, 1, NULL);   
 }
