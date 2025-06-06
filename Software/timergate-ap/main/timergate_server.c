@@ -413,9 +413,32 @@ bool process_break_for_passage_detection(const uint8_t *mac_addr, int32_t sensor
 
 
 
+int8_t get_tcp_client_rssi(int sock);
+
+
+
+// Hjelpefunksjon for å estimere TCP-klient RSSI
+int8_t get_tcp_client_rssi(int sock) {
+    // Få klient-adresse
+    struct sockaddr_storage client_addr;
+    socklen_t addr_len = sizeof(client_addr);
+    
+    if (getpeername(sock, (struct sockaddr *)&client_addr, &addr_len) == 0) {
+        // For WiFi-tilkoblinger kan vi prøve å hente faktisk RSSI
+        // Men dette krever mer kompleks implementasjon med WiFi stack
+        // For nå returnerer vi en estimert verdi basert på TCP-tilkobling
+        return -25; // Ganske sterkt signal siden TCP fungerer
+    }
+    
+    return -40; // Fallback-verdi
+}
+
+
 // Funksjon for å legge til passering i historikk
 void add_to_passage_history(const uint8_t *mac, uint32_t time_sec, uint32_t time_usec, 
                            int *sensor_ids, int sensor_count) {
+
+
     xSemaphoreTake(passage_history_mutex, portMAX_DELAY);
     
     // Beregn tid siden forrige passering
@@ -812,6 +835,26 @@ void tcp_client_handler(void *arg) {
                                 tcp_poles[pole_idx].mac, command);
                     }
                     
+
+
+                    // Oppdater signal tracking for TCP-tilkobling
+                    if (strlen(tcp_poles[pole_idx].mac) > 0) {
+                        uint8_t mac_bytes[ESP_NOW_ETH_ALEN];
+                        if (sscanf(tcp_poles[pole_idx].mac, "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx", 
+                                  &mac_bytes[0], &mac_bytes[1], &mac_bytes[2],
+                                  &mac_bytes[3], &mac_bytes[4], &mac_bytes[5]) == 6) {
+                            
+                            int8_t tcp_rssi = get_tcp_client_rssi(sock);
+                            update_signal_quality(mac_bytes, tcp_rssi);
+                            
+                            ESP_LOGI(TAG, "📶 TCP Signal oppdatert for %s - RSSI: %d dBm", 
+                                    tcp_poles[pole_idx].mac, tcp_rssi);
+                        }
+                    }
+
+
+
+
                     // Send til alle WebSocket-klienter
                     httpd_ws_frame_t ws_pkt = {
                         .final = true,

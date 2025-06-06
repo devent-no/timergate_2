@@ -645,13 +645,14 @@ export default {
       // Prøv både original MAC og normalisert MAC
       const originalMac = pole.mac;
       const normalizedMac = this.normalizeMac(pole.mac);
-      
-      console.log('🔍 Looking for signal data:', { 
-        originalMac, 
-        normalizedMac, 
-        signalDataKeys: Object.keys(this.signalData),
-        signalData: this.signalData
-      });
+     
+      //Midlertidig fjernet for å få litt mindre "støy" ifm annen feilsøing
+      // console.log('🔍 Looking for signal data:', { 
+      //   originalMac, 
+      //   normalizedMac, 
+      //   signalDataKeys: Object.keys(this.signalData),
+      //   signalData: this.signalData
+      // });
       
       return this.signalData[originalMac] || this.signalData[normalizedMac] || null;
     },
@@ -1549,7 +1550,7 @@ async assignPole(pole) {
       this.loadSignalQuality();
       this.signalUpdateInterval = setInterval(() => {
         this.loadSignalQuality();
-      }, 5000); // Oppdater hvert 5. sekund
+      }, 30000); // Oppdater hvert 30. sekund
 
 
       
