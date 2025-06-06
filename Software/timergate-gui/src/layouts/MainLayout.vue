@@ -208,6 +208,7 @@ export default {
         :discoveredPoles="discoveredPoles"
         :pairedPoles="pairedPoles"
         :systemId="systemId"
+        :currentView="currentView"
       />
       <config-view 
         v-else-if="currentView === 'config'" 

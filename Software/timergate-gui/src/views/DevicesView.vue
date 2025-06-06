@@ -45,14 +45,46 @@
         
         <div class="poles-grid">
           <div v-for="pole in discoveredPolesFiltered" :key="pole.mac" class="pole-card unassigned">
+
             <div class="pole-header">
+            <div class="pole-title-section">
               <div class="pole-title">
-                <h3>{{ pole.device_name }}</h3>
-                <div class="pole-status new">
-                  Ny enhet
+                <h3>{{ pole.name || 'Navnløs målestolpe' }}</h3>
+                <div class="pole-subtitle">
+                  <span class="mac-address">{{ formatMac(pole.mac) }}</span>
+                  <span class="firmware-version" v-if="pole.firmware_version">
+                    v{{ pole.firmware_version }}
+                  </span>
+                </div>
+              </div>
+              
+              <div class="pole-indicators">
+                <div class="signal-strength" :class="getSignalStrengthClass(pole)">
+                  <span class="signal-icon">📶</span>
+                  <span class="signal-text">{{ getSignalStrengthText(pole) }}</span>
+                </div>
+                
+                <div class="pole-status-badge" :class="getConnectionStatus(pole)">
+                  <span class="status-dot"></span>
+                  {{ getConnectionText(pole) }}
                 </div>
               </div>
             </div>
+            
+            <div class="pole-actions-compact">
+              <button @click="identifyPole(pole)" class="icon-button identify-btn" title="Identifiser">
+                <span class="icon">🔍</span>
+              </button>
+              <button @click="expandDevice(pole)" class="icon-button expand-btn" v-if="!isExpanded(pole)" title="Vis detaljer">
+                <span class="icon">⬇️</span>
+              </button>
+              <button @click="collapseDevice(pole)" class="icon-button collapse-btn" v-else title="Skjul detaljer">
+                <span class="icon">⬆️</span>
+              </button>
+            </div>
+          </div>
+
+
             
             <div class="pole-info">
               <div class="info-row">
@@ -139,32 +171,46 @@
             </div>
             
             <div class="pole-actions-footer">
-              <button @click="identifyPole(pole)" class="action-button identify">
-                <span class="icon">🔍</span>
-                Identifiser
-              </button>
+            <div class="action-group primary">
               <button @click="calibrateSensors(pole)" class="action-button calibrate" 
                       :disabled="isCalibratingMap[pole.mac]">
                 <span class="icon">⚙️</span>
-                {{ isCalibratingMap[pole.mac] ? 'Kalibrerer...' : 'Kalibrer' }}
+                <span class="text">{{ isCalibratingMap[pole.mac] ? 'Kalibrerer...' : 'Kalibrer' }}</span>
               </button>
-              <button @click="openRestartModal(pole)" class="action-button restart">
-                <span class="icon">🔄</span>
-                Restart
-              </button>
-              <button @click="openPowerModal(pole)" class="action-button power">
-                <span class="icon">⚡</span>
-                {{ isPowerOn(pole) ? 'Slå av' : 'Enheten er av' }}
-              </button>
-              <button @click="openRenameModal(pole)" class="action-button rename">
-                <span class="icon">✏️</span>
-                Endre navn
-              </button>
-              <button @click="unpairPole(pole)" class="action-button unpair">
-                <span class="icon">🗑️</span>
-                Fjern
+              
+              <button @click="identifyPole(pole)" class="action-button identify">
+                <span class="icon">🔍</span>
+                <span class="text">Identifiser</span>
               </button>
             </div>
+            
+            <div class="action-group secondary">
+              <button @click="openRenameModal(pole)" class="action-button rename">
+                <span class="icon">✏️</span>
+                <span class="text">Navn</span>
+              </button>
+              
+              <button @click="openRestartModal(pole)" class="action-button restart">
+                <span class="icon">🔄</span>
+                <span class="text">Restart</span>
+              </button>
+            </div>
+            
+            <div class="action-group danger">
+              <button @click="openPowerModal(pole)" class="action-button power" 
+                      :class="{ 'power-off': !isPowerOn(pole) }">
+                <span class="icon">⚡</span>
+                <span class="text">{{ isPowerOn(pole) ? 'Av' : 'På' }}</span>
+              </button>
+              
+              <button @click="unpairPole(pole)" class="action-button unpair">
+                <span class="icon">🗑️</span>
+                <span class="text">Fjern</span>
+              </button>
+            </div>
+          </div>
+
+
             
             <!-- Utvidet visning for paired poles -->
             <div v-if="isExpanded(pole)" class="device-expanded">
@@ -172,6 +218,58 @@
               <div class="sensor-section">
                 <h3>Sensorer</h3>
                 <p>Detaljert sensorvisning kommer senere...</p>
+              </div>
+            </div>
+            <!-- Utvidet visning for paired poles -->
+            <div v-if="isExpanded(pole)" class="device-expanded">
+              <div class="sensor-section">
+                <h3>Sensorer ({{ getSensorCount(pole) }} av 7 aktive)</h3>
+                
+                <!-- Finn korresponderende pole-data -->
+                <div v-if="getCorrespondingPoleData(pole)" class="sensor-grid">
+                  <div v-for="(value, index) in getCorrespondingPoleData(pole).values" 
+                       :key="index" 
+                       class="sensor-item"
+                       :class="{ active: isSensorActive(value), enabled: isSensorEnabled(pole, index) }">
+                    
+                    <div class="sensor-header">
+                      <span class="sensor-label">Sensor {{ index + 1 }}</span>
+                      <span class="sensor-status" :class="getSensorStatusClass(value)">
+                        {{ getSensorStatusText(value) }}
+                      </span>
+                    </div>
+                    
+                    <div class="sensor-value">{{ value || 0 }}</div>
+                    
+                    <div class="sensor-bar-container">
+                      <div class="sensor-bar" 
+                           :style="{ width: getSensorBarWidth(value) }"
+                           :class="getSensorBarColor(value)">
+                      </div>
+                      
+                      <!-- Break threshold indicator -->
+                      <div v-if="getBreakThreshold(pole, index)" 
+                           class="sensor-threshold" 
+                           :style="{ left: getSensorThresholdPosition(pole, index) }">
+                      </div>
+                    </div>
+                    
+                    <div class="sensor-info">
+                      <span class="threshold-text">
+                        Terskel: {{ getBreakThreshold(pole, index) || 'N/A' }}
+                      </span>
+                      <span class="enabled-text" :class="{ disabled: !isSensorEnabled(pole, index) }">
+                        {{ isSensorEnabled(pole, index) ? 'Aktivert' : 'Deaktivert' }}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+                
+                <div v-else class="no-sensor-data">
+                  <span class="icon">⚠️</span>
+                  <p>Ingen sensordata tilgjengelig for denne målestolpen</p>
+                  <small>Målestolpen må være tilkoblet via TCP for å vise sensordata</small>
+                </div>
               </div>
             </div>
           </div>
@@ -304,7 +402,11 @@ export default {
     systemId: {
       type: String,
       default: ""
-    }
+    },
+    currentView: {
+      type: String,
+      default: ''
+   }
   },
   data() {
     console.log('DevicesView data() kjører');
@@ -406,6 +508,69 @@ export default {
 
 
   methods: {
+
+    // Finn korresponderende pole-data fra poles prop
+    getCorrespondingPoleData(pairedPole) {
+      return this.poles.find(pole => 
+        pole.mac === pairedPole.mac || 
+        this.macAddressesEqual(pole.mac, pairedPole.mac)
+      );
+    },
+
+    getSensorCount(pole) {
+      const poleData = this.getCorrespondingPoleData(pole);
+      if (!poleData || !poleData.values) return 0;
+      return poleData.values.filter(v => this.isSensorActive(v)).length;
+    },
+
+    isSensorActive(value) {
+      return value && value > 100; // Juster terskel etter behov
+    },
+
+    isSensorEnabled(pole, index) {
+      const poleData = this.getCorrespondingPoleData(pole);
+      return poleData?.enabled?.[index] !== false;
+    },
+
+    getSensorStatusClass(value) {
+      if (!value || value < 100) return 'inactive';
+      if (value > 3000) return 'high';
+      if (value > 2000) return 'medium';
+      return 'low';
+    },
+
+    getSensorStatusText(value) {
+      if (!value || value < 100) return 'Inaktiv';
+      if (value > 3000) return 'Høy';
+      if (value > 2000) return 'Medium';
+      return 'Lav';
+    },
+
+    getSensorBarWidth(value) {
+      if (!value) return '0%';
+      const percent = Math.min(100, Math.max(0, (value / 4096) * 100));
+      return `${percent}%`;
+    },
+
+    getSensorBarColor(value) {
+      if (!value || value < 100) return 'bar-inactive';
+      if (value > 3000) return 'bar-high';
+      if (value > 2000) return 'bar-medium';
+      return 'bar-low';
+    },
+
+    getBreakThreshold(pole, index) {
+      const poleData = this.getCorrespondingPoleData(pole);
+      return poleData?.br_limit?.[index];
+    },
+
+    getSensorThresholdPosition(pole, index) {
+      const threshold = this.getBreakThreshold(pole, index);
+      if (!threshold) return '50%';
+      const percent = Math.min(100, Math.max(0, (threshold / 4096) * 100));
+      return `${percent}%`;
+    },
+
 
 
     activated() {
@@ -1230,15 +1395,20 @@ async assignPole(pole) {
         deep: true,
         immediate: true
       },
-      '$route'(newRoute, oldRoute) {
-        console.log('Route endret fra:', oldRoute?.path, 'til:', newRoute.path);
-        if (newRoute.path === '/devices' || newRoute.name === 'devices' || this.currentView === 'devices') {
-          console.log('Navigert til enheter-siden - refresher data automatisk');
-          this.$nextTick(() => {
-            this.refreshAllData();
-          });
-        }
+
+      currentView: {
+        handler(newView, oldView) {
+          console.log('currentView endret fra:', oldView, 'til:', newView);
+          if (newView === 'devices') {
+            console.log('Navigert til enheter-siden - refresher data automatisk');
+            this.$nextTick(() => {
+              this.refreshAllData();
+            });
+          }
+        },
+        immediate: false
       }
+
     }
   },
   // Lifecycle hooks
@@ -2105,6 +2275,43 @@ h2, h3 {
   background-color: #f1f8e9;
 }
 
+
+
+.pole-card {
+  background: linear-gradient(135deg, #ffffff 0%, #f8f9fa 100%);
+  border-radius: 12px;
+  box-shadow: 
+    0 4px 6px rgba(0, 0, 0, 0.05),
+    0 1px 3px rgba(0, 0, 0, 0.1);
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  overflow: hidden;
+  position: relative;
+}
+
+.pole-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 
+    0 8px 25px rgba(0, 0, 0, 0.1),
+    0 3px 6px rgba(0, 0, 0, 0.08);
+}
+
+.pole-card.paired {
+  border-left: 4px solid #4caf50;
+  background: linear-gradient(135deg, #f1f8e9 0%, #ffffff 100%);
+}
+
+.pole-card.paired::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, #4caf50, #66bb6a);
+}
+
+
+
 /* Actions for unassigned poles */
 .pole-actions-unassigned {
   display: flex;
@@ -2201,7 +2408,148 @@ h2, h3 {
 }
 
 
+/* Advanced sensor visualization */
+.sensor-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 16px;
+  margin-top: 16px;
+}
 
+.sensor-item {
+  background: linear-gradient(135deg, #ffffff 0%, #f8f9fa 100%);
+  border-radius: 8px;
+  padding: 16px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+  transition: all 0.3s ease;
+  border: 1px solid #e0e0e0;
+}
+
+.sensor-item.active {
+  border-color: #4caf50;
+  box-shadow: 0 2px 8px rgba(76, 175, 80, 0.2);
+}
+
+.sensor-item:not(.enabled) {
+  opacity: 0.6;
+  background: linear-gradient(135deg, #f5f5f5 0%, #eeeeee 100%);
+}
+
+.sensor-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.sensor-label {
+  font-weight: 600;
+  color: #333;
+  font-size: 14px;
+}
+
+.sensor-status {
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: bold;
+  text-transform: uppercase;
+}
+
+.sensor-status.active { background: #e8f5e9; color: #2e7d32; }
+.sensor-status.inactive { background: #fafafa; color: #757575; }
+.sensor-status.high { background: #ffebee; color: #c62828; }
+.sensor-status.medium { background: #fff3e0; color: #f57c00; }
+.sensor-status.low { background: #e3f2fd; color: #1976d2; }
+
+.sensor-value {
+  font-size: 24px;
+  font-weight: bold;
+  color: #333;
+  margin-bottom: 12px;
+  font-family: 'Roboto Mono', monospace;
+}
+
+.sensor-bar-container {
+  height: 8px;
+  background: #e0e0e0;
+  border-radius: 4px;
+  position: relative;
+  overflow: hidden;
+  margin-bottom: 8px;
+}
+
+.sensor-bar {
+  height: 100%;
+  border-radius: 4px;
+  transition: width 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.sensor-bar.bar-inactive { background: #bdbdbd; }
+.sensor-bar.bar-low { background: linear-gradient(90deg, #2196f3, #42a5f5); }
+.sensor-bar.bar-medium { background: linear-gradient(90deg, #ff9800, #ffb74d); }
+.sensor-bar.bar-high { background: linear-gradient(90deg, #f44336, #ef5350); }
+
+.sensor-threshold {
+  position: absolute;
+  top: 0;
+  width: 2px;
+  height: 100%;
+  background: #d32f2f;
+  z-index: 1;
+}
+
+.sensor-threshold::before {
+  content: '';
+  position: absolute;
+  top: -3px;
+  left: -2px;
+  width: 6px;
+  height: 6px;
+  background: #d32f2f;
+  border-radius: 50%;
+}
+
+.sensor-info {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12px;
+}
+
+.threshold-text {
+  color: #666;
+}
+
+.enabled-text {
+  color: #4caf50;
+  font-weight: 500;
+}
+
+.enabled-text.disabled {
+  color: #f44336;
+}
+
+.no-sensor-data {
+  text-align: center;
+  padding: 32px 16px;
+  color: #666;
+}
+
+.no-sensor-data .icon {
+  font-size: 48px;
+  margin-bottom: 16px;
+  display: block;
+}
+
+.no-sensor-data p {
+  margin-bottom: 8px;
+  font-weight: 500;
+}
+
+.no-sensor-data small {
+  color: #999;
+}
 
 
 </style>
