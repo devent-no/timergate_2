@@ -611,7 +611,19 @@ export default {
      */
      getSignalQuality(pole) {
       if (!pole || !pole.mac) return null;
-      return this.signalData[pole.mac] || null;
+      
+      // Prøv både original MAC og normalisert MAC
+      const originalMac = pole.mac;
+      const normalizedMac = this.normalizeMac(pole.mac);
+      
+      console.log('🔍 Looking for signal data:', { 
+        originalMac, 
+        normalizedMac, 
+        signalDataKeys: Object.keys(this.signalData),
+        signalData: this.signalData
+      });
+      
+      return this.signalData[originalMac] || this.signalData[normalizedMac] || null;
     },
 
     /**
@@ -670,10 +682,24 @@ export default {
           console.log('📋 data.signal_data length:', data.signal_data ? data.signal_data.length : 'undefined');
           
           // Konverter array til objekt indeksert etter MAC
+          // Konverter array til objekt indeksert etter MAC med normalisering
           const signalMap = {};
           data.signal_data.forEach(signal => {
-            signalMap[signal.mac] = signal;
+            // Normaliser MAC-adresse og legg til både original og normalisert versjon
+            const normalizedMac = this.normalizeMac(signal.mac);
+            signalMap[signal.mac] = signal;           // Original format
+            signalMap[normalizedMac] = signal;        // Normalisert format
+            
+            // Debug: vis MAC-formater
+            console.log('📊 Signal MAC mapping:', { 
+              original: signal.mac, 
+              normalized: normalizedMac,
+              signal: signal 
+            });
           });
+
+
+
           
           console.log('🔧 BEFORE assignment:');
           console.log('  - this.signalData:', this.signalData);
@@ -715,6 +741,15 @@ export default {
     
     return normalize(mac1) === normalize(mac2);
   },
+
+  normalizeMac(mac) {
+    if (!mac) return '';
+    if (Array.isArray(mac)) {
+      return mac.map(b => b.toString(16).padStart(2, '0')).join(':').toLowerCase();
+    }
+    return mac.toLowerCase();
+  },
+  
   
   formatMac(mac) {
     if (Array.isArray(mac)) {
