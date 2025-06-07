@@ -273,8 +273,7 @@ static void handle_hsearch_command(const uint8_t *data, size_t data_len);
 static void handle_set_break_command(const uint8_t *data, size_t data_len);
 static void handle_set_enabled_command(const uint8_t *data, size_t data_len);
 static void handle_power_off_command(const uint8_t *data, size_t data_len);
-
-
+static void send_k0_adc_data_esp_now(void);
 
 
 typedef struct
@@ -1123,50 +1122,50 @@ static void tcp_connect()
 
 }
 
-static void add_to_queue(char *msg)
-{
-    strncpy(cmd, msg, strlen(msg) + 1);
-    xQueueOverwrite(xQueue, &cmd);
-}
+// static void add_to_queue(char *msg)
+// {
+//     strncpy(cmd, msg, strlen(msg) + 1);
+//     xQueueOverwrite(xQueue, &cmd);
+// }
 
-static void publish_sensor()
-{
-    char event[140];
-    char adc_vals_s[40];
-    char broken_s[40];
+// static void publish_sensor()
+// {
+//     char event[140];
+//     char adc_vals_s[40];
+//     char broken_s[40];
 
-    sprintf(adc_vals_s, "[%4d,%4d,%4d,%4d,%4d,%4d,%4d]",
-            adc_raw[0][0],
-            adc_raw[0][1],
-            adc_raw[0][2],
-            adc_raw[0][3],
-            adc_raw[0][4],
-            adc_raw[0][5],
-            adc_raw[0][6]);
-    sprintf(broken_s, "[%1d,%1d,%1d,%1d,%1d,%1d,%1d]",
-            sensor_break[0],
-            sensor_break[1],
-            sensor_break[2],
-            sensor_break[3],
-            sensor_break[4],
-            sensor_break[5],
-            sensor_break[6]);
-    sprintf(event, "{\"K\":0,\"M\":\"%s\",\"V\":%s,\"B\":%s}\n", mac_addr, adc_vals_s, broken_s);
-    add_to_queue(event);
-    //ESP_LOGI(TAG, "%s", adc_vals_s); //MIDLERTIDIG for å ikke drukne loggen
-}
+//     sprintf(adc_vals_s, "[%4d,%4d,%4d,%4d,%4d,%4d,%4d]",
+//             adc_raw[0][0],
+//             adc_raw[0][1],
+//             adc_raw[0][2],
+//             adc_raw[0][3],
+//             adc_raw[0][4],
+//             adc_raw[0][5],
+//             adc_raw[0][6]);
+//     sprintf(broken_s, "[%1d,%1d,%1d,%1d,%1d,%1d,%1d]",
+//             sensor_break[0],
+//             sensor_break[1],
+//             sensor_break[2],
+//             sensor_break[3],
+//             sensor_break[4],
+//             sensor_break[5],
+//             sensor_break[6]);
+//     sprintf(event, "{\"K\":0,\"M\":\"%s\",\"V\":%s,\"B\":%s}\n", mac_addr, adc_vals_s, broken_s);
+//     add_to_queue(event);
+//     //ESP_LOGI(TAG, "%s", adc_vals_s); //MIDLERTIDIG for å ikke drukne loggen
+// }
 
 
-static void publish_break(int sensor_id, int broken)
-{
-    char *event = malloc(140);
-    struct timeval tv_now;
-    gettimeofday(&tv_now, NULL);
-    ESP_LOGI(TAG, "Break state change sensor %d: %d @ %lld", sensor_id, broken, tv_now.tv_sec);
-    sprintf(event, "{\"K\":1,\"M\":\"%s\",\"S\":%d,\"B\":%d,\"T\":%lld, \"U\":%ld}\n", 
-            mac_addr, sensor_id, broken, tv_now.tv_sec, tv_now.tv_usec);
-    xQueueSendToBack(xQueueBreak, &event, portMAX_DELAY);
-}
+// static void publish_break(int sensor_id, int broken)
+// {
+//     char *event = malloc(140);
+//     struct timeval tv_now;
+//     gettimeofday(&tv_now, NULL);
+//     ESP_LOGI(TAG, "Break state change sensor %d: %d @ %lld", sensor_id, broken, tv_now.tv_sec);
+//     sprintf(event, "{\"K\":1,\"M\":\"%s\",\"S\":%d,\"B\":%d,\"T\":%lld, \"U\":%ld}\n", 
+//             mac_addr, sensor_id, broken, tv_now.tv_sec, tv_now.tv_usec);
+//     xQueueSendToBack(xQueueBreak, &event, portMAX_DELAY);
+// }
 
 
 
@@ -1303,6 +1302,63 @@ static void log_esp_now_status(void) {
     }
 }
 
+
+
+// Funksjon for å sende K=0 ADC-data via ESP-NOW
+static void send_k0_adc_data_esp_now(void) {
+    if (!esp_now_peer_added) {
+        ESP_LOGW(TAG, "ESP-NOW peer ikke registrert, kan ikke sende K=0 data");
+        return;
+    }
+    
+    // Beregn størrelse: 1 byte (K) + 4 bytes (T) + 4 bytes (U) + 7*4 bytes (ADC) + 7*4 bytes (Break status)
+    size_t data_size = 1 + 4 + 4 + (7 * 4) + (7 * 4);
+    uint8_t *esp_now_data = malloc(data_size);
+    if (!esp_now_data) {
+        ESP_LOGE(TAG, "Minneallokering feilet for K=0 ESP-NOW data");
+        return;
+    }
+    
+    // Få nåværende tidsstempel
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    
+    // Bygg K=0 melding
+    int pos = 0;
+    esp_now_data[pos++] = 0; // K=0 for ADC-data
+    
+    // Tidsstempel (T og U)
+    memcpy(&esp_now_data[pos], &tv.tv_sec, 4);
+    pos += 4;
+    memcpy(&esp_now_data[pos], &tv.tv_usec, 4);
+    pos += 4;
+    
+    // ADC-verdier (V array)
+    for (int i = 0; i < NUM_SENSORS; i++) {
+        memcpy(&esp_now_data[pos], &adc_raw[0][i], 4);
+        pos += 4;
+    }
+    
+    // Break status (B array)
+    for (int i = 0; i < NUM_SENSORS; i++) {
+        int32_t break_val = sensor_break[i] ? 1 : 0;
+        memcpy(&esp_now_data[pos], &break_val, 4);
+        pos += 4;
+    }
+    
+    ESP_LOGI(TAG, "📊 Sender K=0 ADC-data via ESP-NOW (størrelse: %d bytes)", data_size);
+    
+    // Send ESP-NOW melding
+    esp_err_t result = esp_now_send(ap_mac_addr, esp_now_data, data_size);
+    
+    if (result == ESP_OK) {
+        ESP_LOGD(TAG, "✅ K=0 ESP-NOW data sendt vellykket");
+    } else {
+        ESP_LOGE(TAG, "❌ K=0 ESP-NOW sending feilet: %s", esp_err_to_name(result));
+    }
+    
+    free(esp_now_data);
+}
 
 
 
@@ -1996,7 +2052,8 @@ static void check_socket()
                     if (adc_nr == 6)
                     {
                         nvs_update_offsets();
-                        publish_settings();
+                        // DEAKTIVERT: TCP publish_settings() - ikke lenger nødvendig med ren ESP-NOW
+                        // publish_settings();
                     }
                 }
                 // else if (strncmp(command, "time", 4) == 0)
@@ -2045,7 +2102,8 @@ static void check_socket()
                         enabled[sensor_nr] = is_enabled;
                         led_set_simple(sensor_nr, 0);
                         nvs_update_offsets();
-                        publish_settings();    
+                        // DEAKTIVERT: TCP publish_settings() - ikke lenger nødvendig med ren ESP-NOW
+                        // publish_settings();    
                     }
                 }
                 else if (strncmp(command, "power", 5) == 0)
@@ -2562,7 +2620,6 @@ void app_main(void)
 
 
         curr_broken = false;
-        bool all_sensors_broken = true;
         int active_sensors = 0;
         
         // Les sensorverdier og oppdater sensor_break-tilstand
@@ -2583,11 +2640,8 @@ void app_main(void)
                     sensor_break[i] = false;
                 }
                 
-                // Oppdater tellere for all_sensors_broken sjekk
+                // Oppdater tellere
                 active_sensors++;
-                if (!sensor_break[i]) {
-                    all_sensors_broken = false;
-                }
             }
         }
 
@@ -2653,22 +2707,32 @@ void app_main(void)
             }
         }
 
-        // Send sensor data til serveren kun hvis vi ikke er i rødblink-modus
+
+        // // Send sensor data til serveren kun hvis vi ikke er i rødblink-modus
         // if (!blink_mode && current_status != STATUS_ERROR_SENSORS_BLOCKED) {
-        //     publish_sensor();
+        //     // Reduser frekvens fra 10ms til 50ms (5x reduksjon, ikke 10x)
+        //     static uint32_t last_publish = 0;
+        //     uint32_t now = esp_timer_get_time() / 1000;
+        //     //if (now - last_publish >= 50) {  // 50ms = 20Hz i stedet for 100Hz
+        //     if (now - last_publish >= 200) {  // 50ms = 20Hz i stedet for 100Hz
+        //         publish_sensor();
+        //         last_publish = now;
+        //     }
         // }
 
-                // Send sensor data til serveren kun hvis vi ikke er i rødblink-modus
-        if (!blink_mode && current_status != STATUS_ERROR_SENSORS_BLOCKED) {
-            // Reduser frekvens fra 10ms til 50ms (5x reduksjon, ikke 10x)
-            static uint32_t last_publish = 0;
-            uint32_t now = esp_timer_get_time() / 1000;
-            //if (now - last_publish >= 50) {  // 50ms = 20Hz i stedet for 100Hz
-            if (now - last_publish >= 200) {  // 50ms = 20Hz i stedet for 100Hz
-                publish_sensor();
-                last_publish = now;
+
+
+        // Send K=0 ADC-data via ESP-NOW (kontinuerlig, 1 gang per sekund)
+        if (!blink_mode && current_status != STATUS_ERROR_SENSORS_BLOCKED && esp_now_peer_added) {
+            static uint32_t last_espnow_k0_send = 0;
+            uint32_t now_k0 = esp_timer_get_time() / 1000;
+            if (now_k0 - last_espnow_k0_send >= 1000) {  // 1 sekund mellom hver K=0 sending
+                send_k0_adc_data_esp_now();
+                last_espnow_k0_send = now_k0;
             }
         }
+
+
 
 
 
@@ -2908,7 +2972,8 @@ void app_main(void)
                 }
                 
                 nvs_update_offsets();
-                publish_settings();
+                // DEAKTIVERT: TCP publish_settings() - ikke lenger nødvendig med ren ESP-NOW
+                // publish_settings();
                 calibration_completed = true;
 
                 // Gjenopprett PWM-signaler for alle sensorer med deres optimale offset
@@ -2975,15 +3040,15 @@ void app_main(void)
                     
                     // Send event hvis denne sensoren har endret tilstand
                     if (current_sensor_break != prev_sensor_break[i]) {
-                        // Send via TCP (eksisterende funksjonalitet)
-                        publish_break(i, current_sensor_break ? 1 : 0);
+                        // DEAKTIVERT: TCP publish_break() - bruker kun ESP-NOW K=1 nå
+                        // publish_break(i, current_sensor_break ? 1 : 0);
                         
                         // Send via ESP-NOW for rask passeringsdeteksjon
                         send_sensor_break_esp_now(i, current_sensor_break ? 1 : 0);
                         
                         prev_sensor_break[i] = current_sensor_break;
                         
-                        ESP_LOGI(TAG, "🔄 Sensor %d endret tilstand: %s (ADC: %d, limit: %d) - Sendt via TCP og ESP-NOW", 
+                        ESP_LOGI(TAG, "🔄 Sensor %d endret tilstand: %s (ADC: %d, limit: %d) - Sendt via ESP-NOW", 
                                 i, current_sensor_break ? "BRUTT" : "OK", 
                                 adc_raw[0][i], break_limit[i]);
                     }

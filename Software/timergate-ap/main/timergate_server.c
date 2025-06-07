@@ -846,11 +846,11 @@ void tcp_client_handler(void *arg) {
                                   &mac_bytes[0], &mac_bytes[1], &mac_bytes[2],
                                   &mac_bytes[3], &mac_bytes[4], &mac_bytes[5]) == 6) {
                             
-                            int8_t tcp_rssi = get_tcp_client_rssi(sock);
-                            update_signal_quality(mac_bytes, tcp_rssi);
+                            // int8_t tcp_rssi = get_tcp_client_rssi(sock);
+                            // update_signal_quality(mac_bytes, tcp_rssi);
                             
-                            ESP_LOGD(TAG, "📶 TCP Signal oppdatert for %s - RSSI: %d dBm", 
-                                    tcp_poles[pole_idx].mac, tcp_rssi);
+                            // ESP_LOGD(TAG, "📶 TCP Signal oppdatert for %s - RSSI: %d dBm", 
+                            //         tcp_poles[pole_idx].mac, tcp_rssi);
                         }
                     }
 
@@ -4186,7 +4186,7 @@ void esp_now_recv_cb(const esp_now_recv_info_t *recv_info, const uint8_t *data, 
 
     ESP_LOGI(TAG, "🔍 ESP-NOW: Oppdaterer signal med RSSI %d for %02x:%02x:%02x:%02x:%02x:%02x", 
             rssi, mac_addr[0], mac_addr[1], mac_addr[2], mac_addr[3], mac_addr[4], mac_addr[5]);
-            
+
     update_signal_quality(mac_addr, rssi);
     ESP_LOGI(TAG, "📶 RSSI: %d dBm", rssi);
 
