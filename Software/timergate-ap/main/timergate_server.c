@@ -4261,24 +4261,51 @@ void esp_now_recv_cb(const esp_now_recv_info_t *recv_info, const uint8_t *data, 
 
     ESP_LOGI(TAG, "🔍 FLYT DEBUG: Ikke pole announce, fortsetter til legacy parsing");
     
-    // FIKSET: Hopp over System ID-sjekk for korte meldinger (legacy format)
+
+// FIKSET: Hopp over System ID-sjekk for korte meldinger (legacy format)
+    ESP_LOGI(TAG, "🔍 SYSTEM ID DEBUG: len=%d, sizeof(timergate_msg_t)=%d", 
+             len, sizeof(timergate_msg_t));
+    
     if (len <= 20) {
-        ESP_LOGI(TAG, "DEBUG: Kort melding (len=%d) - bruker legacy format", len);
+        ESP_LOGI(TAG, "🔍 SYSTEM ID DEBUG: Kort melding - hopper System ID sjekk");
         // Hopp direkte til legacy parsing
     } else {
-        // System ID-sjekk kun for lange meldinger
-        if (len >= sizeof(timergate_msg_t)) {
-            timergate_msg_t *msg = (timergate_msg_t *)data;
-            if (!is_message_for_us(msg)) {
-                ESP_LOGD(TAG, "ESP-NOW melding ikke for vårt system");
-                return;
+        ESP_LOGI(TAG, "🔍 SYSTEM ID DEBUG: Lang melding - men K=0/K=1 skal ikke ha System ID sjekk");
+        ESP_LOGI(TAG, "🔍 SYSTEM ID DEBUG: Data bytes: [%02x %02x %02x %02x] - første byte (K) = %d", 
+                 data[0], data[1], data[2], data[3], data[0]);
+        
+        // Sjekk første byte (K-verdi) for å avgjøre om dette er sensordata
+        uint8_t k_value = data[0];
+        if (k_value == 0 || k_value == 1) {
+            ESP_LOGI(TAG, "✅ SYSTEM ID DEBUG: K=%d sensordata - hopper System ID sjekk", k_value);
+            // Hopp direkte til sensordata-parsing for K=0 og K=1
+        } else {
+            ESP_LOGI(TAG, "🔍 SYSTEM ID DEBUG: K=%d - sjekker System ID", k_value);
+            // System ID-sjekk kun for kommando/discovery-meldinger
+            if (len >= sizeof(timergate_msg_t)) {
+                timergate_msg_t *msg = (timergate_msg_t *)data;
+                ESP_LOGI(TAG, "🔍 SYSTEM ID DEBUG: msg->system_id=%08X, current_system_id=%08X", 
+                         msg->system_id, current_system_id);
+                
+                if (!is_message_for_us(msg)) {
+                    ESP_LOGI(TAG, "❌ SYSTEM ID DEBUG: Melding IKKE for vårt system - returnerer");
+                    return;
+                } else {
+                    ESP_LOGI(TAG, "✅ SYSTEM ID DEBUG: Melding ER for vårt system - fortsetter");
+                }
+                // Hopp over System ID header
+                data += sizeof(uint32_t);
+                len -= sizeof(uint32_t);
             }
-            // Hopp over System ID header
-            data += sizeof(uint32_t);
-            len -= sizeof(uint32_t);
         }
     }
-    
+
+
+
+
+
+    ESP_LOGI(TAG, "🔍 FLYT DEBUG: Kom gjennom System ID sjekk, fortsetter til mutex");
+
     // NORMAL SENSORDATA-PROSESSERING (for alle K=0,1,2,3,4 meldinger)
     xSemaphoreTake(pole_data_mutex, portMAX_DELAY);
     
