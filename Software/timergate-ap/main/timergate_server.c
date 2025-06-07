@@ -4180,8 +4180,28 @@ void esp_now_recv_cb(const esp_now_recv_info_t *recv_info, const uint8_t *data, 
     ESP_LOGI(TAG, "ESP-NOW data mottatt fra %02x:%02x:%02x:%02x:%02x:%02x, len=%d", 
              mac_addr[0], mac_addr[1], mac_addr[2], mac_addr[3], mac_addr[4], mac_addr[5], len);
 
+
+    // Forbedret logging for ESP-NOW statistikk
+        static uint32_t total_esp_now_packets = 0;
+        static uint32_t k0_packet_count = 0;
+        static uint32_t k1_packet_count = 0;
+        total_esp_now_packets++;
+        
+        // Få RSSI fra ESP-NOW info
+        int8_t rssi = recv_info->rx_ctrl ? recv_info->rx_ctrl->rssi : -70;
+        
+        ESP_LOGI(TAG, "📡 ESP-NOW #%u: len=%d bytes, RSSI=%d dBm fra %02x:%02x:%02x:%02x:%02x:%02x", 
+                total_esp_now_packets, len, rssi,
+                mac_addr[0], mac_addr[1], mac_addr[2], mac_addr[3], mac_addr[4], mac_addr[5]);
+
+
+
+
+
+
+
     // Få RSSI fra ESP-NOW info og oppdater signal tracking
-    int8_t rssi = recv_info->rx_ctrl ? recv_info->rx_ctrl->rssi : -70;
+    // (rssi defineres senere i funksjonen)
 
 
     ESP_LOGI(TAG, "🔍 ESP-NOW: Oppdaterer signal med RSSI %d for %02x:%02x:%02x:%02x:%02x:%02x", 
@@ -4190,6 +4210,10 @@ void esp_now_recv_cb(const esp_now_recv_info_t *recv_info, const uint8_t *data, 
     update_signal_quality(mac_addr, rssi);
     ESP_LOGI(TAG, "📶 RSSI: %d dBm", rssi);
 
+
+    // Bekreft at signal tracking fungerer for kontinuerlige meldinger
+    ESP_LOGI(TAG, "✅ Signal tracking oppdatert for MAC %02x:%02x:%02x:%02x:%02x:%02x med RSSI %d dBm", 
+             mac_addr[0], mac_addr[1], mac_addr[2], mac_addr[3], mac_addr[4], mac_addr[5], rssi);
 
     
     // DEBUG: Vis første 10 bytes av meldingen
@@ -4200,12 +4224,24 @@ void esp_now_recv_cb(const esp_now_recv_info_t *recv_info, const uint8_t *data, 
     // DEBUG: Sjekk første byte (K-verdi)
     ESP_LOGI(TAG, "DEBUG: K-verdi = %d (0x%02x)", data[0], data[0]);
 
+    ESP_LOGI(TAG, "🔍 FLYT DEBUG: len=%d, behandler legacy/system ID sjekk", len);
+
+
+
+
     
     // Sjekk at lengden er riktig for vår struktur
     if (len < 10) {
         ESP_LOGE(TAG, "Mottok data med feil lengde: %d (forventet minst 10 bytes)", len);
         return;
     }
+
+ 
+
+    ESP_LOGI(TAG, "🔍 FLYT DEBUG: Sjekker om pole announce, len=%d vs sizeof(pole_announce_t)=%d", 
+             len, sizeof(pole_announce_t));
+
+
     
     // FIKSET: Sjekk om dette er en pole announce-melding FØRST
     if (len >= sizeof(pole_announce_t)) {
@@ -4222,6 +4258,8 @@ void esp_now_recv_cb(const esp_now_recv_info_t *recv_info, const uint8_t *data, 
             return;  // VIKTIG: Return tidlig kun for announce-meldinger
         }
     }
+
+    ESP_LOGI(TAG, "🔍 FLYT DEBUG: Ikke pole announce, fortsetter til legacy parsing");
     
     // FIKSET: Hopp over System ID-sjekk for korte meldinger (legacy format)
     if (len <= 20) {
@@ -4262,10 +4300,27 @@ void esp_now_recv_cb(const esp_now_recv_info_t *recv_info, const uint8_t *data, 
         xSemaphoreGive(pole_data_mutex);
         return;
     }
+
+    ESP_LOGI(TAG, "🔍 FLYT DEBUG: Starter parse data-seksjon");
     
     // Parse data
     uint8_t k = data[0];
     pole_data[pole_idx].k = k;
+
+
+// Detaljert debugging for K=0 behandling
+    if (k == 0) {
+        int required_len = 9 + sizeof(int32_t) * 14;
+        ESP_LOGI(TAG, "🔍 K=0 DEBUG: len=%d, required_len=%d, sizeof(int32_t)=%d", 
+                 len, required_len, sizeof(int32_t));
+        
+        if (len >= required_len) {
+            ESP_LOGI(TAG, "✅ K=0 lengdesjekk bestått - behandler ADC-data");
+        } else {
+            ESP_LOGI(TAG, "❌ K=0 lengdesjekk feilet - len=%d < required=%d", len, required_len);
+        }
+    }
+
     
     // Les timestamp
     memcpy(&pole_data[pole_idx].t, &data[1], sizeof(uint32_t));
@@ -4288,6 +4343,22 @@ void esp_now_recv_cb(const esp_now_recv_info_t *recv_info, const uint8_t *data, 
     if (k == 0 && len >= 9 + sizeof(int32_t) * 14) {  // ADC verdier
         memcpy(pole_data[pole_idx].v, &data[9], sizeof(int32_t) * 7);
         memcpy(pole_data[pole_idx].b, &data[9 + sizeof(int32_t) * 7], sizeof(int32_t) * 7);
+
+
+        k0_packet_count++;
+        ESP_LOGI(TAG, "📊 K=0 ADC-DATA #%u: RSSI=%d dBm, timestamp=%u.%06u", 
+                k0_packet_count, rssi, pole_data[pole_idx].t, pole_data[pole_idx].u);
+
+
+        ESP_LOGI(TAG, "📊 K=0 ADC sample: [%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 "]", 
+                 pole_data[pole_idx].v[0], pole_data[pole_idx].v[1], pole_data[pole_idx].v[2],
+                 pole_data[pole_idx].v[3], pole_data[pole_idx].v[4], pole_data[pole_idx].v[5], 
+                 pole_data[pole_idx].v[6]);
+        ESP_LOGI(TAG, "📊 K=0 WebSocket melding sendt til %d klienter", MAX_WS_CLIENTS);        
+
+
+
+
         
         ESP_LOGI(TAG, "ADC verdier: [%" PRId32 ", %" PRId32 ", %" PRId32 ", %" PRId32 ", %" PRId32 ", %" PRId32 ", %" PRId32 "]", 
                 pole_data[pole_idx].v[0], pole_data[pole_idx].v[1], pole_data[pole_idx].v[2],
@@ -4331,6 +4402,13 @@ void esp_now_recv_cb(const esp_now_recv_info_t *recv_info, const uint8_t *data, 
         int32_t break_value;
         memcpy(&break_value, &data[9], sizeof(int32_t));
         int32_t sensor_id = break_value; // Eller hvordan sensor_id faktisk bestemmes
+
+
+        k1_packet_count++;
+        ESP_LOGI(TAG, "🚨 K=1 SENSORBRUDD #%u: RSSI=%d dBm, sensor=%d, timestamp=%u.%06u", 
+                k1_packet_count, rssi, sensor_id, pole_data[pole_idx].t, pole_data[pole_idx].u);
+
+
         
         ESP_LOGI(TAG, "🚨 SENSORBRUDD MOTTATT: K=1, sensor_id=%d, break_value=%" PRId32, sensor_id, break_value);
 
@@ -5125,7 +5203,6 @@ void clean_old_signal_tracking(void *pvParameters) {
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(5000)); // Kjør hver 5. sekund
         
-        time_t now = time(NULL);
         xSemaphoreTake(signal_mutex, portMAX_DELAY);
         
         int valid_count = 0;
