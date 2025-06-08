@@ -310,10 +310,6 @@ static void pwm_init(int timer_num, int frequency, int channel, int gpio, int hp
 // Modifisert LED sett funksjon med forbedret fargekontroll
 void led_set(uint8_t led_nr, uint8_t value, uint8_t r, uint8_t g, uint8_t b)
 {
-    // Fjern denne sjekken som kan forhindre oppdatering
-    // if (led_val[led_nr] == value)
-    //    return;
-
     if (value)
     {
         led_strip_set_pixel(led_strip, led_nr, r, g, b);
@@ -368,11 +364,6 @@ void handle_blink_mode()
         all_sensors_broken = true;
     }
     
-    // LEGG TIL LOGGMELDINGEN HER, rett etter koden ovenfor
-    // if (broken_sensors >= min_broken_sensors_for_alert) {
-    //     ESP_LOGI(TAG, "!!!SENSOR ALARM!!! %d av %d sensorer er brutt (krav: %d) - all_sensors_broken=%d", 
-    //              broken_sensors, active_sensors, min_broken_sensors_for_alert, all_sensors_broken);
-    // }
 
     if (!blink_mode) {
         // Ikke i blinkemodus ennå
@@ -1018,9 +1009,11 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t e
                 vTaskDelay(100 / portTICK_PERIOD_MS);
             }
             
-            // Endre status til SERVER_CONNECTING
+            // Med ren ESP-NOW går vi direkte til READY etter WiFi-tilkobling
             if (current_status == STATUS_ERROR_WIFI || current_status == STATUS_WIFI_CONNECTING) {
-                set_system_status(STATUS_SERVER_CONNECTING);
+                // Kort pause for å vise vellykket WiFi-tilkobling
+                vTaskDelay(500 / portTICK_PERIOD_MS);
+                set_system_status(STATUS_READY);
             }
         }
     }
@@ -1082,24 +1075,22 @@ static void tcp_close()
 
 static void tcp_connect()
 {
-    // Vis STATUS_SERVER_CONNECTING lenger før vi forsøker tilkobling
-    vTaskDelay(500 / portTICK_PERIOD_MS);
+    // Med ESP-NOW er TCP valgfritt, så ikke vis server connecting status
+    // vTaskDelay(500 / portTICK_PERIOD_MS); // Fjernet
 
-    ESP_LOGI(TAG, "Socket connecting to %s:%d", host_ip, PORT);
+    ESP_LOGI(TAG, "Socket connecting to %s:%d (valgfritt med ESP-NOW)", host_ip, PORT);
     int err = connect(sock, (struct sockaddr *)&dest_addr, sizeof(dest_addr));
     if (err != 0)
     {
-        ESP_LOGE(TAG, "Socket unable to connect: errno %d", errno);
-        set_system_status(STATUS_ERROR_SERVER);
+        ESP_LOGW(TAG, "TCP tilkobling feilet: errno %d (OK med ESP-NOW)", errno);
+        // IKKE sett ERROR_SERVER status - ESP-NOW fungerer uavhengig
+        connected = false;
         return;
     }
     
-    ESP_LOGI(TAG, "Successfully connected to server");
+    ESP_LOGI(TAG, "TCP tilkobling vellykket (ekstra funksjonalitet)");
     connected = true;
     
-    // Vent lenger før status endres til READY
-    vTaskDelay(500 / portTICK_PERIOD_MS);
-    set_system_status(STATUS_READY);
 
     // Send vår MAC-adresse til serveren for ESP-NOW peer-registrering
     uint8_t mac[6];
@@ -1121,52 +1112,6 @@ static void tcp_connect()
 
 
 }
-
-// static void add_to_queue(char *msg)
-// {
-//     strncpy(cmd, msg, strlen(msg) + 1);
-//     xQueueOverwrite(xQueue, &cmd);
-// }
-
-// static void publish_sensor()
-// {
-//     char event[140];
-//     char adc_vals_s[40];
-//     char broken_s[40];
-
-//     sprintf(adc_vals_s, "[%4d,%4d,%4d,%4d,%4d,%4d,%4d]",
-//             adc_raw[0][0],
-//             adc_raw[0][1],
-//             adc_raw[0][2],
-//             adc_raw[0][3],
-//             adc_raw[0][4],
-//             adc_raw[0][5],
-//             adc_raw[0][6]);
-//     sprintf(broken_s, "[%1d,%1d,%1d,%1d,%1d,%1d,%1d]",
-//             sensor_break[0],
-//             sensor_break[1],
-//             sensor_break[2],
-//             sensor_break[3],
-//             sensor_break[4],
-//             sensor_break[5],
-//             sensor_break[6]);
-//     sprintf(event, "{\"K\":0,\"M\":\"%s\",\"V\":%s,\"B\":%s}\n", mac_addr, adc_vals_s, broken_s);
-//     add_to_queue(event);
-//     //ESP_LOGI(TAG, "%s", adc_vals_s); //MIDLERTIDIG for å ikke drukne loggen
-// }
-
-
-// static void publish_break(int sensor_id, int broken)
-// {
-//     char *event = malloc(140);
-//     struct timeval tv_now;
-//     gettimeofday(&tv_now, NULL);
-//     ESP_LOGI(TAG, "Break state change sensor %d: %d @ %lld", sensor_id, broken, tv_now.tv_sec);
-//     sprintf(event, "{\"K\":1,\"M\":\"%s\",\"S\":%d,\"B\":%d,\"T\":%lld, \"U\":%ld}\n", 
-//             mac_addr, sensor_id, broken, tv_now.tv_sec, tv_now.tv_usec);
-//     xQueueSendToBack(xQueueBreak, &event, portMAX_DELAY);
-// }
-
 
 
 static void publish_settings()
@@ -2056,12 +2001,7 @@ static void check_socket()
                         // publish_settings();
                     }
                 }
-                // else if (strncmp(command, "time", 4) == 0)
-                // {
-                //     timestamp = strtol(command + 5, NULL, 10);
-                //     ESP_LOGI(TAG, "Got timestamp: %lld", timestamp);
-                //     example_espnow_init();
-                // }
+
 
                 else if (strncmp(command, "time", 4) == 0)
                 {
@@ -2138,7 +2078,6 @@ static void check_socket()
                         ESP_LOGI(TAG, "Går inn i deep sleep modus");
                         vTaskDelay(500 / portTICK_PERIOD_MS);
                         
-                        // Sett deep sleep med timer wakeup (f.eks. hver 30 sekund for å sjekke om vi skal våkne)
                         //esp_sleep_enable_timer_wakeup(30 * 1000000); // 30 sekunder i mikrosekunder, ønsker ikke automatisk opvåking fra deepsleep, må gjøres fysisk
                         esp_deep_sleep_start();
                     }
@@ -2334,9 +2273,11 @@ static void tcp_client_task(void *pvParameters)
             esp_err_t wifi_status = esp_wifi_sta_get_ap_info(&ap_info);
             
             if (wifi_status == ESP_OK) {
-                // WiFi er tilkoblet, sett server connecting
-                set_system_status(STATUS_SERVER_CONNECTING);
-                tcp_connect();
+                // Med ESP-NOW trenger vi ikke TCP-server, gå direkte til READY
+                if (current_status != STATUS_READY) {
+                    set_system_status(STATUS_READY);
+                }
+                tcp_connect(); // Beholdes for bakoverkompatibilitet hvis ønsket
             } else {
                 // WiFi er ikke tilkoblet, sett WiFi error
                 set_system_status(STATUS_ERROR_WIFI);
@@ -2382,28 +2323,10 @@ static void wifi_init()
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
 
-    // Registrer event-handlere
-    ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &wifi_event_handler, NULL));
-    ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &wifi_event_handler, NULL));
-    
-    // Sett status til WiFi connecting før vi starter tilkobling
+    // Sett status til WiFi connecting
     set_system_status(STATUS_WIFI_CONNECTING);
 
-    // Gi tid til å vise WiFi-tilkoblingsstatus, men ikke for lenge
-    vTaskDelay(500 / portTICK_PERIOD_MS);
-    
-    // Initialiser WiFi med optimaliserte innstillinger
-    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-    cfg.nvs_enable = 1;
-    cfg.nano_enable = 0;
-    cfg.rx_ba_win = 32;   // Redusere buffer for raskere håndtering
-    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
-    
-    // Deaktiver strømsparing for raskere tilkobling
-    ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
-
-    
-    // Bruk example_connect
+    // Bruk example_connect uten vår egen event handler (unngår konflikt)
     esp_err_t ret = example_connect();
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "WiFi tilkobling feilet med kode %d", ret);
@@ -2411,9 +2334,12 @@ static void wifi_init()
         return;
     }
     
-    // Status blir oppdatert i event handler når tilkoblingen er ferdig
+    ESP_LOGI(TAG, "WiFi tilkoblet vellykket via example_connect");
+    wifi_connected = true;
+    
+    // Gå direkte til READY etter vellykket WiFi-tilkobling
+    set_system_status(STATUS_READY);
 }
-
 
 
 static void pwm_setup()
@@ -2461,13 +2387,6 @@ void app_main(void)
     bool should_stay_awake = false;
 
     switch(wakeup_reason) {
-        // case ESP_SLEEP_WAKEUP_TIMER:
-        //     ESP_LOGI(TAG, "Våknet fra deep sleep på grunn av timer");
-            
-        //     // Prøv å koble til nettverk for å sjekke om det er en "power on"-kommando
-        //     // Dette er en forenklet tilnærming - i praksis kan vi implementere mer sofistikert logikk
-        //     should_stay_awake = true; // For nå, anta at vi skal forbli våkne
-        //     break;
             
         case ESP_SLEEP_WAKEUP_UNDEFINED:
         default:
@@ -2485,18 +2404,9 @@ void app_main(void)
 
 
 
-
     pwm_setup();
-    // for (int i = 0; i < NUM_SENSORS; i++) {
-    //     //ledc_set_duty(LEDC_MODE, rcv_channels[i], LEDC_DUTY);
-    //     ledc_update_duty(LEDC_MODE, rcv_channels[i]);
-    // }
-
-
-
 
     bool system_busy = false; 
-
 
     led_strip_new_rmt_device(&strip_config, &rmt_config, &led_strip);
 
@@ -2576,15 +2486,12 @@ void app_main(void)
         calibration_completed = false;
         set_system_status(STATUS_CALIBRATING);
     } else {
-        ESP_LOGW(TAG, "Kan ikke starte kalibrering: WiFi %s, Server %s", 
-                wifi_connected ? "tilkoblet" : "frakoblet",
-                connected ? "tilkoblet" : "frakoblet");
+        ESP_LOGW(TAG, "Kan ikke starte kalibrering: WiFi %s", 
+                wifi_connected ? "tilkoblet" : "frakoblet");
                 
-        // Sett riktig tilstand basert på tilkoblingsstatus
+        // Sett riktig tilstand basert på WiFi-status
         if (!wifi_connected) {
             set_system_status(STATUS_ERROR_WIFI);
-        } else if (!connected) {
-            set_system_status(STATUS_ERROR_SERVER);
         }
     }
 
@@ -2707,21 +2614,6 @@ void app_main(void)
             }
         }
 
-
-        // // Send sensor data til serveren kun hvis vi ikke er i rødblink-modus
-        // if (!blink_mode && current_status != STATUS_ERROR_SENSORS_BLOCKED) {
-        //     // Reduser frekvens fra 10ms til 50ms (5x reduksjon, ikke 10x)
-        //     static uint32_t last_publish = 0;
-        //     uint32_t now = esp_timer_get_time() / 1000;
-        //     //if (now - last_publish >= 50) {  // 50ms = 20Hz i stedet for 100Hz
-        //     if (now - last_publish >= 200) {  // 50ms = 20Hz i stedet for 100Hz
-        //         publish_sensor();
-        //         last_publish = now;
-        //     }
-        // }
-
-
-
         // Send K=0 ADC-data via ESP-NOW (kontinuerlig, 1 gang per sekund)
         if (!blink_mode && current_status != STATUS_ERROR_SENSORS_BLOCKED && esp_now_peer_added) {
             static uint32_t last_espnow_k0_send = 0;
@@ -2760,14 +2652,6 @@ void app_main(void)
         }
 
 
-
-
-        // I hovedløkken, rett før sjekk av highpoint_search
-        // Legg til jevnlig logging av systemtilstand
-        //if (esp_timer_get_time() / 1000000 % 5 == 0) { // Logg hvert 5. sekund
-            //ESP_LOGI(TAG, "Systemstatus: %d, Connected: %d, Auto Calibration Started: %d, Ready Time: %lu", 
-            //        current_status, connected, auto_calibration_started, ready_start_time);
-        //}
 
         // I koden for å starte automatisk kalibrering
         if (current_status == STATUS_READY && !auto_calibration_started && connected) {
@@ -2836,14 +2720,6 @@ void app_main(void)
             // Sett current_led til den sensoren som for øyeblikket kalibreres
             led_set(highpoint_channel, 1, 255, 0, 255); // Sett aktiv LED til lilla
             
-            // Deaktiver andre sensorer midlertidig for å redusere interferens
-            // for (int i = 0; i < NUM_SENSORS; i++) {
-            //     if (i != highpoint_channel && enabled[i]) {
-            //         // Sett PWM til 0 for alle andre sensorer
-            //         ledc_set_duty(LEDC_MODE, rcv_channels[i], 0);
-            //         ledc_update_duty(LEDC_MODE, rcv_channels[i]);
-            //     }
-            // }
             
             // Gi tid til å stabilisere
             vTaskDelay(5 / portTICK_PERIOD_MS);
@@ -2976,28 +2852,12 @@ void app_main(void)
                 // publish_settings();
                 calibration_completed = true;
 
-                // Gjenopprett PWM-signaler for alle sensorer med deres optimale offset
-                // for (int i = 0; i < NUM_SENSORS; i++) {
-                //     if (enabled[i]) {
-                //         ledc_set_duty_with_hpoint(LEDC_MODE, rcv_channels[i], LEDC_DUTY, offsets[i]);
-                //         ledc_update_duty(LEDC_MODE, rcv_channels[i]);
-                //         ESP_LOGI(TAG, "Gjenopprettet PWM for sensor %d med offset %d", i, offsets[i]);
-                //     }
-                // }
 
 
                 auto_calibration_started = true;  // Forhindre at automatisk kalibrering starter igjen
                 ESP_LOGI(TAG, "Kalibrering fullført!");
 
-                // Gjenopprett PWM-signaler for alle sensorer med deres optimale offset
-                // for (int i = 0; i < NUM_SENSORS; i++) {
-                //     if (enabled[i]) {
-                //         ledc_set_duty_with_hpoint(LEDC_MODE, rcv_channels[i], LEDC_DUTY, offsets[i]);
-                //         ledc_update_duty(LEDC_MODE, rcv_channels[i]);
-                //         ESP_LOGI(TAG, "Gjenopprettet PWM for sensor %d med offset %d", i, offsets[i]);
-                //     }
-                // }
-
+  
                 // Punkt 4 - Deaktiver sensor-blokkeringsfeil midlertidig
                 all_sensors_broken_start_time = 0;
                 blink_mode = false;  // Sikre at blinkemodus er deaktivert
