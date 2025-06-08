@@ -401,6 +401,7 @@ void update_signal_quality(const uint8_t *mac, int8_t rssi);
 int calculate_signal_quality(int8_t rssi, uint32_t packet_loss_percent);
 void init_signal_tracking(void);
 esp_err_t get_signal_quality_handler(httpd_req_t *req);
+esp_err_t system_status_handler(httpd_req_t *req);
 
 
 // Nye funksjonsdeklarasjoner for debounce-håndtering
@@ -811,14 +812,17 @@ void tcp_client_handler(void *arg) {
                             peer_info.ifidx = WIFI_IF_AP;
                             peer_info.encrypt = false;
                             
-                            esp_err_t peer_result = esp_now_add_peer(&peer_info);
-                            if (peer_result == ESP_OK) {
-                                ESP_LOGI(TAG, "✅ TCP-målestolpe registrert som ESP-NOW peer: %s", tcp_poles[pole_idx].mac);
-                            } else if (peer_result == ESP_ERR_ESPNOW_EXIST) {
-                                ESP_LOGI(TAG, "ℹ️ TCP-målestolpe allerede registrert som ESP-NOW peer: %s", tcp_poles[pole_idx].mac);
+                            // Sjekk først om peer allerede eksisterer
+                            if (!esp_now_is_peer_exist(mac_bytes)) {
+                                esp_err_t peer_result = esp_now_add_peer(&peer_info);
+                                if (peer_result == ESP_OK) {
+                                    ESP_LOGI(TAG, "✅ TCP-målestolpe registrert som ESP-NOW peer: %s", tcp_poles[pole_idx].mac);
+                                } else {
+                                    ESP_LOGE(TAG, "❌ Kunne ikke registrere TCP-målestolpe som ESP-NOW peer: %s (%s)", 
+                                            tcp_poles[pole_idx].mac, esp_err_to_name(peer_result));
+                                }
                             } else {
-                                ESP_LOGE(TAG, "❌ Kunne ikke registrere TCP-målestolpe som ESP-NOW peer: %s (%s)", 
-                                        tcp_poles[pole_idx].mac, esp_err_to_name(peer_result));
+                                ESP_LOGI(TAG, "ℹ️ TCP-målestolpe allerede registrert som ESP-NOW peer: %s", tcp_poles[pole_idx].mac);
                             }
                         }
                     }
@@ -1843,7 +1847,7 @@ esp_err_t get_signal_quality_handler(httpd_req_t *req) {
 
     
     // Bygg JSON-respons
-    char *response = malloc(2048);
+    char *response = malloc(1536);
     if (!response) {
         xSemaphoreGive(signal_mutex);
         httpd_resp_send_500(req);
@@ -2074,6 +2078,16 @@ void handle_pole_announce(const pole_announce_t *announce, int8_t rssi) {
     peer_info.ifidx = WIFI_IF_AP;  // AP interface
     peer_info.encrypt = false;
     
+    // Sjekk først om peer allerede eksisterer
+    bool peer_exists = esp_now_is_peer_exist(announce->mac);
+    if (peer_exists) {
+        ESP_LOGD(TAG, "ESP-NOW peer allerede registrert, hopper over");
+        xSemaphoreGive(discovery_mutex);
+        send_discovery_update_to_gui();
+        return;
+    }
+
+
     esp_err_t peer_result = esp_now_add_peer(&peer_info);
     if (peer_result == ESP_OK) {
         ESP_LOGI(TAG, "✅ Registrert målestolpe som ESP-NOW peer: %02x:%02x:%02x:%02x:%02x:%02x",
@@ -2091,6 +2105,15 @@ void handle_pole_announce(const pole_announce_t *announce, int8_t rssi) {
 // Funksjon for å legge til eller oppdatere oppdaget målestolpe
 void add_or_update_discovered_pole(const pole_announce_t *announce, int8_t rssi) {
     xSemaphoreTake(discovery_mutex, portMAX_DELAY);
+
+
+    // Valider at announce er for discovery (system_id skal være 0)
+    if (announce->system_id != 0x00000000) {
+        ESP_LOGW(TAG, "⚠️ Mottok announce med ugyldig system_id %08X (forventet 0x00000000)", 
+                 announce->system_id);
+        xSemaphoreGive(discovery_mutex);
+        return;
+    }
     
     // Sjekk om denne målestolpen allerede er oppdaget
     int existing_index = -1;
@@ -2235,7 +2258,7 @@ esp_err_t get_discovered_poles_handler(httpd_req_t *req) {
     xSemaphoreTake(discovery_mutex, portMAX_DELAY);
     
     // Bygg JSON-respons
-    char *response = malloc(2048);
+    char *response = malloc(1536);
     if (!response) {
         xSemaphoreGive(discovery_mutex);
         httpd_resp_send_500(req);
@@ -3270,6 +3293,21 @@ esp_err_t debug_handler(httpd_req_t *req) {
    xSemaphoreGive(tcp_poles_mutex);
 
 
+// System ID og ESP-NOW status
+   httpd_resp_sendstr_chunk(req, "\nSystem ID og ESP-NOW Status:\n");
+   
+   char system_info[200];
+   snprintf(system_info, sizeof(system_info), 
+            "  System ID: %08" PRIX32 "\n  Discovery aktiv: %s\n  Oppdagede målestolper: %d\n  Tilknyttede målestolper: %" PRId32 "\n",
+            current_system_id, 
+            discovery_active ? "Ja" : "Nei",
+            discovered_pole_count,
+            paired_pole_count);
+   httpd_resp_sendstr_chunk(req, system_info);
+
+
+
+
 
     // I debug_handler eller en annen diagnose-funksjon:
     ESP_LOGI(TAG, "Tilkoblede målestolper:");
@@ -3565,8 +3603,12 @@ void update_signal_quality(const uint8_t *mac, int8_t rssi) {
         sq->last_update = time(NULL);
         
 
-        ESP_LOGD(TAG, "📶 Signal oppdatert for %02x:%02x:%02x:%02x:%02x:%02x - RSSI: %d dBm (avg: %d)",
-                mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], rssi, sq->avg_rssi, sq->last_update);
+       // Logg kun hver 10. pakke for å redusere spam
+        if (sq->packets_received % 10 == 0) {
+            ESP_LOGI(TAG, "📶 Signal %02x:%02x:%02x:%02x:%02x:%02x - RSSI: %d dBm (avg: %d, pakker: %u)",
+                    mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], 
+                    rssi, sq->avg_rssi, sq->packets_received);
+        }
 
     }
     
@@ -4176,55 +4218,44 @@ void clean_old_passages(void *pvParameters) {
 void esp_now_recv_cb(const esp_now_recv_info_t *recv_info, const uint8_t *data, int len) {
     // Hent MAC-adressen fra recv_info
     const uint8_t *mac_addr = recv_info->src_addr;
+
+// Mål mottakstid for ytelsesanalyse
+    uint64_t receive_timestamp = esp_timer_get_time();
+
+
+
+
+
     
     ESP_LOGI(TAG, "ESP-NOW data mottatt fra %02x:%02x:%02x:%02x:%02x:%02x, len=%d", 
              mac_addr[0], mac_addr[1], mac_addr[2], mac_addr[3], mac_addr[4], mac_addr[5], len);
 
+    
+    // Få RSSI fra ESP-NOW info
+    int8_t rssi = recv_info->rx_ctrl ? recv_info->rx_ctrl->rssi : -70;
+    
 
-    // Forbedret logging for ESP-NOW statistikk
-        static uint32_t total_esp_now_packets = 0;
-        static uint32_t k0_packet_count = 0;
-        static uint32_t k1_packet_count = 0;
-        total_esp_now_packets++;
-        
-        // Få RSSI fra ESP-NOW info
-        int8_t rssi = recv_info->rx_ctrl ? recv_info->rx_ctrl->rssi : -70;
-        
-        ESP_LOGI(TAG, "📡 ESP-NOW #%u: len=%d bytes, RSSI=%d dBm fra %02x:%02x:%02x:%02x:%02x:%02x", 
-                total_esp_now_packets, len, rssi,
-                mac_addr[0], mac_addr[1], mac_addr[2], mac_addr[3], mac_addr[4], mac_addr[5]);
-
-
-
-
-
-
-
-    // Få RSSI fra ESP-NOW info og oppdater signal tracking
-    // (rssi defineres senere i funksjonen)
-
-
-    ESP_LOGI(TAG, "🔍 ESP-NOW: Oppdaterer signal med RSSI %d for %02x:%02x:%02x:%02x:%02x:%02x", 
-            rssi, mac_addr[0], mac_addr[1], mac_addr[2], mac_addr[3], mac_addr[4], mac_addr[5]);
+    // ESP_LOGI(TAG, "🔍 ESP-NOW: Oppdaterer signal med RSSI %d for %02x:%02x:%02x:%02x:%02x:%02x", 
+    //         rssi, mac_addr[0], mac_addr[1], mac_addr[2], mac_addr[3], mac_addr[4], mac_addr[5]);
 
     update_signal_quality(mac_addr, rssi);
     ESP_LOGI(TAG, "📶 RSSI: %d dBm", rssi);
 
 
-    // Bekreft at signal tracking fungerer for kontinuerlige meldinger
-    ESP_LOGI(TAG, "✅ Signal tracking oppdatert for MAC %02x:%02x:%02x:%02x:%02x:%02x med RSSI %d dBm", 
-             mac_addr[0], mac_addr[1], mac_addr[2], mac_addr[3], mac_addr[4], mac_addr[5], rssi);
+    // // Bekreft at signal tracking fungerer for kontinuerlige meldinger
+    // ESP_LOGI(TAG, "✅ Signal tracking oppdatert for MAC %02x:%02x:%02x:%02x:%02x:%02x med RSSI %d dBm", 
+    //          mac_addr[0], mac_addr[1], mac_addr[2], mac_addr[3], mac_addr[4], mac_addr[5], rssi);
 
     
-    // DEBUG: Vis første 10 bytes av meldingen
-    ESP_LOGI(TAG, "DEBUG: Data bytes: [%02x %02x %02x %02x %02x %02x %02x %02x %02x %02x]",
-             data[0], data[1], data[2], data[3], data[4], 
-             data[5], data[6], data[7], data[8], data[9]);
+    // // DEBUG: Vis første 10 bytes av meldingen
+    // ESP_LOGI(TAG, "DEBUG: Data bytes: [%02x %02x %02x %02x %02x %02x %02x %02x %02x %02x]",
+    //          data[0], data[1], data[2], data[3], data[4], 
+    //          data[5], data[6], data[7], data[8], data[9]);
     
-    // DEBUG: Sjekk første byte (K-verdi)
-    ESP_LOGI(TAG, "DEBUG: K-verdi = %d (0x%02x)", data[0], data[0]);
+    // // DEBUG: Sjekk første byte (K-verdi)
+    // ESP_LOGI(TAG, "DEBUG: K-verdi = %d (0x%02x)", data[0], data[0]);
 
-    ESP_LOGI(TAG, "🔍 FLYT DEBUG: len=%d, behandler legacy/system ID sjekk", len);
+    //ESP_LOGI(TAG, "🔍 FLYT DEBUG: len=%d, behandler legacy/system ID sjekk", len);
 
 
 
@@ -4238,8 +4269,8 @@ void esp_now_recv_cb(const esp_now_recv_info_t *recv_info, const uint8_t *data, 
 
  
 
-    ESP_LOGI(TAG, "🔍 FLYT DEBUG: Sjekker om pole announce, len=%d vs sizeof(pole_announce_t)=%d", 
-             len, sizeof(pole_announce_t));
+    //ESP_LOGI(TAG, "🔍 FLYT DEBUG: Sjekker om pole announce, len=%d vs sizeof(pole_announce_t)=%d", 
+             //len, sizeof(pole_announce_t));
 
 
     
@@ -4259,28 +4290,28 @@ void esp_now_recv_cb(const esp_now_recv_info_t *recv_info, const uint8_t *data, 
         }
     }
 
-    ESP_LOGI(TAG, "🔍 FLYT DEBUG: Ikke pole announce, fortsetter til legacy parsing");
+    //ESP_LOGI(TAG, "🔍 FLYT DEBUG: Ikke pole announce, fortsetter til legacy parsing");
     
 
 // FIKSET: Hopp over System ID-sjekk for korte meldinger (legacy format)
-    ESP_LOGI(TAG, "🔍 SYSTEM ID DEBUG: len=%d, sizeof(timergate_msg_t)=%d", 
-             len, sizeof(timergate_msg_t));
+    // ESP_LOGI(TAG, "🔍 SYSTEM ID DEBUG: len=%d, sizeof(timergate_msg_t)=%d", 
+    //          len, sizeof(timergate_msg_t));
     
     if (len <= 20) {
-        ESP_LOGI(TAG, "🔍 SYSTEM ID DEBUG: Kort melding - hopper System ID sjekk");
+        //ESP_LOGI(TAG, "🔍 SYSTEM ID DEBUG: Kort melding - hopper System ID sjekk");
         // Hopp direkte til legacy parsing
     } else {
-        ESP_LOGI(TAG, "🔍 SYSTEM ID DEBUG: Lang melding - men K=0/K=1 skal ikke ha System ID sjekk");
-        ESP_LOGI(TAG, "🔍 SYSTEM ID DEBUG: Data bytes: [%02x %02x %02x %02x] - første byte (K) = %d", 
-                 data[0], data[1], data[2], data[3], data[0]);
+        // ESP_LOGI(TAG, "🔍 SYSTEM ID DEBUG: Lang melding - men K=0/K=1 skal ikke ha System ID sjekk");
+        // ESP_LOGI(TAG, "🔍 SYSTEM ID DEBUG: Data bytes: [%02x %02x %02x %02x] - første byte (K) = %d", 
+        //          data[0], data[1], data[2], data[3], data[0]);
         
         // Sjekk første byte (K-verdi) for å avgjøre om dette er sensordata
         uint8_t k_value = data[0];
         if (k_value == 0 || k_value == 1) {
-            ESP_LOGI(TAG, "✅ SYSTEM ID DEBUG: K=%d sensordata - hopper System ID sjekk", k_value);
+            //ESP_LOGI(TAG, "✅ SYSTEM ID DEBUG: K=%d sensordata - hopper System ID sjekk", k_value);
             // Hopp direkte til sensordata-parsing for K=0 og K=1
         } else {
-            ESP_LOGI(TAG, "🔍 SYSTEM ID DEBUG: K=%d - sjekker System ID", k_value);
+            //ESP_LOGI(TAG, "🔍 SYSTEM ID DEBUG: K=%d - sjekker System ID", k_value);
             // System ID-sjekk kun for kommando/discovery-meldinger
             if (len >= sizeof(timergate_msg_t)) {
                 timergate_msg_t *msg = (timergate_msg_t *)data;
@@ -4288,10 +4319,10 @@ void esp_now_recv_cb(const esp_now_recv_info_t *recv_info, const uint8_t *data, 
                          msg->system_id, current_system_id);
                 
                 if (!is_message_for_us(msg)) {
-                    ESP_LOGI(TAG, "❌ SYSTEM ID DEBUG: Melding IKKE for vårt system - returnerer");
+                    //ESP_LOGI(TAG, "❌ SYSTEM ID DEBUG: Melding IKKE for vårt system - returnerer");
                     return;
                 } else {
-                    ESP_LOGI(TAG, "✅ SYSTEM ID DEBUG: Melding ER for vårt system - fortsetter");
+                    //ESP_LOGI(TAG, "✅ SYSTEM ID DEBUG: Melding ER for vårt system - fortsetter");
                 }
                 // Hopp over System ID header
                 data += sizeof(uint32_t);
@@ -4304,7 +4335,7 @@ void esp_now_recv_cb(const esp_now_recv_info_t *recv_info, const uint8_t *data, 
 
 
 
-    ESP_LOGI(TAG, "🔍 FLYT DEBUG: Kom gjennom System ID sjekk, fortsetter til mutex");
+    //ESP_LOGI(TAG, "🔍 FLYT DEBUG: Kom gjennom System ID sjekk, fortsetter til mutex");
 
     // NORMAL SENSORDATA-PROSESSERING (for alle K=0,1,2,3,4 meldinger)
     xSemaphoreTake(pole_data_mutex, portMAX_DELAY);
@@ -4328,25 +4359,25 @@ void esp_now_recv_cb(const esp_now_recv_info_t *recv_info, const uint8_t *data, 
         return;
     }
 
-    ESP_LOGI(TAG, "🔍 FLYT DEBUG: Starter parse data-seksjon");
+    //ESP_LOGI(TAG, "🔍 FLYT DEBUG: Starter parse data-seksjon");
     
     // Parse data
     uint8_t k = data[0];
     pole_data[pole_idx].k = k;
 
 
-// Detaljert debugging for K=0 behandling
-    if (k == 0) {
-        int required_len = 9 + sizeof(int32_t) * 14;
-        ESP_LOGI(TAG, "🔍 K=0 DEBUG: len=%d, required_len=%d, sizeof(int32_t)=%d", 
-                 len, required_len, sizeof(int32_t));
+// // Detaljert debugging for K=0 behandling
+//     if (k == 0) {
+//         int required_len = 9 + sizeof(int32_t) * 14;
+//         ESP_LOGI(TAG, "🔍 K=0 DEBUG: len=%d, required_len=%d, sizeof(int32_t)=%d", 
+//                  len, required_len, sizeof(int32_t));
         
-        if (len >= required_len) {
-            ESP_LOGI(TAG, "✅ K=0 lengdesjekk bestått - behandler ADC-data");
-        } else {
-            ESP_LOGI(TAG, "❌ K=0 lengdesjekk feilet - len=%d < required=%d", len, required_len);
-        }
-    }
+//         if (len >= required_len) {
+//             ESP_LOGI(TAG, "✅ K=0 lengdesjekk bestått - behandler ADC-data");
+//         } else {
+//             ESP_LOGI(TAG, "❌ K=0 lengdesjekk feilet - len=%d < required=%d", len, required_len);
+//         }
+//     }
 
     
     // Les timestamp
@@ -4372,16 +4403,16 @@ void esp_now_recv_cb(const esp_now_recv_info_t *recv_info, const uint8_t *data, 
         memcpy(pole_data[pole_idx].b, &data[9 + sizeof(int32_t) * 7], sizeof(int32_t) * 7);
 
 
-        k0_packet_count++;
-        ESP_LOGI(TAG, "📊 K=0 ADC-DATA #%u: RSSI=%d dBm, timestamp=%u.%06u", 
-                k0_packet_count, rssi, pole_data[pole_idx].t, pole_data[pole_idx].u);
+        // k0_packet_count++;
+        // ESP_LOGI(TAG, "📊 K=0 ADC-DATA #%u: RSSI=%d dBm, timestamp=%u.%06u", 
+        //         k0_packet_count, rssi, pole_data[pole_idx].t, pole_data[pole_idx].u);
 
 
-        ESP_LOGI(TAG, "📊 K=0 ADC sample: [%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 "]", 
-                 pole_data[pole_idx].v[0], pole_data[pole_idx].v[1], pole_data[pole_idx].v[2],
-                 pole_data[pole_idx].v[3], pole_data[pole_idx].v[4], pole_data[pole_idx].v[5], 
-                 pole_data[pole_idx].v[6]);
-        ESP_LOGI(TAG, "📊 K=0 WebSocket melding sendt til %d klienter", MAX_WS_CLIENTS);        
+        // ESP_LOGI(TAG, "📊 K=0 ADC sample: [%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 "]", 
+        //          pole_data[pole_idx].v[0], pole_data[pole_idx].v[1], pole_data[pole_idx].v[2],
+        //          pole_data[pole_idx].v[3], pole_data[pole_idx].v[4], pole_data[pole_idx].v[5], 
+        //          pole_data[pole_idx].v[6]);
+        // ESP_LOGI(TAG, "📊 K=0 WebSocket melding sendt til %d klienter", MAX_WS_CLIENTS);        
 
 
 
@@ -4398,7 +4429,7 @@ void esp_now_recv_cb(const esp_now_recv_info_t *recv_info, const uint8_t *data, 
                 mac_addr[0], mac_addr[1], mac_addr[2],
                 mac_addr[3], mac_addr[4], mac_addr[5]);
         
-        char ws_msg[512];
+        char ws_msg[400];
         sprintf(ws_msg, 
                 "{\"M\":\"%s\",\"K\":0,\"T\":%" PRIu32 ",\"U\":%" PRIu32 ",\"V\":[%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 "],\"B\":[%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 "]}",
                 mac_str, pole_data[pole_idx].t, pole_data[pole_idx].u,
@@ -4431,9 +4462,9 @@ void esp_now_recv_cb(const esp_now_recv_info_t *recv_info, const uint8_t *data, 
         int32_t sensor_id = break_value; // Eller hvordan sensor_id faktisk bestemmes
 
 
-        k1_packet_count++;
-        ESP_LOGI(TAG, "🚨 K=1 SENSORBRUDD #%u: RSSI=%d dBm, sensor=%d, timestamp=%u.%06u", 
-                k1_packet_count, rssi, sensor_id, pole_data[pole_idx].t, pole_data[pole_idx].u);
+        // k1_packet_count++;
+        // ESP_LOGI(TAG, "🚨 K=1 SENSORBRUDD #%u: RSSI=%d dBm, sensor=%d, timestamp=%u.%06u", 
+        //         k1_packet_count, rssi, sensor_id, pole_data[pole_idx].t, pole_data[pole_idx].u);
 
 
         
@@ -4449,7 +4480,17 @@ void esp_now_recv_cb(const esp_now_recv_info_t *recv_info, const uint8_t *data, 
         ESP_LOGI(TAG, "🎯 Kaller process_break_for_passage_detection for timer-funksjonalitet...");
         bool passage_detected = process_break_for_passage_detection(mac_addr, sensor_id, 
                                         pole_data[pole_idx].t, pole_data[pole_idx].u,     // Målestolpe-tid
-                                        server_time.tv_sec, server_time.tv_usec);         // Server-tid
+                                        server_time.tv_sec, server_time.tv_usec);  
+                                        
+        // Mål latenstid fra ESP-NOW mottak til timer-prosessering
+        uint64_t processing_time = esp_timer_get_time() - receive_timestamp;
+        if (processing_time > 5000) { // Logg kun hvis >5ms
+            ESP_LOGW(TAG, "⏱️ K=1 prosesseringstid: %llu μs", processing_time);
+        }                                
+                                        
+        
+                                        
+                                               // Server-tid
 
         if (passage_detected) {
             ESP_LOGI(TAG, "✅ PASSERING DETEKTERT - Timer skal starte!");
@@ -4470,7 +4511,7 @@ void esp_now_recv_cb(const esp_now_recv_info_t *recv_info, const uint8_t *data, 
                 mac_addr[0], mac_addr[1], mac_addr[2],
                 mac_addr[3], mac_addr[4], mac_addr[5]);
         
-        char ws_msg[512];
+        char ws_msg[450];
         sprintf(ws_msg, 
                 "{\"M\":\"%s\",\"K\":2,\"E\":[%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 "],\"O\":[%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 "],\"B\":[%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 "]}",
                 mac_str, 
@@ -4808,6 +4849,78 @@ esp_err_t set_debounce_time_handler(httpd_req_t *req) {
 }
 
 
+// Handler for å hente komplett systemstatus for produksjonsvalidering
+esp_err_t system_status_handler(httpd_req_t *req) {
+    ESP_LOGI(TAG, "system_status_handler called");
+    
+    // CORS headers
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    
+    if (req->method == HTTP_OPTIONS) {
+        httpd_resp_send(req, NULL, 0);
+        return ESP_OK;
+    }
+    
+    // Samle systemstatistikk
+    xSemaphoreTake(discovery_mutex, portMAX_DELAY);
+    xSemaphoreTake(paired_poles_mutex, portMAX_DELAY);
+    xSemaphoreTake(signal_mutex, portMAX_DELAY);
+    
+    char *response = malloc(1024);
+    if (!response) {
+        xSemaphoreGive(signal_mutex);
+        xSemaphoreGive(paired_poles_mutex);
+        xSemaphoreGive(discovery_mutex);
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+    
+    // Tell aktive ESP-NOW forbindelser
+    int active_signals = 0;
+    for (int i = 0; i < signal_tracking_count; i++) {
+        uint32_t packet_age_ms = esp_timer_get_time() / 1000 - signal_tracking[i].last_packet_time;
+        if (packet_age_ms < 30000) { // Aktiv hvis <30 sek siden siste pakke
+            active_signals++;
+        }
+    }
+    
+        sprintf(response, 
+        "{"
+        "\"status\":\"success\","
+        "\"system_id\":\"%08" PRIX32 "\","
+        "\"esp_now_active\":true,"
+        "\"tcp_connections\":%d,"
+        "\"discovered_poles\":%d,"
+        "\"paired_poles\":%" PRId32 ","
+        "\"active_esp_now_signals\":%d,"
+        "\"total_signal_entries\":%d,"
+        "\"discovery_active\":%s,"
+        "\"uptime_ms\":%llu,"
+        "\"free_heap\":%" PRIu32 ""
+        "}",
+        current_system_id,
+        0, // TCP er ikke lenger primær kommunikasjon
+        discovered_pole_count,
+        paired_pole_count,
+        active_signals,
+        signal_tracking_count,
+        discovery_active ? "true" : "false",
+        esp_timer_get_time() / 1000,
+        esp_get_free_heap_size()
+    );
+    
+    xSemaphoreGive(signal_mutex);
+    xSemaphoreGive(paired_poles_mutex);
+    xSemaphoreGive(discovery_mutex);
+    
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    httpd_resp_sendstr(req, response);
+    
+    free(response);
+    return ESP_OK;
+}
+
 
 
 httpd_handle_t start_webserver(void) {
@@ -5105,6 +5218,15 @@ httpd_handle_t start_webserver(void) {
         httpd_register_uri_handler(server_handle, &get_signal_quality);   
 
 
+    // System status API for produksjonsvalidering
+        httpd_uri_t system_status = {
+            .uri = "/api/v1/system/status",
+            .method = HTTP_GET,
+            .handler = system_status_handler,
+            .user_ctx = NULL
+        };
+        httpd_register_uri_handler(server_handle, &system_status);
+
 
         // All other URIs
         httpd_uri_t common = {
@@ -5206,8 +5328,8 @@ bool send_esp_now_command_to_pole(const uint8_t *mac, uint8_t cmd_type,
     sprintf(mac_str, "%02x:%02x:%02x:%02x:%02x:%02x", 
            mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
     
-    ESP_LOGI(TAG, "📡 Sender ESP-NOW kommando type %d til %s (System ID: %08X)", 
-             cmd_type, mac_str, current_system_id);
+    ESP_LOGI(TAG, "📡 Sender ESP-NOW kommando type %d til %s (System ID: %08X, størrelse: %d bytes)", 
+             cmd_type, mac_str, current_system_id, (int)total_len);
     
     // Send via ESP-NOW
     esp_err_t result = esp_now_send(mac, (uint8_t*)cmd, total_len);
@@ -5225,10 +5347,10 @@ bool send_esp_now_command_to_pole(const uint8_t *mac, uint8_t cmd_type,
 
 // Task som fjerner gamle signal tracking entries
 void clean_old_signal_tracking(void *pvParameters) {
-    const uint32_t MAX_AGE_SEC = 10; // 10 sek uten signal = fjern
+    const uint32_t MAX_AGE_SEC = 30; // 30 sek uten signal = gjør opprettholde stabile forbindelser
     
     while (1) {
-        vTaskDelay(pdMS_TO_TICKS(5000)); // Kjør hver 5. sekund
+        vTaskDelay(pdMS_TO_TICKS(10000)); // Kjør hver 10. sekund for å redusere CPU-bruk
         
         xSemaphoreTake(signal_mutex, portMAX_DELAY);
         
