@@ -2502,6 +2502,8 @@ static void wifi_init() {
     ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &wifi_event_handler, NULL));
     ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &wifi_event_handler, NULL));
     ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_LOST_IP, &wifi_event_handler, NULL));
+
+    esp_netif_create_default_wifi_sta();
     
     // Sett status til WiFi connecting
     set_system_status(STATUS_WIFI_CONNECTING);
