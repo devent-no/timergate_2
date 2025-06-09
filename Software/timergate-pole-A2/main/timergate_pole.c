@@ -97,7 +97,7 @@ bool prev_broken = false;
 bool connected = false;
 
 char *cmd;
-int64_t timestamp;
+
 
 bool highpoint_search = false;
 int highpoint_offset = 0;
@@ -170,7 +170,6 @@ typedef struct {
 } __attribute__((packed)) command_msg_t;
 
 // Kommandotyper (samme som i AP)
-#define CMD_TIME_SYNC      0x01
 #define CMD_RESTART        0x02
 #define CMD_HSEARCH        0x03
 #define CMD_SET_BREAK      0x04
@@ -267,7 +266,6 @@ static void handle_identification_animation(void);
 // Funksjonsdeklarasjoner for ESP-NOW kommando-håndtering
 //static void handle_esp_now_command(const command_msg_t *cmd);
 static void handle_esp_now_command(const command_msg_t *cmd, int len);
-static void handle_time_sync_command(const uint8_t *data, size_t data_len);
 static void handle_restart_command(const uint8_t *data, size_t data_len);
 static void handle_hsearch_command(const uint8_t *data, size_t data_len);
 static void handle_set_break_command(const uint8_t *data, size_t data_len);
@@ -1078,7 +1076,7 @@ static void tcp_connect()
     // Med ESP-NOW er TCP valgfritt, så ikke vis server connecting status
     // vTaskDelay(500 / portTICK_PERIOD_MS); // Fjernet
 
-    ESP_LOGI(TAG, "Socket connecting to %s:%d (valgfritt med ESP-NOW)", host_ip, PORT);
+    ESP_LOGI(TAG, "Socket connecting to %s:%d (setup-kanal for ESP-NOW)", host_ip, PORT);
     int err = connect(sock, (struct sockaddr *)&dest_addr, sizeof(dest_addr));
     if (err != 0)
     {
@@ -1088,7 +1086,7 @@ static void tcp_connect()
         return;
     }
     
-    ESP_LOGI(TAG, "TCP tilkobling vellykket (ekstra funksjonalitet)");
+    ESP_LOGI(TAG, "TCP tilkobling vellykket (kun for setup og MAC-registrering)");
     connected = true;
     
 
@@ -1168,31 +1166,6 @@ static void store_mac()
             base_mac_addr[5]);
     ESP_LOGI(TAG, "Store MAC: %s", mac_addr);
 }
-
-static void sync_time()
-{
-    struct timeval tv;
-    tv.tv_sec = timestamp; // POSIX timestamp in seconds
-    tv.tv_usec = 0;        // microseconds
-    settimeofday(&tv, NULL);
-
-    time_t now;
-    char strftime_buf[64];
-    struct tm timeinfo;
-    struct timeval tv_now;
-
-    time(&now);
-    // Set timezone to Norway Standard Time
-    setenv("TZ", "GMT+2", 1);
-    tzset();
-
-    localtime_r(&now, &timeinfo);
-    strftime(strftime_buf, sizeof(strftime_buf), "%c", &timeinfo);
-    ESP_LOGI(TAG, "The current date/time in Norway is: %s", strftime_buf);
-    gettimeofday(&tv_now, NULL);
-    ESP_LOGI(TAG, "Unix timestamp is: %lld", tv_now.tv_sec);
-}
-
 
 
 // Funksjon for å sende sensorbrudd via ESP-NOW
@@ -1358,10 +1331,7 @@ static void example_espnow_recv_cb(const esp_now_recv_info_t *recv_info, const u
 
     ESP_LOGI(TAG, "Receive broadcast ESPNOW data, len = %d", len);
     ESP_LOGI(TAG, "Payload len = %d, payload %s", payload_len, buf->payload);
-    if (strncmp(buf->payload, "SYNC", 4) == 0)
-    {
-        sync_time();
-    }
+
 }
 
 
@@ -1695,9 +1665,6 @@ static void handle_esp_now_command(const command_msg_t *cmd, int len) {
     
     // Dispatch til riktig handler basert på kommando-type
     switch (cmd->command_type) {
-        case CMD_TIME_SYNC:
-            handle_time_sync_command(data, data_len);
-            break;
         case CMD_RESTART:
             handle_restart_command(data, data_len);
             break;
@@ -1719,40 +1686,6 @@ static void handle_esp_now_command(const command_msg_t *cmd, int len) {
     }
 }
 
-
-
-// Handler for tidssynkronisering via ESP-NOW
-static void handle_time_sync_command(const uint8_t *data, size_t data_len) {
-    if (data_len < sizeof(uint32_t)) {
-        ESP_LOGW(TAG, "TIME_SYNC kommando har ugyldig data-lengde: %d", data_len);
-        return;
-    }
-    
-    // Les timestamp fra kommando-data
-    uint32_t timestamp;
-    memcpy(&timestamp, data, sizeof(uint32_t));
-    
-    ESP_LOGI(TAG, "⏰ ESP-NOW TIME_SYNC: Mottok timestamp %u", timestamp);
-    
-    // Sett lokal tid (samme logikk som TCP-versjon)
-    struct timeval tv;
-    tv.tv_sec = timestamp;
-    tv.tv_usec = 0;
-    settimeofday(&tv, NULL);
-    
-    // Logg ny tid for bekreftelse
-    time_t now;
-    char strftime_buf[64];
-    struct tm timeinfo;
-    
-    time(&now);
-    setenv("TZ", "GMT+2", 1);
-    tzset();
-    
-    localtime_r(&now, &timeinfo);
-    strftime(strftime_buf, sizeof(strftime_buf), "%c", &timeinfo);
-    ESP_LOGI(TAG, "✅ ESP-NOW tid synkronisert: %s (Unix: %lld)", strftime_buf, (long long)now);
-}
 
 
 
@@ -1985,257 +1918,12 @@ static void check_socket()
                 // Logg mottatt kommando for debugging
                 ESP_LOGI(TAG, "Prosesserer kommando: '%s'", command);
                 
-                if (strncmp(command, "break", 5) == 0)
-                {
-                    int adc_nr = (uint8_t)atoi(command + 6);
-                    uint16_t val = (uint16_t)strtol(command + 9, NULL, 10);
-                    ESP_LOGI(TAG, "Got break: %d = %d", adc_nr, val);
-                    if (adc_nr < 7 && val < 4906)
-                    {
-                        break_limit[adc_nr] = val;
-                    }
-                    if (adc_nr == 6)
-                    {
-                        nvs_update_offsets();
-                        // DEAKTIVERT: TCP publish_settings() - ikke lenger nødvendig med ren ESP-NOW
-                        // publish_settings();
-                    }
-                }
-
-
-                else if (strncmp(command, "time", 4) == 0)
-                {
-                    timestamp = strtol(command + 5, NULL, 10);
-                    ESP_LOGI(TAG, "Got timestamp: %lld", timestamp);
-                    
-                    // Initialiserer ESP-NOW med forbedret error handling
-                    esp_err_t espnow_result = example_espnow_init();
-                    if (espnow_result != ESP_OK) {
-                        ESP_LOGE(TAG, "❌ ESP-NOW initialisering feilet: %s", esp_err_to_name(espnow_result));
-                        ESP_LOGW(TAG, "⚠️ Sensorbrudd vil kun sendes via TCP");
-                    } else {
-                        ESP_LOGI(TAG, "✅ ESP-NOW initialisert - sensorbrudd sendes via både TCP og ESP-NOW");
-                    }
-                }
-
-
-
-                else if (strncmp(command, "hsearch", 7) == 0)
-                {
-                    int channel = strtol(command + 8, NULL, 10);
-                    ESP_LOGI(TAG, "Hsearch channel: %d", channel);
-                    highpoint_search = true;
-                    highpoint_offset = 0;
-                    highpoint_channel = channel;
-                    highpoint_max = 0;
-                    
-                    // Sett status til kalibrering når hsearch starter
-                    set_system_status(STATUS_CALIBRATING);
-                }
-                else if (strncmp(command, "enabled", 7) == 0)
-                {
-                    int sensor_nr = (uint8_t)atoi(command + 8);
-                    bool is_enabled = (bool)atoi(command + 11);
-                    ESP_LOGI(TAG, "Got enabled: %d = %d", sensor_nr, is_enabled);
-                    if (sensor_nr < 7)
-                    {
-                        enabled[sensor_nr] = is_enabled;
-                        led_set_simple(sensor_nr, 0);
-                        nvs_update_offsets();
-                        // DEAKTIVERT: TCP publish_settings() - ikke lenger nødvendig med ren ESP-NOW
-                        // publish_settings();    
-                    }
-                }
-                else if (strncmp(command, "power", 5) == 0)
-                {
-                    ESP_LOGI(TAG, "Mottok power kommando: '%s'", command);
-                    
-                    if (strncmp(command + 7, "off", 3) == 0)  // Endret fra +6 til +7 for å hoppe over mellomrom
-                    {
-                        ESP_LOGI(TAG, "Mottok power off kommando - setter ESP32 i deep sleep");
-                        
-                        // Vis visuell indikasjon på at enheten skal soves
-                        normal_led_control = false;
-                        for (int i = 0; i < 3; i++) {
-                            set_all_leds(1, 255, 0, 0);  // Rød for avstengning
-                            vTaskDelay(200 / portTICK_PERIOD_MS);
-                            set_all_leds(0, 0, 0, 0);
-                            vTaskDelay(200 / portTICK_PERIOD_MS);
-                        }
-                        
-                        // Lukk TCP-forbindelse på en ren måte
-                        if (connected) {
-                            const char *shutdown_msg = "{\"K\":3,\"cmd\":\"powering_off\"}\n";
-                            send(sock, shutdown_msg, strlen(shutdown_msg), 0);
-                            vTaskDelay(100 / portTICK_PERIOD_MS);
-                            tcp_close();
-                            connected = false;
-                        }
-                        
-                        // Slå av alle LED-er før deep sleep
-                        set_all_leds(0, 0, 0, 0);
-                        
-                        ESP_LOGI(TAG, "Går inn i deep sleep modus");
-                        vTaskDelay(500 / portTICK_PERIOD_MS);
-                        
-                        //esp_sleep_enable_timer_wakeup(30 * 1000000); // 30 sekunder i mikrosekunder, ønsker ikke automatisk opvåking fra deepsleep, må gjøres fysisk
-                        esp_deep_sleep_start();
-                    }
-                    else if (strncmp(command + 7, "on", 2) == 0)  // Endret fra +6 til +7 for å hoppe over mellomrom
-                    {
-                        ESP_LOGI(TAG, "Mottok power on kommando - enheten er allerede våken");
-                        
-                        // Vis visuell indikasjon på at enheten er aktiv
-                        normal_led_control = false;
-                        for (int i = 0; i < 3; i++) {
-                            set_all_leds(1, 0, 255, 0);  // Grønn for aktivering
-                            vTaskDelay(200 / portTICK_PERIOD_MS);
-                            set_all_leds(0, 0, 0, 0);
-                            vTaskDelay(200 / portTICK_PERIOD_MS);
-                        }
-                        
-                        // Send bekreftelse tilbake til server
-                        const char *response_msg = "{\"K\":3,\"cmd\":\"power_on_confirmed\"}\n";
-                        if (connected) {
-                            send(sock, response_msg, strlen(response_msg), 0);
-                        }
-                        
-                        // Gjenoppta normal drift
-                        set_system_status(STATUS_READY);
-                    }
-                    else
-                    {
-                        ESP_LOGW(TAG, "Ukjent power kommando: '%s'", command);
-                    }
-                }
-                else if (strncmp(command, "restart:", 8) == 0)
-                {
-                    // Finn restart-typen
-                    char restart_type[10] = {0};
-                    sscanf(command + 8, " %s", restart_type);
-                    
-                    ESP_LOGI(TAG, "Mottok restart-kommando: '%s'", restart_type);
-                    
-                    // Send bekreftelse tilbake til server før restart
-                    char response_msg[100];
-                    snprintf(response_msg, sizeof(response_msg), 
-                             "{\"K\":3,\"cmd\":\"restart_%s_initiated\"}\n", restart_type);
-                    
-                    if (connected) {
-                        send(sock, response_msg, strlen(response_msg), 0);
-                        vTaskDelay(100 / portTICK_PERIOD_MS); // Gi tid til å sende respons
-                    }
-                    
-                    if (strcmp(restart_type, "soft") == 0)
-                    {
-                        // Myk restart - normal restart som beholder alle innstillinger
-                        ESP_LOGI(TAG, "Utfører myk restart...");
-                        
-                        // Vis visuell indikasjon (blå blinking)
-                        normal_led_control = false;
-                        for (int i = 0; i < 3; i++) {
-                            set_all_leds(1, 0, 0, 255);  // Blå for myk restart
-                            vTaskDelay(200 / portTICK_PERIOD_MS);
-                            set_all_leds(0, 0, 0, 0);
-                            vTaskDelay(200 / portTICK_PERIOD_MS);
-                        }
-                        
-                        // Lukk TCP-forbindelse på en ren måte
-                        if (connected) {
-                            tcp_close();
-                            connected = false;
-                        }
-                        
-                        vTaskDelay(500 / portTICK_PERIOD_MS);
-                        esp_restart();
-                    } 
-                    else if (strcmp(restart_type, "hard") == 0)
-                    {
-                        // Hard restart - mer aggressiv restart
-                        ESP_LOGI(TAG, "Utfører hard restart...");
-                        
-                        // Vis visuell indikasjon (oransje blinking)
-                        normal_led_control = false;
-                        for (int i = 0; i < 5; i++) {
-                            set_all_leds(1, 255, 165, 0);  // Oransje for hard restart
-                            vTaskDelay(150 / portTICK_PERIOD_MS);
-                            set_all_leds(0, 0, 0, 0);
-                            vTaskDelay(150 / portTICK_PERIOD_MS);
-                        }
-                        
-                        // Ikke prøv å lukke TCP-forbindelse pent - bare restart
-                        vTaskDelay(300 / portTICK_PERIOD_MS);
-                        esp_restart();
-                    }
-                    else if (strcmp(restart_type, "factory") == 0)
-                    {
-                        // Factory reset - slett NVS innhold før restart
-                        ESP_LOGI(TAG, "Utfører factory reset...");
-                        
-                        // Vis visuell advarsel (rød blinking)
-                        normal_led_control = false;
-                        for (int i = 0; i < 10; i++) {
-                            set_all_leds(1, 255, 0, 0);  // Rød for factory reset
-                            vTaskDelay(100 / portTICK_PERIOD_MS);
-                            set_all_leds(0, 0, 0, 0);
-                            vTaskDelay(100 / portTICK_PERIOD_MS);
-                        }
-                        
-                        // Slett alle NVS-innstillinger
-                        nvs_handle_t my_handle;
-                        esp_err_t err = nvs_open("storage", NVS_READWRITE, &my_handle);
-                        if (err == ESP_OK) {
-                            ESP_LOGI(TAG, "Sletter alle NVS-innstillinger...");
-                            err = nvs_erase_all(my_handle);
-                            if (err == ESP_OK) {
-                                ESP_LOGI(TAG, "NVS-innhold slettet. Committer endringer...");
-                                err = nvs_commit(my_handle);
-                                if (err == ESP_OK) {
-                                    ESP_LOGI(TAG, "NVS-endringer committed vellykket");
-                                } else {
-                                    ESP_LOGE(TAG, "Feil ved commit av NVS-endringer: %s", esp_err_to_name(err));
-                                }
-                            } else {
-                                ESP_LOGE(TAG, "Feil ved sletting av NVS: %s", esp_err_to_name(err));
-                            }
-                            nvs_close(my_handle);
-                        } else {
-                            ESP_LOGE(TAG, "Kunne ikke åpne NVS for factory reset: %s", esp_err_to_name(err));
-                        }
-                        
-                        // Lukk TCP-forbindelse
-                        if (connected) {
-                            tcp_close();
-                            connected = false;
-                        }
-                        
-                        // Vis siste advarsel før restart
-                        for (int i = 0; i < 3; i++) {
-                            set_all_leds(1, 255, 0, 0);
-                            vTaskDelay(200 / portTICK_PERIOD_MS);
-                            set_all_leds(0, 0, 0, 0);
-                            vTaskDelay(200 / portTICK_PERIOD_MS);
-                        }
-                        
-                        ESP_LOGI(TAG, "Factory reset fullført. Restarter...");
-                        vTaskDelay(500 / portTICK_PERIOD_MS);
-                        esp_restart();
-                    }
-                    else
-                    {
-                        ESP_LOGW(TAG, "Ukjent restart-type: '%s'", restart_type);
-                        
-                        // Send feilmelding tilbake
-                        const char *error_msg = "{\"K\":3,\"cmd\":\"restart_error_unknown_type\"}\n";
-                        if (connected) {
-                            send(sock, error_msg, strlen(error_msg), 0);
-                        }
-                    }
-                }
-                else
-                {
-                    ESP_LOGW(TAG, "Ukjent kommando: '%s'", command);
-                }
+                // TCP brukes kun for MAC-registrering til ESP-NOW peer setup
+                // Alle andre kommandoer (break, enabled, power, restart, hsearch, time) 
+                // håndteres via ESP-NOW for bedre rekkevidde og ytelse
+                
+                // Kun "ID:" kommandoen støttes via TCP for peer-registrering
+                ESP_LOGW(TAG, "TCP kommando ignorert - bruk ESP-NOW: '%s'", command);
 
                 cmd_index = 0;
             }
@@ -2277,7 +1965,7 @@ static void tcp_client_task(void *pvParameters)
                 if (current_status != STATUS_READY) {
                     set_system_status(STATUS_READY);
                 }
-                tcp_connect(); // Beholdes for bakoverkompatibilitet hvis ønsket
+                tcp_connect(); // Setup-kanal for MAC-registrering og kalibrering
             } else {
                 // WiFi er ikke tilkoblet, sett WiFi error
                 set_system_status(STATUS_ERROR_WIFI);
@@ -2848,8 +2536,6 @@ void app_main(void)
                 }
                 
                 nvs_update_offsets();
-                // DEAKTIVERT: TCP publish_settings() - ikke lenger nødvendig med ren ESP-NOW
-                // publish_settings();
                 calibration_completed = true;
 
 
@@ -2900,8 +2586,6 @@ void app_main(void)
                     
                     // Send event hvis denne sensoren har endret tilstand
                     if (current_sensor_break != prev_sensor_break[i]) {
-                        // DEAKTIVERT: TCP publish_break() - bruker kun ESP-NOW K=1 nå
-                        // publish_break(i, current_sensor_break ? 1 : 0);
                         
                         // Send via ESP-NOW for rask passeringsdeteksjon
                         send_sensor_break_esp_now(i, current_sensor_break ? 1 : 0);
