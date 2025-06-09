@@ -33,6 +33,9 @@
 #include "esp_timer.h"  // For esp_timer_get_time()
 #include "esp_sleep.h"
 
+
+
+
 // ESP-NOW datastruktur for sensorbrudd
 typedef struct {
     uint8_t k;           // Meldingstype (1 for sensorbrudd)
@@ -226,7 +229,16 @@ bool prev_sensor_break[NUM_SENSORS] = {false};
 static bool wifi_connected = false;
 static int wifi_reconnect_attempts = 0;
 static const int MAX_WIFI_RECONNECT_ATTEMPTS = 10; // Maksimalt antall forsøk før timeout
-static TaskHandle_t wifi_reconnect_task_handle = NULL;
+//static TaskHandle_t wifi_reconnect_task_handle = NULL;
+
+// Utvidede WiFi-overvåkingsvariabler
+static bool wifi_connection_stable = false;
+static uint32_t wifi_disconnect_time = 0;
+static const uint32_t WIFI_RECONNECT_DELAY_MS = 5000;  // 5 sekunder mellom forsøk
+static TaskHandle_t wifi_monitor_task_handle = NULL;
+
+
+
 
 
 // LED-farger for de ulike tilstandene (R, G, B)
@@ -318,9 +330,29 @@ void led_set(uint8_t led_nr, uint8_t value, uint8_t r, uint8_t g, uint8_t b)
     {
         led_strip_set_pixel(led_strip, led_nr, 0, 0, 0);
     }
-    led_strip_refresh(led_strip);
+    
+    // Error handling for LED refresh - unngå RMT-feil ved WiFi-problemer
+    esp_err_t refresh_result = led_strip_refresh(led_strip);
+    if (refresh_result != ESP_OK) {
+        static uint32_t last_led_error_log = 0;
+        uint32_t now = esp_timer_get_time() / 1000;
+        
+        // Logg kun hvert 5. sekund for å unngå spam
+        if (now - last_led_error_log > 5000) {
+            ESP_LOGW(TAG, "⚠️ LED refresh feilet: %s (undertrykker lignende feil i 5 sek)", 
+                     esp_err_to_name(refresh_result));
+            last_led_error_log = now;
+        }
+        return; // Ikke oppdater led_val hvis refresh feilet
+    }
+
     led_val[led_nr] = value;
 }
+
+
+
+
+
 
 // Enkel overladning av led_set for å opprettholde bakoverkompatibilitet
 void led_set_simple(uint8_t led_nr, uint8_t value)
@@ -336,7 +368,21 @@ void set_all_leds(uint8_t value, uint8_t r, uint8_t g, uint8_t b)
             led_strip_set_pixel(led_strip, i, value ? r : 0, value ? g : 0, value ? b : 0);
         }
     }
-    led_strip_refresh(led_strip);
+
+    // Error handling for LED refresh - unngå RMT-feil ved WiFi-problemer
+    esp_err_t refresh_result = led_strip_refresh(led_strip);
+    if (refresh_result != ESP_OK) {
+        static uint32_t last_led_error_log_all = 0;
+        uint32_t now = esp_timer_get_time() / 1000;
+        
+        // Logg kun hvert 5. sekund for å unngå spam
+        if (now - last_led_error_log_all > 5000) {
+            ESP_LOGW(TAG, "⚠️ set_all_leds refresh feilet: %s (undertrykker lignende feil i 5 sek)", 
+                     esp_err_to_name(refresh_result));
+            last_led_error_log_all = now;
+        }
+        return; // Avbryt hvis refresh feilet
+    }
 }
 
 // Funksjon for å håndtere blinkemodus for sensorblokkeringssvarsel
@@ -422,7 +468,7 @@ void handle_blink_mode()
     }
 }
 
-// Funksjon for å sette systemstatus med forbedrede statusoverganger
+// Funksjon for å sette systemstatus med forbedrede statusoverganger og LED-stabilitet
 void set_system_status(system_status_t status) {
     if (current_status != status) {
         ESP_LOGI(TAG, "System status endret: %d -> %d", current_status, status);
@@ -435,21 +481,120 @@ void set_system_status(system_status_t status) {
         ESP_LOGI(TAG, "Status endret fra %s til %s", 
                 status_names[current_status], status_names[status]);
         
-        // ENDRE: Slå av alle LED-er først, vent, og deretter vis tydelig indikasjon
+        // KRITISK FIX: Sikre LED-stripe er i gyldig tilstand
         normal_led_control = false;
-        set_all_leds(0, 0, 0, 0);
-        vTaskDelay(300 / portTICK_PERIOD_MS);
+        
+        // Robust LED reset-sekvens
+        for (int attempt = 0; attempt < 3; attempt++) {
+            esp_err_t led_result = ESP_OK;
+            for (int i = 0; i < NUM_SENSORS; i++) {
+                if (enabled[i]) {
+                    led_result = led_strip_set_pixel(led_strip, i, 0, 0, 0);
+                    if (led_result != ESP_OK) {
+                        ESP_LOGW(TAG, "LED reset attempt %d failed for LED %d: %s", 
+                                attempt + 1, i, esp_err_to_name(led_result));
+                        break;
+                    }
+                }
+            }
+            
+            if (led_result == ESP_OK) {
+                led_result = led_strip_refresh(led_strip);
+                if (led_result == ESP_OK) {
+                    break; // Success
+                } else {
+                    ESP_LOGW(TAG, "LED refresh attempt %d failed: %s", 
+                            attempt + 1, esp_err_to_name(led_result));
+                }
+            }
+            
+            // Hvis forsøk feilet, vent og prøv igjen
+            if (attempt < 2) {
+                vTaskDelay(100 / portTICK_PERIOD_MS);
+            }
+        }
+        
+        vTaskDelay(200 / portTICK_PERIOD_MS);  // Kortere pause
         
         // Forbedret visning for spesifikke overganger
         if (status == STATUS_ERROR_WIFI) {
-            // ENDRE: Mer tydelig WiFi-feil-indikasjon
-            ESP_LOGW(TAG, "Viser tydelig WiFi-feil-indikasjon");
-            for (int i = 0; i < 3; i++) {
-                set_all_leds(1, 255, 0, 0);  // Rødt
-                vTaskDelay(300 / portTICK_PERIOD_MS);
-                set_all_leds(0, 0, 0, 0);  // Av
-                vTaskDelay(300 / portTICK_PERIOD_MS);
+            ESP_LOGW(TAG, "Viser WiFi-feil-indikasjon (robust versjon)");
+            // Enklere indikasjon uten mange blink
+            for (int i = 0; i < NUM_SENSORS; i++) {
+                if (enabled[i]) {
+                    esp_err_t result = led_strip_set_pixel(led_strip, i, 255, 0, 0);
+                    if (result != ESP_OK) {
+                        ESP_LOGE(TAG, "Kritisk LED-feil: %s", esp_err_to_name(result));
+                    }
+                }
             }
+            esp_err_t refresh_result = led_strip_refresh(led_strip);
+            if (refresh_result != ESP_OK) {
+                ESP_LOGE(TAG, "Kritisk LED refresh-feil: %s", esp_err_to_name(refresh_result));
+            }
+            vTaskDelay(1000 / portTICK_PERIOD_MS);  // Hold rødt i 1 sekund
+        }
+        
+        if (status == STATUS_ERROR_SERVER) {
+            ESP_LOGW(TAG, "Setter LED-er til ERROR_SERVER-mønster");
+            // Finn første og siste LED og sett disse til rødt
+            int first = -1, last = -1;
+            for (int i = 0; i < NUM_SENSORS; i++) {
+                if (enabled[i]) {
+                    if (first == -1) first = i;
+                    last = i;
+                }
+            }
+            for (int i = 0; i < NUM_SENSORS; i++) {
+                if (enabled[i]) {
+                    if (i == first || i == last) {
+                        led_strip_set_pixel(led_strip, i, 255, 0, 0);
+                    } else {
+                        led_strip_set_pixel(led_strip, i, 0, 0, 0);
+                    }
+                }
+            }
+            led_strip_refresh(led_strip);
+        }
+        
+        if (status == STATUS_WIFI_CONNECTING) {
+            ESP_LOGI(TAG, "Setter LED-er til WIFI_CONNECTING-mønster");
+            for (int i = 0; i < NUM_SENSORS; i++) {
+                if (enabled[i]) {
+                    led_strip_set_pixel(led_strip, i, 0, 0, 255); // Blå farge for WiFi-tilkobling
+                }
+            }
+            led_strip_refresh(led_strip);
+        }
+        
+        if (status == STATUS_READY) {
+            ESP_LOGI(TAG, "Setter LED-er til READY-mønster");
+            for (int i = 0; i < NUM_SENSORS; i++) {
+                if (enabled[i]) {
+                    led_strip_set_pixel(led_strip, i, 0, 255, 0); // Grønn for klar
+                }
+            }
+            led_strip_refresh(led_strip);
+        }
+        
+        if (status == STATUS_INITIALIZING) {
+            ESP_LOGI(TAG, "Setter LED-er til INITIALIZING-mønster (hvitt)");
+            for (int i = 0; i < NUM_SENSORS; i++) {
+                if (enabled[i]) {
+                    led_strip_set_pixel(led_strip, i, 64, 64, 64); // Hvit for initialisering
+                }
+            }
+            led_strip_refresh(led_strip);
+        }
+        
+        if (status == STATUS_CALIBRATING) {
+            ESP_LOGI(TAG, "Setter LED-er til CALIBRATING-mønster");
+            for (int i = 0; i < NUM_SENSORS; i++) {
+                if (enabled[i]) {
+                    led_strip_set_pixel(led_strip, i, 128, 0, 128); // Lilla for kalibrering
+                }
+            }
+            led_strip_refresh(led_strip);
         }
         
         // VIKTIG: Sett statusvariabelen FØR vi kaller andre funksjoner
@@ -471,65 +616,12 @@ void set_system_status(system_status_t status) {
             all_sensors_broken_start_time = 0;
         }
         
-        // ENDRE: Sett normal_led_control=false med tydelig indikasjon
+        // ENDRE: Deaktiver normal_led_control for alle status-animasjoner
         normal_led_control = false;
-        ESP_LOGI(TAG, "Deaktiverte normal LED-kontroll for status %s", status_names[status]);
-        
-        // LEGG TIL: Initial visualisering av status med konstant farge
-        switch (status) {
-            case STATUS_ERROR_WIFI:
-                ESP_LOGW(TAG, "Setter LED-er til ERROR_WIFI-mønster");
-                // Alternevende rødt-av mønster for WiFi-feil
-                for (int i = 0; i < NUM_SENSORS; i++) {
-                    if (enabled[i]) {
-                        led_set(i, i % 2 == 0, 255, 0, 0);
-                    }
-                }
-                break;
-                
-            case STATUS_ERROR_SERVER:
-                ESP_LOGW(TAG, "Setter LED-er til ERROR_SERVER-mønster");
-                // Finn første og siste LED og sett disse til rødt
-                int first = -1, last = -1;
-                for (int i = 0; i < NUM_SENSORS; i++) {
-                    if (enabled[i]) {
-                        if (first == -1) first = i;
-                        last = i;
-                    }
-                }
-                for (int i = 0; i < NUM_SENSORS; i++) {
-                    if (enabled[i]) {
-                        led_set(i, (i == first || i == last), 255, 0, 0);
-                    }
-                }
-                break;
-                
-            case STATUS_WIFI_CONNECTING:
-                ESP_LOGI(TAG, "Setter LED-er til WIFI_CONNECTING-mønster");
-                set_all_leds(1, 0, 0, 255); // Blå farge for WiFi-tilkobling
-                break;
-                
-            case STATUS_READY:
-                ESP_LOGI(TAG, "Setter LED-er til READY-mønster");
-                set_all_leds(1, 0, 255, 0); // Grønn for klar
-                break;
-                
-            case STATUS_INITIALIZING:
-                ESP_LOGI(TAG, "Setter LED-er til INITIALIZING-mønster (hvitt)");
-                set_all_leds(1, 64, 64, 64); // Hvit for initialisering
-                break;
-                
-            case STATUS_CALIBRATING:
-                ESP_LOGI(TAG, "Setter LED-er til CALIBRATING-mønster");
-                set_all_leds(1, 128, 0, 128); // Lilla for kalibrering
-                break;
-                
-            default:
-                break;
-        }
+        ESP_LOGI(TAG, "Status-overgang fullført til %s (LED-kontroll deaktivert for animasjoner)", 
+                status_names[status]);
     }
 }
-
 
 
 
@@ -890,134 +982,209 @@ void nvs_update_offsets()
 
 
 
-// Task for å håndtere WiFi-gjenoppkobling
-static void wifi_reconnect_task(void *pvParameters) {
-    while (1) {
-        if (!wifi_connected) {
-            ESP_LOGI(TAG, "WiFi ikke tilkoblet, forsøker å koble til igjen (forsøk %d/%d)",
-                   wifi_reconnect_attempts + 1, MAX_WIFI_RECONNECT_ATTEMPTS);
-            
-            // LEGG TIL: Tydelig blinking før hvert reconnect-forsøk
-            normal_led_control = false;
-            for (int i = 0; i < 2; i++) {
-                set_all_leds(1, 255, 165, 0);  // Oransje for reconnect-forsøk
-                vTaskDelay(200 / portTICK_PERIOD_MS);
-                set_all_leds(0, 0, 0, 0);
-                vTaskDelay(200 / portTICK_PERIOD_MS);
-            }
-            
-            // Forsøke tilkobling
-            esp_err_t err = esp_wifi_connect();
-            
-            if (err != ESP_OK) {
-                ESP_LOGE(TAG, "WiFi tilkoblingsforsøk feilet med feilkode %d", err);
-                set_system_status(STATUS_ERROR_WIFI);
-            } else {
-                set_system_status(STATUS_WIFI_CONNECTING);
-            }
-            
-            wifi_reconnect_attempts++;
-            
-            if (wifi_reconnect_attempts >= MAX_WIFI_RECONNECT_ATTEMPTS) {
-                ESP_LOGE(TAG, "Nådde maksimalt antall WiFi-gjenoppkoblingsforsøk. Restarter enheten...");
-                
-                // LEGG TIL: Tydelig indikasjon på at enheten skal restarte
-                normal_led_control = false;
-                for (int i = 0; i < 10; i++) {
-                    set_all_leds(1, 255, 0, 0);  // Rød
-                    vTaskDelay(100 / portTICK_PERIOD_MS);
-                    set_all_leds(0, 0, 0, 0);
-                    vTaskDelay(100 / portTICK_PERIOD_MS);
-                }
-                
-                vTaskDelay(1000 / portTICK_PERIOD_MS);
-                esp_restart();
-            }
-        } else {
-            wifi_reconnect_attempts = 0;
-        }
-        //Ventetid mellom hvert forsøk på å koble til wifi
-        vTaskDelay(5000 / portTICK_PERIOD_MS);
+
+
+
+
+// Hjelpefunksjon for å sjekke WiFi-status (kan kalles fra hovedløkke)
+static bool is_wifi_healthy(void) {
+    if (!wifi_connected || !wifi_connection_stable) {
+        return false;
     }
+    
+    // Ekstra validering: sjekk faktisk tilkoblingsstatus
+    wifi_ap_record_t ap_info;
+    esp_err_t ret = esp_wifi_sta_get_ap_info(&ap_info);
+    
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "📶 WiFi health check feilet - ikke tilkoblet AP");
+        return false;
+    }
+    
+    return true;
 }
 
 
-// WiFi-event handler for å håndtere tilkoblings- og frakoblingshendelser
+
+// Ny WiFi monitor task for intelligent reconnect
+static void wifi_monitor_task(void *pvParameters) {
+    ESP_LOGI(TAG, "🔄 WiFi monitor task startet");
+    
+    while (1) {
+        // Sjekk om vi fortsatt trenger å kjøre
+        if (wifi_connected && wifi_connection_stable) {
+            ESP_LOGI(TAG, "🔄 WiFi stabil igjen, avslutter monitor task");
+            break;
+        }
+        
+        // Sjekk maksimalt antall forsøk
+        if (wifi_reconnect_attempts >= MAX_WIFI_RECONNECT_ATTEMPTS) {
+            ESP_LOGE(TAG, "🔄 Maks WiFi reconnect-forsøk nådd (%d), går til langvarig retry-modus", 
+                     MAX_WIFI_RECONNECT_ATTEMPTS);
+            
+            // Gå til langvarig retry (hvert 30. sekund)
+            while (!wifi_connected) {
+                ESP_LOGI(TAG, "🔄 Langvarig WiFi retry-forsøk...");
+                
+                // Visuell indikasjon for langvarig retry
+                normal_led_control = false;
+                set_all_leds(1, 255, 0, 0);     // Rød
+                vTaskDelay(500 / portTICK_PERIOD_MS);
+                set_all_leds(0, 0, 0, 0);       // Av
+                vTaskDelay(500 / portTICK_PERIOD_MS);
+                
+                esp_wifi_connect();
+                vTaskDelay(30000 / portTICK_PERIOD_MS);  // Vent 30 sekunder
+            }
+            break;
+        }
+        
+        // Normal reconnect-forsøk
+        wifi_reconnect_attempts++;
+        ESP_LOGI(TAG, "🔄 WiFi reconnect-forsøk %d/%d", 
+                 wifi_reconnect_attempts, MAX_WIFI_RECONNECT_ATTEMPTS);
+        
+        // Visuell indikasjon på reconnect-forsøk
+        normal_led_control = false;
+        for (int i = 0; i < wifi_reconnect_attempts; i++) {
+            set_all_leds(1, 0, 0, 255);     // Blå for reconnect
+            vTaskDelay(200 / portTICK_PERIOD_MS);
+            set_all_leds(0, 0, 0, 0);
+            vTaskDelay(200 / portTICK_PERIOD_MS);
+        }
+        
+        // Forsøk reconnect
+        esp_err_t err = esp_wifi_connect();
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "🔄 WiFi reconnect-forsøk feilet: %s", esp_err_to_name(err));
+        }
+        
+        // Vent før neste forsøk
+        vTaskDelay(WIFI_RECONNECT_DELAY_MS / portTICK_PERIOD_MS);
+    }
+    
+    // Cleanup ved avslutning
+    ESP_LOGI(TAG, "🔄 WiFi monitor task avsluttet");
+    wifi_monitor_task_handle = NULL;  // VIKTIG: Nullstill handle FØR delete
+    vTaskDelete(NULL);
+
+
+}
+
+
+
+
+
+
+
+// Forbedret WiFi-event handler med robust disconnect/reconnect håndtering
 static void wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data) {
     // Håndtere WiFi-hendelser
     if (event_base == WIFI_EVENT) {
-        if (event_id == WIFI_EVENT_STA_START) {
-            ESP_LOGI(TAG, "WiFi STA startet, forsøker å koble til AP");
-            esp_wifi_connect();
-            
-            // LEGG TIL: Tydelig blå indikasjon på at WiFi starter tilkobling
-            normal_led_control = false;
-            set_all_leds(0, 0, 0, 0); // Slå av alle LED-er først
-            vTaskDelay(200 / portTICK_PERIOD_MS);
-            set_all_leds(1, 0, 0, 255); // Blått lys for WiFi-tilkobling
-            
-            set_system_status(STATUS_WIFI_CONNECTING);
-        } 
-        else if (event_id == WIFI_EVENT_STA_DISCONNECTED) {
-            wifi_event_sta_disconnected_t* disconnected = (wifi_event_sta_disconnected_t*) event_data;
-            ESP_LOGW(TAG, "WiFi frakoblet (reason: %d), starter gjenoppkoblingsprosess", disconnected->reason);
-            
-            // Oppdater WiFi-tilkoblingsstatus
-            wifi_connected = false;
-            
-            // ENDRE: Bruk forsinket triggering av LED-indikasjonsfunksjoner
-            normal_led_control = false;
-            set_all_leds(0, 0, 0, 0); // Slå av alle LED-er
-            vTaskDelay(100 / portTICK_PERIOD_MS);
-            
-            // KRITISK: Vis rød blinking direkte uten å bruke set_system_status ennå
-            for (int i = 0; i < 5; i++) {  // Flere blink for å være mer synlig
-                set_all_leds(1, 255, 0, 0);  // Rødt
-                vTaskDelay(200 / portTICK_PERIOD_MS); 
-                set_all_leds(0, 0, 0, 0);    // Av
-                vTaskDelay(200 / portTICK_PERIOD_MS);
+        switch (event_id) {
+            case WIFI_EVENT_STA_START:
+                ESP_LOGI(TAG, "📶 WiFi STA startet, forsøker å koble til AP");
+                wifi_connected = false;
+                wifi_connection_stable = false;
+                esp_wifi_connect();
+                set_system_status(STATUS_WIFI_CONNECTING);
+                break;
                 
-                // Logg hver blinking så vi ser om den gjennomføres
-                ESP_LOGW(TAG, "WiFi-feil blinkindikasjon %d/5", i+1);
+            case WIFI_EVENT_STA_DISCONNECTED: {
+                wifi_event_sta_disconnected_t* disconnected = (wifi_event_sta_disconnected_t*) event_data;
+                ESP_LOGW(TAG, "📶 WiFi FRAKOBLET (årsak: %d) - starter overvåket reconnect", disconnected->reason);
+                
+                // Oppdater tilkoblingsstatus
+                wifi_connected = false;
+                wifi_connection_stable = false;
+                wifi_disconnect_time = esp_timer_get_time() / 1000;  // Timestamp i ms
+                
+                // Visuell indikasjon på tap av WiFi
+                normal_led_control = false;
+                for (int i = 0; i < 3; i++) {
+                    set_all_leds(1, 255, 100, 0);  // Oransje for "mister tilkobling"
+                    vTaskDelay(200 / portTICK_PERIOD_MS);
+                    set_all_leds(0, 0, 0, 0);
+                    vTaskDelay(200 / portTICK_PERIOD_MS);
+                }
+                
+                // Sett systemstatus til WiFi-feil
+                set_system_status(STATUS_ERROR_WIFI);
+                
+                // Start WiFi monitor task (kun én gang)
+                if (wifi_monitor_task_handle == NULL) {
+                    BaseType_t task_result = xTaskCreate(wifi_monitor_task, "wifi_monitor", 3072, NULL, 4, &wifi_monitor_task_handle);
+                    if (task_result == pdPASS) {
+                        ESP_LOGI(TAG, "🔄 WiFi monitor task startet");
+                    } else {
+                        ESP_LOGE(TAG, "🔄 Feil ved opprettelse av WiFi monitor task");
+                        wifi_monitor_task_handle = NULL;
+                    }
+                } else {
+                    ESP_LOGW(TAG, "🔄 WiFi monitor task kjører allerede - hopper over");
+                }
+
+                break;
             }
             
-            // Sett systemstatus til ERROR_WIFI etter synlig indikasjon
-            set_system_status(STATUS_ERROR_WIFI);
-            
-            // Start reconnect task i stedet for å prøve umiddelbart
-            if (wifi_reconnect_task_handle == NULL) {
-                xTaskCreate(wifi_reconnect_task, "wifi_reconnect", 4096, NULL, 3, &wifi_reconnect_task_handle);
-                ESP_LOGI(TAG, "WiFi-gjenoppkoblings-task startet");
-            }
+            case WIFI_EVENT_STA_CONNECTED:
+                ESP_LOGI(TAG, "📶 WiFi TILKOBLET - venter på IP-adresse");
+                break;
+                
+            default:
+                ESP_LOGD(TAG, "📶 WiFi event: %ld", event_id);
+                break;
         }
     } 
     // Håndtere IP-hendelser
     else if (event_base == IP_EVENT) {
-        if (event_id == IP_EVENT_STA_GOT_IP) {
-            ip_event_got_ip_t* event = (ip_event_got_ip_t*) event_data;
-            ESP_LOGI(TAG, "WiFi tilkoblet! IP-adresse: " IPSTR, IP2STR(&event->ip_info.ip));
-            
-            // Oppdater WiFi-tilkoblingsstatus
-            wifi_connected = true;
-            
-            // LEGG TIL: Visuell indikasjon på vellykket WiFi-tilkobling
-            normal_led_control = false;
-            for (int i = 0; i < 3; i++) {
-                set_all_leds(1, 0, 255, 0);  // Grønt for vellykket
-                vTaskDelay(100 / portTICK_PERIOD_MS);
-                set_all_leds(0, 0, 0, 0);
-                vTaskDelay(100 / portTICK_PERIOD_MS);
-            }
-            
-            // Med ren ESP-NOW går vi direkte til READY etter WiFi-tilkobling
-            if (current_status == STATUS_ERROR_WIFI || current_status == STATUS_WIFI_CONNECTING) {
-                // Kort pause for å vise vellykket WiFi-tilkobling
-                vTaskDelay(500 / portTICK_PERIOD_MS);
+        switch (event_id) {
+            case IP_EVENT_STA_GOT_IP: {
+                ip_event_got_ip_t* event = (ip_event_got_ip_t*) event_data;
+                ESP_LOGI(TAG, "✅ WiFi HELT TILKOBLET! IP: " IPSTR, IP2STR(&event->ip_info.ip));
+                
+                // Oppdater tilkoblingsstatus
+                wifi_connected = true;
+                wifi_connection_stable = true;
+                wifi_reconnect_attempts = 0;  // Reset forsøksteller
+                
+                // Stopp WiFi monitor task hvis den kjører
+                if (wifi_monitor_task_handle != NULL) {
+                    vTaskDelete(wifi_monitor_task_handle);
+                    wifi_monitor_task_handle = NULL;
+                    ESP_LOGI(TAG, "🔄 WiFi monitor task stoppet (tilkobling gjenopprettet)");
+                }
+                
+                // Visuell bekreftelse på gjenopprettet tilkobling
+                normal_led_control = false;
+                for (int i = 0; i < 3; i++) {
+                    set_all_leds(1, 0, 255, 0);  // Grønt for "tilkobling OK"
+                    vTaskDelay(200 / portTICK_PERIOD_MS);
+                    set_all_leds(0, 0, 0, 0);
+                    vTaskDelay(200 / portTICK_PERIOD_MS);
+                }
+                
+                // Gå tilbake til READY-status
                 set_system_status(STATUS_READY);
+                break;
             }
+            
+            case IP_EVENT_STA_LOST_IP:
+                ESP_LOGW(TAG, "📶 Mistet IP-adresse");
+                wifi_connected = false;
+                wifi_connection_stable = false;
+                break;
+                
+            default:
+                ESP_LOGD(TAG, "📶 IP event: %ld", event_id);
+                break;
         }
     }
 }
+
+
+
+
 
 
 
@@ -2257,51 +2424,55 @@ static void tcp_client_task(void *pvParameters)
 {
     char *cmd;
     char *break_cmd;
+
     while (1)
     {
-        vTaskDelay(10 / portTICK_PERIOD_MS);
+        vTaskDelay(100 / portTICK_PERIOD_MS);  // Økt delay for mindre CPU-bruk
+        
+        // Sjekk WiFi-status før TCP-operasjoner
+        if (!is_wifi_healthy()) {
+            if (connected) {
+                ESP_LOGW(TAG, "📶 WiFi ikke tilgjengelig - avslutter TCP-forbindelse");
+                connected = false;
+                tcp_close();
+            }
+            continue;  // Hopp over TCP-logikk hvis WiFi er nede
+        }
 
         if (!connected)
         {
-            ESP_LOGI(TAG, "Not connected, trying to connect");
+            ESP_LOGI(TAG, "TCP ikke tilkoblet, forsøker å koble til (WiFi OK)");
             tcp_close();
             vTaskDelay(100 / portTICK_PERIOD_MS);
             tcp_setup();
             
-            // Sjekk WiFi-status før TCP-tilkobling
-            wifi_ap_record_t ap_info;
-            esp_err_t wifi_status = esp_wifi_sta_get_ap_info(&ap_info);
-            
-            if (wifi_status == ESP_OK) {
-                // Med ESP-NOW trenger vi ikke TCP-server, gå direkte til READY
-                if (current_status != STATUS_READY) {
-                    set_system_status(STATUS_READY);
-                }
-                tcp_connect(); // Beholdes for bakoverkompatibilitet hvis ønsket
+            // Dobbeltsjekk WiFi før TCP connect
+            if (is_wifi_healthy()) {
+                set_system_status(STATUS_SERVER_CONNECTING);
+                tcp_connect();
             } else {
-                // WiFi er ikke tilkoblet, sett WiFi error
-                set_system_status(STATUS_ERROR_WIFI);
+                ESP_LOGW(TAG, "WiFi ble utilgjengelig under TCP-oppsett");
+                continue;
             }
         }
         else
         {
+            // Normal TCP-operasjoner (eksisterende kode)
             if (xQueueReceive(xQueue, &cmd, 0))
             {
-                // ESP_LOGI(TAG, "Sending from queue: %s", cmd);
                 int written = send(sock, cmd, strlen(cmd), 0);
                 if (written < 0)
                 {
-                    ESP_LOGE(TAG, "Error occurred during sending: errno %d", errno);
+                    ESP_LOGE(TAG, "TCP send feilet: errno %d", errno);
                     connected = false;
                 }
             }
             if (xQueueReceive(xQueueBreak, &break_cmd, 0) == pdPASS)
             {
-                // ESP_LOGI(TAG, "Sending from xQueueBreak: %s", break_cmd);
                 int written = send(sock, break_cmd, strlen(break_cmd), 0);
                 if (written < 0)
                 {
-                    ESP_LOGE(TAG, "Error occurred during sending: errno %d", errno);
+                    ESP_LOGE(TAG, "TCP send feilet: errno %d", errno);
                     connected = false;
                 }
                 if (break_cmd != NULL)
@@ -2313,33 +2484,67 @@ static void tcp_client_task(void *pvParameters)
             check_socket();
         }
     }
+
+
 }
 
 
 
-static void wifi_init()
-{
+// Forbedret wifi_init funksjon med robust event handling
+static void wifi_init() {
+    ESP_LOGI(TAG, "📶 Initialiserer WiFi med robust overvåking");
+    
     ESP_ERROR_CHECK(nvs_flash_init());
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
 
+    // Registrer event-handlere FØRST
+    ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &wifi_event_handler, NULL));
+    ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &wifi_event_handler, NULL));
+    ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_LOST_IP, &wifi_event_handler, NULL));
+    
     // Sett status til WiFi connecting
     set_system_status(STATUS_WIFI_CONNECTING);
-
-    // Bruk example_connect uten vår egen event handler (unngår konflikt)
-    esp_err_t ret = example_connect();
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "WiFi tilkobling feilet med kode %d", ret);
-        set_system_status(STATUS_ERROR_WIFI);
-        return;
-    }
     
-    ESP_LOGI(TAG, "WiFi tilkoblet vellykket via example_connect");
-    wifi_connected = true;
+    // Initialiser WiFi med optimaliserte innstillinger
+    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+    cfg.nvs_enable = 1;
+    cfg.nano_enable = 0;
+    cfg.rx_ba_win = 16;   // Redusert for raskere respons
+    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
     
-    // Gå direkte til READY etter vellykket WiFi-tilkobling
-    set_system_status(STATUS_READY);
+    // Sett power save til none for raskere disconnect detection
+    ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
+    
+    // Robust WiFi-tilkobling uten example_connect
+    ESP_LOGI(TAG, "📶 Starter initial WiFi-tilkobling med robust håndtering...");
+    
+    // Sett WiFi-konfigurasjon manuelt
+    wifi_config_t wifi_config = {
+        .sta = {
+            .ssid = "Timergate",
+            .password = "12345678",
+            .threshold.authmode = WIFI_AUTH_WPA2_PSK,
+            .pmf_cfg = {
+                .capable = true,
+                .required = false
+            },
+        },
+    };
+    
+    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
+    ESP_ERROR_CHECK(esp_wifi_start());
+    
+    ESP_LOGI(TAG, "📶 WiFi konfigurert - venter på event-driven tilkobling");
+    
+    // La event handler håndtere tilkoblingen
+    wifi_connected = false;
+    wifi_connection_stable = false;
 }
+
+
+
 
 
 static void pwm_setup()
@@ -2367,6 +2572,11 @@ static void pwm_setup()
 
 // Deklarasjon av WiFi-event handler
 static void wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data); 
+
+// Deklarasjoner for WiFi-overvåking
+static void wifi_monitor_task(void *pvParameters);
+static bool is_wifi_healthy(void);
+
 
 
 
@@ -2418,27 +2628,53 @@ void app_main(void)
     cmd = malloc(200);
 
     adc_init();
+
+    // WiFi init MED robust error handling
     wifi_init();
-    tcp_setup();
-    tcp_connect();
+    
+    // KRITISK: Ikke start TCP eller ESP-NOW hvis WiFi feilet
+    bool should_attempt_network = is_wifi_healthy();
+    
+    if (should_attempt_network) {
+        ESP_LOGI(TAG, "✅ WiFi OK - starter nettverkstjenester");
+        tcp_setup();
+        tcp_connect();
+    } else {
+        ESP_LOGW(TAG, "⚠️ WiFi ikke tilgjengelig - hopper over nettverkstjenester");
+        ESP_LOGI(TAG, "   Sensorer vil fungere lokalt, nettverksfunksjoner utilgjengelig");
+        connected = false;  // Sikre at TCP-status er korrekt
+    }
+    
     store_mac();
     nvs_update_restart();
 
-    // Initialiser ESP-NOW tidlig for rask passeringsdeteksjon
-    ESP_LOGI(TAG, "Initialiserer ESP-NOW ved oppstart...");
-    esp_err_t espnow_result = example_espnow_init();
-    if (espnow_result != ESP_OK) {
-        ESP_LOGE(TAG, "❌ ESP-NOW initialisering feilet: %s", esp_err_to_name(espnow_result));
-    } else {
-        ESP_LOGI(TAG, "✅ ESP-NOW klar for sensordata");
-        log_esp_now_status();
+    // ESP-NOW kun hvis WiFi fungerer
+    if (should_attempt_network) {
+        ESP_LOGI(TAG, "📡 Starter ESP-NOW (WiFi OK)");
+        esp_err_t espnow_result = example_espnow_init();
+        if (espnow_result != ESP_OK) {
+            ESP_LOGE(TAG, "❌ ESP-NOW feilet: %s", esp_err_to_name(espnow_result));
+        } else {
+            ESP_LOGI(TAG, "✅ ESP-NOW klar");
+            log_esp_now_status();
+        }
     }
+
+
+
+
+
+
 
     xQueue = xQueueCreate(1, sizeof(char *));
     xQueueBreak = xQueueCreate(30, sizeof(char *));
-    xTaskCreatePinnedToCore(tcp_client_task, "tcp_client", 4096, (void *)AF_INET, 5, NULL, 1);
+    
+    // Start TCP task kun hvis WiFi fungerer
+    if (should_attempt_network) {
+        xTaskCreatePinnedToCore(tcp_client_task, "tcp_client", 4096, (void *)AF_INET, 5, NULL, 1);
+    }
 
-       
+
     publish_settings();
 
 
@@ -2514,11 +2750,45 @@ void app_main(void)
     {
         vTaskDelay(10 / portTICK_PERIOD_MS);
 
-
-        // Håndter announce-sending hvis ikke tilknyttet system
-        if (announcement_active && !is_assigned_to_system()) {
-            uint32_t current_time = esp_timer_get_time() / 1000; // Millisekunder
+        uint32_t current_time = esp_timer_get_time() / 1000;
+        
+        // ═══ PERIODISK WIFI HEALTH CHECK ═══
+        static uint32_t last_wifi_check = 0;
+        const uint32_t WIFI_CHECK_INTERVAL_MS = 5000;  // Sjekk WiFi hvert 5. sekund
+        
+        if (current_time - last_wifi_check >= WIFI_CHECK_INTERVAL_MS) {
+            last_wifi_check = current_time;
             
+            bool wifi_healthy = is_wifi_healthy();
+            static bool prev_wifi_state = true;  // Anta OK ved oppstart
+            
+            if (wifi_healthy != prev_wifi_state) {
+                if (wifi_healthy) {
+                    ESP_LOGI(TAG, "📶 WiFi-tilkobling gjenopprettet - aktiverer nettverkstjenester");
+                    
+                    // Restart nettverkstjenester hvis de ikke kjører
+                    if (!connected) {
+                        tcp_setup();
+                        tcp_connect();
+                    }
+                    
+                    // Sikre ESP-NOW er initialisert
+                    if (!esp_now_peer_added) {
+                        example_espnow_init();
+                    }
+                    
+                } else {
+                    ESP_LOGW(TAG, "📶 WiFi-tilkobling tapt - deaktiverer nettverkstjenester");
+                    connected = false;  // Stopp TCP-forsøk
+                }
+                prev_wifi_state = wifi_healthy;
+            }
+        }
+
+
+
+        // ═══ DISCOVERY OG ANNOUNCE (kun med WiFi) ═══
+        if (wifi_connected && announcement_active && !is_assigned_to_system()) {
             if (current_time - last_announce_time >= ANNOUNCE_INTERVAL_MS) {
                 send_pole_announce();
                 last_announce_time = current_time;
@@ -2614,13 +2884,14 @@ void app_main(void)
             }
         }
 
-        // Send K=0 ADC-data via ESP-NOW (kontinuerlig, 1 gang per sekund)
-        if (!blink_mode && current_status != STATUS_ERROR_SENSORS_BLOCKED && esp_now_peer_added) {
+     // ═══ ESP-NOW DATA SENDING (kun med WiFi) ═══
+        if (!blink_mode && current_status != STATUS_ERROR_SENSORS_BLOCKED && 
+            esp_now_peer_added && wifi_connected) {
+            
             static uint32_t last_espnow_k0_send = 0;
-            uint32_t now_k0 = esp_timer_get_time() / 1000;
-            if (now_k0 - last_espnow_k0_send >= 1000) {  // 1 sekund mellom hver K=0 sending
+            if (current_time - last_espnow_k0_send >= 1000) {
                 send_k0_adc_data_esp_now();
-                last_espnow_k0_send = now_k0;
+                last_espnow_k0_send = current_time;
             }
         }
 
@@ -2687,20 +2958,11 @@ void app_main(void)
 
 
 
-        if (highpoint_search && (!wifi_connected || !connected)) {
-            ESP_LOGW(TAG, "Avbryter highpoint search: WiFi %s, Server %s", 
-                    wifi_connected ? "tilkoblet" : "frakoblet",
-                    connected ? "tilkoblet" : "frakoblet");
-                    
-            // Avbryt kalibrering ved nettverksproblemer
+        // ═══ AVBRYT KALIBRERING VED WIFI-TAP ═══
+        if (highpoint_search && !wifi_connected) {
+            ESP_LOGW(TAG, "Avbryter kalibrering på grunn av WiFi-tap");
             highpoint_search = false;
-            
-            // Sett riktig feilstatus
-            if (!wifi_connected) {
-                set_system_status(STATUS_ERROR_WIFI);
-            } else {
-                set_system_status(STATUS_ERROR_SERVER);
-            }
+            set_system_status(STATUS_ERROR_WIFI);
         }
 
 
@@ -2893,27 +3155,35 @@ void app_main(void)
         else
         {
 
-            // Sjekk hver sensor individuelt for endringer og send break-events
-            for (int i = 0; i < NUM_SENSORS; i++) {
-                if (enabled[i] && !highpoint_search) {
-                    bool current_sensor_break = (adc_raw[0][i] < break_limit[i]);
-                    
-                    // Send event hvis denne sensoren har endret tilstand
-                    if (current_sensor_break != prev_sensor_break[i]) {
-                        // DEAKTIVERT: TCP publish_break() - bruker kun ESP-NOW K=1 nå
-                        // publish_break(i, current_sensor_break ? 1 : 0);
+            // ═══ SENSOR BREAK DETECTION (kun med ESP-NOW/WiFi) ═══
+            if (wifi_connected && esp_now_peer_added) {
+                for (int i = 0; i < NUM_SENSORS; i++) {
+                    if (enabled[i] && !highpoint_search) {
+                        bool current_sensor_break = (adc_raw[0][i] < break_limit[i]);
                         
-                        // Send via ESP-NOW for rask passeringsdeteksjon
-                        send_sensor_break_esp_now(i, current_sensor_break ? 1 : 0);
-                        
-                        prev_sensor_break[i] = current_sensor_break;
-                        
-                        ESP_LOGI(TAG, "🔄 Sensor %d endret tilstand: %s (ADC: %d, limit: %d) - Sendt via ESP-NOW", 
-                                i, current_sensor_break ? "BRUTT" : "OK", 
-                                adc_raw[0][i], break_limit[i]);
+                        if (current_sensor_break != prev_sensor_break[i]) {
+                            send_sensor_break_esp_now(i, current_sensor_break ? 1 : 0);
+                            prev_sensor_break[i] = current_sensor_break;
+                            
+                            ESP_LOGI(TAG, "🔄 Sensor %d endret: %s (ADC: %d) - Sendt via ESP-NOW", 
+                                    i, current_sensor_break ? "BRUTT" : "OK", adc_raw[0][i]);
+                        }
                     }
                 }
+            } else if (!wifi_connected) {
+                // Logg sensorendringer lokalt selv uten nettverk
+                static uint32_t last_local_log = 0;
+                if (current_time - last_local_log >= 2000) {  // Hver 2. sekund
+                    ESP_LOGI(TAG, "📊 OFFLINE: Sensor-status [%d,%d,%d,%d,%d,%d,%d] (WiFi ikke tilgjengelig)",
+                            sensor_break[0], sensor_break[1], sensor_break[2], sensor_break[3],
+                            sensor_break[4], sensor_break[5], sensor_break[6]);
+                    last_local_log = current_time;
+                }
             }
+
+
+
+
 
         }
     }
