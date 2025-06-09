@@ -554,8 +554,15 @@ void set_system_status(system_status_t status) {
                     }
                 }
             }
-            led_strip_refresh(led_strip);
+            esp_err_t refresh_result = led_strip_refresh(led_strip);
+            if (refresh_result != ESP_OK) {
+                ESP_LOGW(TAG, "LED refresh feil i ERROR_SERVER: %s", esp_err_to_name(refresh_result));
+            }
         }
+
+
+
+
         
         if (status == STATUS_WIFI_CONNECTING) {
             ESP_LOGI(TAG, "Setter LED-er til WIFI_CONNECTING-mønster");
@@ -564,8 +571,13 @@ void set_system_status(system_status_t status) {
                     led_strip_set_pixel(led_strip, i, 0, 0, 255); // Blå farge for WiFi-tilkobling
                 }
             }
-            led_strip_refresh(led_strip);
+            esp_err_t refresh_result = led_strip_refresh(led_strip);
+            if (refresh_result != ESP_OK) {
+                ESP_LOGW(TAG, "LED refresh feil i WIFI_CONNECTING: %s", esp_err_to_name(refresh_result));
+            }
         }
+
+
         
         if (status == STATUS_READY) {
             ESP_LOGI(TAG, "Setter LED-er til READY-mønster");
@@ -574,7 +586,10 @@ void set_system_status(system_status_t status) {
                     led_strip_set_pixel(led_strip, i, 0, 255, 0); // Grønn for klar
                 }
             }
-            led_strip_refresh(led_strip);
+            esp_err_t refresh_result = led_strip_refresh(led_strip);
+            if (refresh_result != ESP_OK) {
+                ESP_LOGW(TAG, "LED refresh feil i READY: %s", esp_err_to_name(refresh_result));
+            }
         }
         
         if (status == STATUS_INITIALIZING) {
@@ -584,7 +599,10 @@ void set_system_status(system_status_t status) {
                     led_strip_set_pixel(led_strip, i, 64, 64, 64); // Hvit for initialisering
                 }
             }
-            led_strip_refresh(led_strip);
+            esp_err_t refresh_result = led_strip_refresh(led_strip);
+            if (refresh_result != ESP_OK) {
+                ESP_LOGW(TAG, "LED refresh feil i READY: %s", esp_err_to_name(refresh_result));
+            };
         }
         
         if (status == STATUS_CALIBRATING) {
@@ -594,7 +612,10 @@ void set_system_status(system_status_t status) {
                     led_strip_set_pixel(led_strip, i, 128, 0, 128); // Lilla for kalibrering
                 }
             }
-            led_strip_refresh(led_strip);
+            esp_err_t refresh_result = led_strip_refresh(led_strip);
+            if (refresh_result != ESP_OK) {
+                ESP_LOGW(TAG, "LED refresh feil i READY: %s", esp_err_to_name(refresh_result));
+            }
         }
         
         // VIKTIG: Sett statusvariabelen FØR vi kaller andre funksjoner
