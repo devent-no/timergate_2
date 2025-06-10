@@ -33,6 +33,7 @@
 #include "esp_timer.h"  // For esp_timer_get_time()
 #include "esp_sleep.h"
 
+
 // ESP-NOW datastruktur for sensorbrudd
 typedef struct {
     uint8_t k;           // Meldingstype (1 for sensorbrudd)
@@ -65,11 +66,12 @@ static bool esp_now_peer_added = false;
 #define LEDC_DUTY (4095)                // Set duty to 50%. ((2 ** 13) - 1) * 50% = 4095
 #define PWM_0_FREQUENCY (9000)          // Frequency in Hertz.
 
+
 static const char *TAG = "timergate-pole";
 static int sock;
 char host_ip[] = HOST_IP_ADDR;
 
-QueueHandle_t xQueue;
+//QueueHandle_t xQueue;
 QueueHandle_t xQueueBreak;
 char mac_addr[18];
 
@@ -95,8 +97,6 @@ bool curr_broken = false;
 bool prev_broken = false;
 
 bool connected = false;
-
-char *cmd;
 
 
 bool highpoint_search = false;
@@ -282,7 +282,7 @@ typedef struct
     uint16_t crc;     // CRC16 value of ESPNOW data.
     uint32_t magic;   // Magic number which is used to determine which device to send unicast ESPNOW data.
     char payload[0];  // Real payload of ESPNOW data.
-} __attribute__((packed)) example_espnow_data_t;
+} __attribute__((packed)) timergate_espnow_data_t;
 
 static void pwm_init(int timer_num, int frequency, int channel, int gpio, int hpoint)
 {
@@ -321,10 +321,10 @@ void led_set(uint8_t led_nr, uint8_t value, uint8_t r, uint8_t g, uint8_t b)
 }
 
 // Enkel overladning av led_set for å opprettholde bakoverkompatibilitet
-void led_set_simple(uint8_t led_nr, uint8_t value)
-{
-    led_set(led_nr, value, 16, 16, 16); // Standard hvit farge når ikke angitt
-}
+// void led_set_simple(uint8_t led_nr, uint8_t value)
+// {
+//     led_set(led_nr, value, 16, 16, 16); // Standard hvit farge når ikke angitt
+// }
 
 // Funksjon for å sette alle LED-er til samme farge
 void set_all_leds(uint8_t value, uint8_t r, uint8_t g, uint8_t b) 
@@ -956,38 +956,33 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t e
             
             set_system_status(STATUS_WIFI_CONNECTING);
         } 
+
         else if (event_id == WIFI_EVENT_STA_DISCONNECTED) {
             wifi_event_sta_disconnected_t* disconnected = (wifi_event_sta_disconnected_t*) event_data;
-            ESP_LOGW(TAG, "WiFi frakoblet (reason: %d), starter gjenoppkoblingsprosess", disconnected->reason);
+            ESP_LOGW(TAG, "WiFi frakoblet (reason: %d)", disconnected->reason);
             
             // Oppdater WiFi-tilkoblingsstatus
             wifi_connected = false;
             
-            // ENDRE: Bruk forsinket triggering av LED-indikasjonsfunksjoner
+            // Vis visuell indikasjon
             normal_led_control = false;
-            set_all_leds(0, 0, 0, 0); // Slå av alle LED-er
+            set_all_leds(0, 0, 0, 0);
             vTaskDelay(100 / portTICK_PERIOD_MS);
             
-            // KRITISK: Vis rød blinking direkte uten å bruke set_system_status ennå
-            for (int i = 0; i < 5; i++) {  // Flere blink for å være mer synlig
-                set_all_leds(1, 255, 0, 0);  // Rødt
-                vTaskDelay(200 / portTICK_PERIOD_MS); 
-                set_all_leds(0, 0, 0, 0);    // Av
-                vTaskDelay(200 / portTICK_PERIOD_MS);
-                
-                // Logg hver blinking så vi ser om den gjennomføres
-                ESP_LOGW(TAG, "WiFi-feil blinkindikasjon %d/5", i+1);
-            }
-            
-            // Sett systemstatus til ERROR_WIFI etter synlig indikasjon
+            // Sett systemstatus til ERROR_WIFI
             set_system_status(STATUS_ERROR_WIFI);
             
-            // Start reconnect task i stedet for å prøve umiddelbart
+            // Start reconnect task hvis ikke allerede startet
             if (wifi_reconnect_task_handle == NULL) {
+                wifi_reconnect_attempts = 0;
                 xTaskCreate(wifi_reconnect_task, "wifi_reconnect", 4096, NULL, 3, &wifi_reconnect_task_handle);
                 ESP_LOGI(TAG, "WiFi-gjenoppkoblings-task startet");
             }
         }
+
+
+
+
     } 
     // Håndtere IP-hendelser
     else if (event_base == IP_EVENT) {
@@ -1073,8 +1068,6 @@ static void tcp_close()
 
 static void tcp_connect()
 {
-    // Med ESP-NOW er TCP valgfritt, så ikke vis server connecting status
-    // vTaskDelay(500 / portTICK_PERIOD_MS); // Fjernet
 
     ESP_LOGI(TAG, "Socket connecting to %s:%d (setup-kanal for ESP-NOW)", host_ip, PORT);
     int err = connect(sock, (struct sockaddr *)&dest_addr, sizeof(dest_addr));
@@ -1326,8 +1319,8 @@ static void example_espnow_recv_cb(const esp_now_recv_info_t *recv_info, const u
 
 
     // Behandle vanlige ESP-NOW meldinger (eksisterende kode)
-    example_espnow_data_t *buf = (example_espnow_data_t *)data;
-    int payload_len = len - sizeof(example_espnow_data_t);
+    timergate_espnow_data_t *buf = (timergate_espnow_data_t *)data;
+    int payload_len = len - sizeof(timergate_espnow_data_t);
 
     ESP_LOGI(TAG, "Receive broadcast ESPNOW data, len = %d", len);
     ESP_LOGI(TAG, "Payload len = %d, payload %s", payload_len, buf->payload);
@@ -1834,7 +1827,9 @@ static void handle_set_enabled_command(const uint8_t *data, size_t data_len) {
         enabled[sensor_nr] = (is_enabled != 0);
         
         // Slå av LED for denne sensoren
-        led_set_simple(sensor_nr, 0);
+        //led_set_simple(sensor_nr, 0);
+        led_set(sensor_nr, 0, 16, 16, 16);
+
         
         // Lagre innstillinger
         nvs_update_offsets();
@@ -1886,64 +1881,24 @@ static void handle_power_off_command(const uint8_t *data, size_t data_len) {
 
 
 
-
-
-
-
-
-
-
 static void check_socket()
 {
     char rx_buffer[128];
-    char command[50];
-    int cmd_index = 0;
-
+    
     int len = recv(sock, rx_buffer, sizeof(rx_buffer) - 1, MSG_DONTWAIT);
-    if (len < 0)
-    {
-        // ESP_LOGE(TAG, "recv failed: errno %d", errno);
-    }
-    else
-    {
-        rx_buffer[len] = 0; // Null-terminate whatever we received and treat like a string
-        ESP_LOGI(TAG, "Received %d bytes from %s: %s", len, host_ip, rx_buffer);
-        for (int i = 0; i < len; i++)
-        {
-            command[cmd_index] = rx_buffer[i];
-            if (rx_buffer[i] == '\n')
-            {
-                command[cmd_index] = 0;
-                
-                // Logg mottatt kommando for debugging
-                ESP_LOGI(TAG, "Prosesserer kommando: '%s'", command);
-                
-                // TCP brukes kun for MAC-registrering til ESP-NOW peer setup
-                // Alle andre kommandoer (break, enabled, power, restart, hsearch, time) 
-                // håndteres via ESP-NOW for bedre rekkevidde og ytelse
-                
-                // Kun "ID:" kommandoen støttes via TCP for peer-registrering
-                ESP_LOGW(TAG, "TCP kommando ignorert - bruk ESP-NOW: '%s'", command);
-
-                cmd_index = 0;
-            }
-            else
-            {
-                cmd_index++;
-            }
-        }
+    if (len < 0) {
+        // Ignorer recv errors silently
+        return;
+    } else if (len > 0) {
+        rx_buffer[len] = 0;
+        ESP_LOGD(TAG, "TCP mottok %d bytes (ignorert - bruk ESP-NOW)", len);
     }
 }
 
 
 
-
-
-
-
 static void tcp_client_task(void *pvParameters)
 {
-    char *cmd;
     char *break_cmd;
     while (1)
     {
@@ -1960,7 +1915,7 @@ static void tcp_client_task(void *pvParameters)
             wifi_ap_record_t ap_info;
             esp_err_t wifi_status = esp_wifi_sta_get_ap_info(&ap_info);
             
-            if (wifi_status == ESP_OK) {
+            if (wifi_status == ESP_OK && wifi_connected) {
                 // Med ESP-NOW trenger vi ikke TCP-server, gå direkte til READY
                 if (current_status != STATUS_READY) {
                     set_system_status(STATUS_READY);
@@ -1973,16 +1928,7 @@ static void tcp_client_task(void *pvParameters)
         }
         else
         {
-            if (xQueueReceive(xQueue, &cmd, 0))
-            {
-                // ESP_LOGI(TAG, "Sending from queue: %s", cmd);
-                int written = send(sock, cmd, strlen(cmd), 0);
-                if (written < 0)
-                {
-                    ESP_LOGE(TAG, "Error occurred during sending: errno %d", errno);
-                    connected = false;
-                }
-            }
+
             if (xQueueReceive(xQueueBreak, &break_cmd, 0) == pdPASS)
             {
                 // ESP_LOGI(TAG, "Sending from xQueueBreak: %s", break_cmd);
@@ -2002,7 +1948,6 @@ static void tcp_client_task(void *pvParameters)
         }
     }
 }
-
 
 
 static void wifi_init()
@@ -2028,7 +1973,6 @@ static void wifi_init()
     // Gå direkte til READY etter vellykket WiFi-tilkobling
     set_system_status(STATUS_READY);
 }
-
 
 static void pwm_setup()
 {
@@ -2103,8 +2047,6 @@ void app_main(void)
 
     esp_log_level_set("gpio", ESP_LOG_WARN);
 
-    cmd = malloc(200);
-
     adc_init();
     wifi_init();
     tcp_setup();
@@ -2122,7 +2064,7 @@ void app_main(void)
         log_esp_now_status();
     }
 
-    xQueue = xQueueCreate(1, sizeof(char *));
+    //xQueue = xQueueCreate(1, sizeof(char *));
     xQueueBreak = xQueueCreate(30, sizeof(char *));
     xTaskCreatePinnedToCore(tcp_client_task, "tcp_client", 4096, (void *)AF_INET, 5, NULL, 1);
 
@@ -2297,7 +2239,8 @@ void app_main(void)
         if (normal_led_control && !highpoint_search) {
             for (int i = 0; i < 7; i++) {
                 if (enabled[i]) {
-                    led_set_simple(i, sensor_break[i]);
+                    //led_set_simple(i, sensor_break[i]);
+                    led_set(i, sensor_break[i], 16, 16, 16);
                 }
             }
         }
