@@ -767,120 +767,216 @@ void nvs_setup()
     ESP_ERROR_CHECK(err);
 }
 
+
+// void nvs_read()
+// {
+//     esp_err_t err;
+//     // Open
+//     printf("Opening Non-Volatile Storage (NVS) handle... ");
+//     nvs_handle_t my_handle;
+//     err = nvs_open("storage", NVS_READWRITE, &my_handle);
+//     if (err != ESP_OK)
+//     {
+//         printf("Error (%s) opening NVS handle!\n", esp_err_to_name(err));
+//     }
+//     else
+//     {
+//         printf("Done\n");
+
+//         // Read
+//         printf("Reading restart counter from NVS ... ");
+//         err = nvs_get_i32(my_handle, "restart_counter", &restart_counter);
+//         switch (err)
+//         {
+//         case ESP_OK:
+//             printf("Done\n");
+//             printf("Restart counter = %" PRIu32 "\n", restart_counter);
+//             break;
+//         case ESP_ERR_NVS_NOT_FOUND:
+//             printf("The value is not initialized yet!\n");
+//             break;
+//         default:
+//             printf("Error (%s) reading!\n", esp_err_to_name(err));
+//         }
+
+//         char var_s[30];
+//         printf("Reading offsets in NVS ... ");
+//         err = ESP_OK;
+//         for (int i = 0; i < NUM_SENSORS; i++)
+//         {
+//             sprintf(var_s, "offset_%d", i);
+//             err |= nvs_get_u16(my_handle, var_s, &offsets[i]);
+            
+//             if (err != ESP_OK || offsets[i] == 0) {
+//                 offsets[i] = 4000;  // fallback-verdi
+//                 ESP_LOGW(TAG, "Setter offset[%d] til fallback-verdi: %d", i, offsets[i]);
+//                 err = ESP_OK;  // Unngå at én feil blokkerer alle
+//             }
+            
+//             sprintf(var_s, "break_limit_%d", i);
+//             err |= nvs_get_u16(my_handle, var_s, &break_limit[i]);
+
+//             sprintf(var_s, "enabled_%d", i);
+//             uint16_t tmp_enabled;
+//             err |= nvs_get_u16(my_handle, var_s, &tmp_enabled);
+//             enabled[i] = (tmp_enabled != 0);
+//         }
+//         printf((err != ESP_OK) ? "Failed!\n" : "Done\n");
+
+//         // Close
+//         nvs_close(my_handle);
+//     }
+// }
+
+
 void nvs_read()
 {
     esp_err_t err;
-    // Open
-    printf("Opening Non-Volatile Storage (NVS) handle... ");
+    ESP_LOGI(TAG, "Opening Non-Volatile Storage (NVS) handle...");
     nvs_handle_t my_handle;
     err = nvs_open("storage", NVS_READWRITE, &my_handle);
     if (err != ESP_OK)
     {
-        printf("Error (%s) opening NVS handle!\n", esp_err_to_name(err));
+        ESP_LOGE(TAG, "Error (%s) opening NVS handle!", esp_err_to_name(err));
+        return;
+    }
+
+    ESP_LOGI(TAG, "NVS handle opened successfully.");
+
+    // Les restart_counter
+    ESP_LOGI(TAG, "Reading restart counter from NVS...");
+    err = nvs_get_i32(my_handle, "restart_counter", &restart_counter);
+    switch (err)
+    {
+    case ESP_OK:
+        ESP_LOGI(TAG, "Restart counter = %" PRIu32, restart_counter);
+        break;
+    case ESP_ERR_NVS_NOT_FOUND:
+        ESP_LOGW(TAG, "Restart counter is not initialized yet.");
+        break;
+    default:
+        ESP_LOGE(TAG, "Error (%s) reading restart counter!", esp_err_to_name(err));
+    }
+
+    // Les offsets
+    char var_s[30];
+    ESP_LOGI(TAG, "Reading sensor settings from NVS...");
+    err = ESP_OK;
+    for (int i = 0; i < NUM_SENSORS; i++)
+    {
+        sprintf(var_s, "offset_%d", i);
+        err |= nvs_get_u16(my_handle, var_s, &offsets[i]);
+        if (err != ESP_OK || offsets[i] == 0)
+        {
+            offsets[i] = 4000;
+            ESP_LOGW(TAG, "Setter offset[%d] til fallback-verdi: %d", i, offsets[i]);
+            err = ESP_OK;
+        }
+
+        sprintf(var_s, "break_limit_%d", i);
+        err |= nvs_get_u16(my_handle, var_s, &break_limit[i]);
+
+        sprintf(var_s, "enabled_%d", i);
+        uint16_t tmp_enabled;
+        err |= nvs_get_u16(my_handle, var_s, &tmp_enabled);
+        enabled[i] = (tmp_enabled != 0);
+    }
+
+    if (err != ESP_OK)
+    {
+        ESP_LOGE(TAG, "En eller flere feil ved lesing av sensorinnstillinger.");
     }
     else
     {
-        printf("Done\n");
-
-        // Read
-        printf("Reading restart counter from NVS ... ");
-        err = nvs_get_i32(my_handle, "restart_counter", &restart_counter);
-        switch (err)
-        {
-        case ESP_OK:
-            printf("Done\n");
-            printf("Restart counter = %" PRIu32 "\n", restart_counter);
-            break;
-        case ESP_ERR_NVS_NOT_FOUND:
-            printf("The value is not initialized yet!\n");
-            break;
-        default:
-            printf("Error (%s) reading!\n", esp_err_to_name(err));
-        }
-
-        char var_s[30];
-        printf("Reading offsets in NVS ... ");
-        err = ESP_OK;
-        for (int i = 0; i < NUM_SENSORS; i++)
-        {
-            sprintf(var_s, "offset_%d", i);
-            err |= nvs_get_u16(my_handle, var_s, &offsets[i]);
-            
-            if (err != ESP_OK || offsets[i] == 0) {
-                offsets[i] = 4000;  // fallback-verdi
-                ESP_LOGW(TAG, "Setter offset[%d] til fallback-verdi: %d", i, offsets[i]);
-                err = ESP_OK;  // Unngå at én feil blokkerer alle
-            }
-            
-            sprintf(var_s, "break_limit_%d", i);
-            err |= nvs_get_u16(my_handle, var_s, &break_limit[i]);
-
-            sprintf(var_s, "enabled_%d", i);
-            uint16_t tmp_enabled;
-            err |= nvs_get_u16(my_handle, var_s, &tmp_enabled);
-            enabled[i] = (tmp_enabled != 0);
-        }
-        printf((err != ESP_OK) ? "Failed!\n" : "Done\n");
-
-        // Close
-        nvs_close(my_handle);
+        ESP_LOGI(TAG, "Sensorinnstillinger lest inn.");
     }
+
+    nvs_close(my_handle);
+    ESP_LOGI(TAG, "NVS handle closed.");
 }
+
+
+
 
 void nvs_update_restart()
 {
     esp_err_t err;
-    printf("Opening Non-Volatile Storage (NVS) handle... ");
+    ESP_LOGI(TAG, "Opening Non-Volatile Storage (NVS) handle...");
     nvs_handle_t my_handle;
     err = nvs_open("storage", NVS_READWRITE, &my_handle);
     if (err != ESP_OK)
     {
-        printf("Error (%s) opening NVS handle!\n", esp_err_to_name(err));
+        ESP_LOGE(TAG, "Error (%s) opening NVS handle!", esp_err_to_name(err));
     }
     else
     {
-        // Write
-        printf("Updating restart counter in NVS ... ");
+        ESP_LOGI(TAG, "Updating restart counter in NVS...");
         restart_counter++;
         err = nvs_set_i32(my_handle, "restart_counter", restart_counter);
-        printf((err != ESP_OK) ? "Failed!\n" : "Done\n");
+        if (err != ESP_OK)
+        {
+            ESP_LOGE(TAG, "Failed to update restart counter! (%s)", esp_err_to_name(err));
+        }
+        else
+        {
+            ESP_LOGI(TAG, "Restart counter updated.");
+        }
 
-        printf("Committing updates in NVS ... ");
+        ESP_LOGI(TAG, "Committing updates in NVS...");
         err = nvs_commit(my_handle);
-        printf((err != ESP_OK) ? "Failed!\n" : "Done\n");
-        // Close
+        if (err != ESP_OK)
+        {
+            ESP_LOGE(TAG, "Commit failed! (%s)", esp_err_to_name(err));
+        }
+        else
+        {
+            ESP_LOGI(TAG, "Commit done.");
+        }
+
         nvs_close(my_handle);
     }
 }
 
+
+
+
 void nvs_update_offsets()
 {
     esp_err_t err;
-    printf("Opening Non-Volatile Storage (NVS) handle... ");
+    ESP_LOGI(TAG, "Opening Non-Volatile Storage (NVS) handle...");
     nvs_handle_t my_handle;
     err = nvs_open("storage", NVS_READWRITE, &my_handle);
     if (err != ESP_OK)
     {
-        printf("Error (%s) opening NVS handle!\n", esp_err_to_name(err));
+        ESP_LOGE(TAG, "Error (%s) opening NVS handle!", esp_err_to_name(err));
     }
     else
     {
         char var_s[30];
-        printf("Updating offsets in NVS ... ");
+        ESP_LOGI(TAG, "Updating offsets in NVS...");
         for (int i = 0; i < NUM_SENSORS; i++)
         {
             sprintf(var_s, "offset_%d", i);
             err = nvs_set_u16(my_handle, var_s, offsets[i]);
+
             sprintf(var_s, "break_limit_%d", i);
-            err = nvs_set_u16(my_handle, var_s, break_limit[i]);
+            err |= nvs_set_u16(my_handle, var_s, break_limit[i]);
+
             sprintf(var_s, "enabled_%d", i);
-            err = nvs_set_u16(my_handle, var_s, enabled[i]);
+            err |= nvs_set_u16(my_handle, var_s, enabled[i]);
         }
 
-        printf("Committing updates in NVS ... ");
+        ESP_LOGI(TAG, "Committing updates in NVS...");
         err = nvs_commit(my_handle);
-        printf((err != ESP_OK) ? "Failed!\n" : "Done\n");
-        // Close
+        if (err != ESP_OK)
+        {
+            ESP_LOGE(TAG, "Commit failed! (%s)", esp_err_to_name(err));
+        }
+        else
+        {
+            ESP_LOGI(TAG, "Commit done.");
+        }
+
         nvs_close(my_handle);
     }
 }
