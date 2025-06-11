@@ -48,6 +48,15 @@ static uint8_t ap_mac_addr[ESP_NOW_ETH_ALEN] = {0};
 static bool esp_now_peer_added = false;
 
 
+// Ny funksjon: Sjekk om systemet er klart for kalibrering (ESP-NOW-basert)
+static bool system_ready_for_calibration(void) {
+    // Sjekk ESP-NOW peer-status i stedet for TCP
+    return esp_now_peer_added && (esp_timer_get_time() / 1000 > 10000); // 10 sek etter oppstart
+}
+
+
+
+
 /* Constants that aren't configurable in menuconfig */
 #define HOST_IP_ADDR "192.168.4.1"
 #define PORT 3333
@@ -2357,7 +2366,7 @@ void app_main(void)
 
 
         // Sjekk om vi skal starte automatisk kalibrering
-        if (current_status == STATUS_READY && !auto_calibration_started && connected) {
+        if (current_status == STATUS_READY && !auto_calibration_started && system_ready_for_calibration()) {
             if (ready_start_time == 0) {
                 // Første gang vi er i READY-tilstand, start tid
                 ready_start_time = esp_timer_get_time() / 1000; // Millisekunder
@@ -2381,7 +2390,7 @@ void app_main(void)
 
 
         // I koden for å starte automatisk kalibrering
-        if (current_status == STATUS_READY && !auto_calibration_started && connected) {
+        if (current_status == STATUS_READY && !auto_calibration_started && system_ready_for_calibration()) {
             // Logg mer detaljer om tilstandene
             ESP_LOGI(TAG, "Sjekker kalibrering - Status: %d, Auto: %d, Connected: %d", 
                     current_status, auto_calibration_started, connected);
@@ -2414,7 +2423,7 @@ void app_main(void)
 
 
 
-        if (highpoint_search && (!wifi_connected || !connected)) {
+        if (highpoint_search && false) {  // Midlertidig deaktiver TCP-basert avbrytelse
             ESP_LOGW(TAG, "Avbryter highpoint search: WiFi %s, Server %s", 
                     wifi_connected ? "tilkoblet" : "frakoblet",
                     connected ? "tilkoblet" : "frakoblet");
