@@ -1,3 +1,5 @@
+//11.06.2025 08:50
+
 /* Timergate Pole for hardware revision A2 */
 #include <stdio.h>
 #include <stdlib.h>
@@ -33,6 +35,10 @@
 #include "esp_timer.h"  // For esp_timer_get_time()
 #include "esp_sleep.h"
 
+
+static TaskHandle_t restart_task_handle = NULL;
+static bool restart_requested = false;
+static uint8_t restart_type_pending = 1;
 
 
 // ESP-NOW datastruktur for sensorbrudd
@@ -185,6 +191,11 @@ typedef struct {
 #define CMD_SET_BREAK      0x04
 #define CMD_SET_ENABLED    0x05
 #define CMD_POWER_OFF      0x06
+#define CMD_POWER_ON       0x07
+#define CMD_RESTART_SOFT   0x08
+#define CMD_RESTART_HARD   0x09
+#define CMD_RESTART_FACTORY 0x0A
+
 
 
 
@@ -433,8 +444,10 @@ void set_system_status(system_status_t status) {
         
         // VIKTIG: Logg ytterligere informasjon om statusendringen
         const char* status_names[] = {
-            "INITIALIZING", "WIFI_CONNECTING", "SERVER_CONNECTING", 
-            "READY", "ERROR_WIFI", "ERROR_SERVER", "ERROR_SENSORS_BLOCKED", "CALIBRATING"
+            "INITIALIZING",           // 0 - STATUS_INITIALIZING
+            "CALIBRATING",            // 1 - STATUS_CALIBRATING
+            "READY",                  // 2 - STATUS_READY
+            "ERROR_SENSORS_BLOCKED"   // 3 - STATUS_ERROR_SENSORS_BLOCKED
         };
         ESP_LOGI(TAG, "Status endret fra %s til %s", 
                 status_names[current_status], status_names[status]);
@@ -444,15 +457,15 @@ void set_system_status(system_status_t status) {
         set_all_leds(0, 0, 0, 0);
         vTaskDelay(300 / portTICK_PERIOD_MS);
         
-        // Forbedret visning for spesifikke overganger
-        if (status == STATUS_READY) {  // Tidligere STATUS_ERROR_WIFI
-            // ENDRE: Mer tydelig WiFi-feil-indikasjon
-            ESP_LOGW(TAG, "Viser tydelig WiFi-feil-indikasjon");
-            for (int i = 0; i < 3; i++) {
-                set_all_leds(1, 255, 0, 0);  // Rødt
-                vTaskDelay(300 / portTICK_PERIOD_MS);
+        // Vis spesiell indikasjon bare ved gjenoppretting fra sensor-feil
+        if (status == STATUS_READY && current_status == STATUS_ERROR_SENSORS_BLOCKED) {
+            // Kort grønn indikasjon når sensor-problemer løses
+            ESP_LOGI(TAG, "Sensor-problemer løst - viser gjenopprettingsindikasjon");
+            for (int i = 0; i < 2; i++) {
+                set_all_leds(1, 0, 255, 0);  // Grønt (ikke rødt!)
+                vTaskDelay(200 / portTICK_PERIOD_MS);
                 set_all_leds(0, 0, 0, 0);  // Av
-                vTaskDelay(300 / portTICK_PERIOD_MS);
+                vTaskDelay(200 / portTICK_PERIOD_MS);
             }
         }
         
@@ -1771,6 +1784,24 @@ static void handle_esp_now_command(const command_msg_t *cmd, int len) {
         case CMD_POWER_OFF:
             handle_power_off_command(data, data_len);
             break;
+        case CMD_RESTART_SOFT:
+            {
+                uint8_t soft_restart_type = 1;
+                handle_restart_command(&soft_restart_type, sizeof(uint8_t));
+            }
+            break;
+        case CMD_RESTART_HARD:
+            {
+                uint8_t hard_restart_type = 2;
+                handle_restart_command(&hard_restart_type, sizeof(uint8_t));
+            }
+            break;
+        case CMD_RESTART_FACTORY:
+            {
+                uint8_t factory_restart_type = 3;
+                handle_restart_command(&factory_restart_type, sizeof(uint8_t));
+            }
+            break;
         default:
             ESP_LOGW(TAG, "Ukjent kommando-type: %d", cmd->command_type);
             break;
@@ -1781,6 +1812,102 @@ static void handle_esp_now_command(const command_msg_t *cmd, int len) {
 
 
 // Handler for restart-kommando via ESP-NOW
+// static void handle_restart_command(const uint8_t *data, size_t data_len) {
+//     uint8_t restart_type = 1; // Standard: soft restart
+    
+//     if (data_len >= sizeof(uint8_t)) {
+//         restart_type = data[0];
+//     }
+    
+//     ESP_LOGI(TAG, "🔄 ESP-NOW RESTART: Type %d", restart_type);
+    
+//     // Vis visuell indikasjon basert på restart-type
+//     normal_led_control = false;
+    
+//     switch (restart_type) {
+//         case 1: // Soft restart
+//             ESP_LOGI(TAG, "Utfører myk restart via ESP-NOW...");
+//             for (int i = 0; i < 3; i++) {
+//                 set_all_leds(1, 0, 0, 255);  // Blå
+//                 vTaskDelay(200 / portTICK_PERIOD_MS);
+//                 set_all_leds(0, 0, 0, 0);
+//                 vTaskDelay(200 / portTICK_PERIOD_MS);
+//             }
+//             break;
+            
+//         case 2: // Hard restart
+//             ESP_LOGI(TAG, "Utfører hard restart via ESP-NOW...");
+//             for (int i = 0; i < 5; i++) {
+//                 set_all_leds(1, 255, 165, 0);  // Oransje
+//                 vTaskDelay(150 / portTICK_PERIOD_MS);
+//                 set_all_leds(0, 0, 0, 0);
+//                 vTaskDelay(150 / portTICK_PERIOD_MS);
+//             }
+//             break;
+            
+//         case 3: // Factory reset
+//             ESP_LOGI(TAG, "Utfører factory reset via ESP-NOW...");
+//             for (int i = 0; i < 10; i++) {
+//                 set_all_leds(1, 255, 0, 0);  // Rød
+//                 vTaskDelay(100 / portTICK_PERIOD_MS);
+//                 set_all_leds(0, 0, 0, 0);
+//                 vTaskDelay(100 / portTICK_PERIOD_MS);
+//             }
+            
+//             // Slett NVS-innstillinger for factory reset
+//             if (restart_type == 3) {
+//                 nvs_handle_t my_handle;
+//                 esp_err_t err = nvs_open("storage", NVS_READWRITE, &my_handle);
+//                 if (err == ESP_OK) {
+//                     ESP_LOGI(TAG, "Sletter NVS-innstillinger for factory reset...");
+//                     nvs_erase_all(my_handle);
+//                     nvs_commit(my_handle);
+//                     nvs_close(my_handle);
+//                 }
+//             }
+//             break;
+            
+//         default:
+//             ESP_LOGW(TAG, "Ukjent restart-type: %d", restart_type);
+//             return;
+//     }
+    
+//     ESP_LOGI(TAG, "✅ Restart kommando behandlet, restarter om 500ms...");
+//     vTaskDelay(500 / portTICK_PERIOD_MS);
+//     esp_restart();
+// }
+
+static void restart_task(void *pvParameters) {
+    uint8_t restart_type = *((uint8_t*)pvParameters);
+    
+    ESP_LOGI(TAG, "🔄 Restart task kjører for type %d", restart_type);
+    
+    // Factory reset: slett NVS-innstillinger
+    if (restart_type == 3) {
+        ESP_LOGI(TAG, "Utfører factory reset - sletter innstillinger...");
+        nvs_handle_t my_handle;
+        esp_err_t err = nvs_open("storage", NVS_READWRITE, &my_handle);
+        if (err == ESP_OK) {
+            ESP_LOGI(TAG, "Sletter NVS-innstillinger...");
+            nvs_erase_all(my_handle);
+            nvs_commit(my_handle);
+            nvs_close(my_handle);
+            ESP_LOGI(TAG, "NVS-innstillinger slettet");
+        }
+    }
+    
+    ESP_LOGI(TAG, "Venter 1 sekund før restart...");
+    vTaskDelay(1000 / portTICK_PERIOD_MS);
+    
+    ESP_LOGI(TAG, "✅ Utfører restart nå...");
+    fflush(stdout); // Sørg for at all logging blir skrevet ut
+    
+    esp_restart();
+    
+    // Denne koden skal aldri nås
+    vTaskDelete(NULL);
+}
+
 static void handle_restart_command(const uint8_t *data, size_t data_len) {
     uint8_t restart_type = 1; // Standard: soft restart
     
@@ -1790,61 +1917,36 @@ static void handle_restart_command(const uint8_t *data, size_t data_len) {
     
     ESP_LOGI(TAG, "🔄 ESP-NOW RESTART: Type %d", restart_type);
     
-    // Vis visuell indikasjon basert på restart-type
-    normal_led_control = false;
-    
-    switch (restart_type) {
-        case 1: // Soft restart
-            ESP_LOGI(TAG, "Utfører myk restart via ESP-NOW...");
-            for (int i = 0; i < 3; i++) {
-                set_all_leds(1, 0, 0, 255);  // Blå
-                vTaskDelay(200 / portTICK_PERIOD_MS);
-                set_all_leds(0, 0, 0, 0);
-                vTaskDelay(200 / portTICK_PERIOD_MS);
-            }
-            break;
-            
-        case 2: // Hard restart
-            ESP_LOGI(TAG, "Utfører hard restart via ESP-NOW...");
-            for (int i = 0; i < 5; i++) {
-                set_all_leds(1, 255, 165, 0);  // Oransje
-                vTaskDelay(150 / portTICK_PERIOD_MS);
-                set_all_leds(0, 0, 0, 0);
-                vTaskDelay(150 / portTICK_PERIOD_MS);
-            }
-            break;
-            
-        case 3: // Factory reset
-            ESP_LOGI(TAG, "Utfører factory reset via ESP-NOW...");
-            for (int i = 0; i < 10; i++) {
-                set_all_leds(1, 255, 0, 0);  // Rød
-                vTaskDelay(100 / portTICK_PERIOD_MS);
-                set_all_leds(0, 0, 0, 0);
-                vTaskDelay(100 / portTICK_PERIOD_MS);
-            }
-            
-            // Slett NVS-innstillinger for factory reset
-            if (restart_type == 3) {
-                nvs_handle_t my_handle;
-                esp_err_t err = nvs_open("storage", NVS_READWRITE, &my_handle);
-                if (err == ESP_OK) {
-                    ESP_LOGI(TAG, "Sletter NVS-innstillinger for factory reset...");
-                    nvs_erase_all(my_handle);
-                    nvs_commit(my_handle);
-                    nvs_close(my_handle);
-                }
-            }
-            break;
-            
-        default:
-            ESP_LOGW(TAG, "Ukjent restart-type: %d", restart_type);
-            return;
+    // Sjekk om restart allerede er forespurt
+    if (restart_requested) {
+        ESP_LOGW(TAG, "Restart allerede forespurt, ignorerer ny forespørsel");
+        return;
     }
     
-    ESP_LOGI(TAG, "✅ Restart kommando behandlet, restarter om 500ms...");
-    vTaskDelay(500 / portTICK_PERIOD_MS);
-    esp_restart();
+    // Sett restart-flagg og type
+    restart_requested = true;
+    restart_type_pending = restart_type;
+    
+    // Opprett restart-task
+    BaseType_t task_created = xTaskCreate(
+        restart_task,           // Task-funksjon
+        "restart_task",         // Task-navn
+        4096,                   // Stack-størrelse
+        &restart_type_pending,  // Parameter
+        10,                     // Prioritet (høy)
+        &restart_task_handle    // Task-handle
+    );
+    
+    if (task_created == pdPASS) {
+        ESP_LOGI(TAG, "✅ Restart-task opprettet vellykket");
+    } else {
+        ESP_LOGE(TAG, "❌ Feilet å opprette restart-task");
+        restart_requested = false; // Tilbakestill flagg ved feil
+    }
 }
+
+
+
 
 
 
