@@ -204,13 +204,9 @@ typedef struct {
 // Nye globale enum for systemstatus
 typedef enum {
     STATUS_INITIALIZING,
-    STATUS_WIFI_CONNECTING,
-    STATUS_SERVER_CONNECTING,
+    STATUS_CALIBRATING,     // 🚨 KRITISK - IKKE ENDRE!
     STATUS_READY,
-    STATUS_ERROR_WIFI,
-    STATUS_ERROR_SERVER,
-    STATUS_ERROR_SENSORS_BLOCKED,
-    STATUS_CALIBRATING // Ny status for kalibrering
+    STATUS_ERROR_SENSORS_BLOCKED
 } system_status_t;
 
 void set_system_status(system_status_t status);
@@ -448,7 +444,7 @@ void set_system_status(system_status_t status) {
         vTaskDelay(300 / portTICK_PERIOD_MS);
         
         // Forbedret visning for spesifikke overganger
-        if (status == STATUS_ERROR_WIFI) {
+        if (status == STATUS_READY) {  // Tidligere STATUS_ERROR_WIFI
             // ENDRE: Mer tydelig WiFi-feil-indikasjon
             ESP_LOGW(TAG, "Viser tydelig WiFi-feil-indikasjon");
             for (int i = 0; i < 3; i++) {
@@ -484,18 +480,23 @@ void set_system_status(system_status_t status) {
         
         // LEGG TIL: Initial visualisering av status med konstant farge
         switch (status) {
-            case STATUS_ERROR_WIFI:
-                ESP_LOGW(TAG, "Setter LED-er til ERROR_WIFI-mønster");
-                // Alternevende rødt-av mønster for WiFi-feil
-                for (int i = 0; i < NUM_SENSORS; i++) {
-                    if (enabled[i]) {
-                        led_set(i, i % 2 == 0, 255, 0, 0);
-                    }
-                }
+            case STATUS_INITIALIZING:
+                ESP_LOGI(TAG, "Setter LED-er til INITIALIZING-mønster (hvitt)");
+                set_all_leds(1, 64, 64, 64); // Hvit for initialisering
                 break;
                 
-            case STATUS_ERROR_SERVER:
-                ESP_LOGW(TAG, "Setter LED-er til ERROR_SERVER-mønster");
+            case STATUS_READY:
+                ESP_LOGI(TAG, "Setter LED-er til READY-mønster");
+                set_all_leds(1, 0, 255, 0); // Grønn for klar
+                break;
+                
+            case STATUS_CALIBRATING:
+                ESP_LOGI(TAG, "Setter LED-er til CALIBRATING-mønster");
+                set_all_leds(1, 128, 0, 128); // Lilla for kalibrering
+                break;
+                
+            case STATUS_ERROR_SENSORS_BLOCKED:
+                ESP_LOGW(TAG, "Setter LED-er til SENSORS_BLOCKED-mønster");
                 // Finn første og siste LED og sett disse til rødt
                 int first = -1, last = -1;
                 for (int i = 0; i < NUM_SENSORS; i++) {
@@ -511,29 +512,10 @@ void set_system_status(system_status_t status) {
                 }
                 break;
                 
-            case STATUS_WIFI_CONNECTING:
-                ESP_LOGI(TAG, "Setter LED-er til WIFI_CONNECTING-mønster");
-                set_all_leds(1, 0, 0, 255); // Blå farge for WiFi-tilkobling
-                break;
-                
-            case STATUS_READY:
-                ESP_LOGI(TAG, "Setter LED-er til READY-mønster");
-                set_all_leds(1, 0, 255, 0); // Grønn for klar
-                break;
-                
-            case STATUS_INITIALIZING:
-                ESP_LOGI(TAG, "Setter LED-er til INITIALIZING-mønster (hvitt)");
-                set_all_leds(1, 64, 64, 64); // Hvit for initialisering
-                break;
-                
-            case STATUS_CALIBRATING:
-                ESP_LOGI(TAG, "Setter LED-er til CALIBRATING-mønster");
-                set_all_leds(1, 128, 0, 128); // Lilla for kalibrering
-                break;
-                
             default:
                 break;
         }
+
     }
 }
 
@@ -588,58 +570,58 @@ void handle_status_animation() {
                 // Men bare hvis WiFi-tilkobling er nødvendig
                 if (wifi_connected == false) {
                     ESP_LOGI(TAG, "Oppstartssekvens fullført, går videre til WiFi-tilkobling");
-                    set_system_status(STATUS_WIFI_CONNECTING);
+                    set_system_status(STATUS_INITIALIZING);
                 }
             }
             break;
         }
         
-        case STATUS_WIFI_CONNECTING: {
-            // Roterende LED-er (blå)
-            uint32_t step_time = 150; // Raskere rotasjon: 150ms per steg
-            uint32_t active_sensors = 0;
+        // case STATUS_WIFI_CONNECTING: {
+        //     // Roterende LED-er (blå)
+        //     uint32_t step_time = 150; // Raskere rotasjon: 150ms per steg
+        //     uint32_t active_sensors = 0;
             
-            // Tell antall aktive sensorer
-            for (int i = 0; i < NUM_SENSORS; i++) {
-                if (enabled[i]) {
-                    active_sensors++;
-                }
-            }
+        //     // Tell antall aktive sensorer
+        //     for (int i = 0; i < NUM_SENSORS; i++) {
+        //         if (enabled[i]) {
+        //             active_sensors++;
+        //         }
+        //     }
             
-            if (active_sensors > 0) {
-                // Beregn hvilken LED som skal være aktiv nå
-                uint32_t current_led = (elapsed_time / step_time) % active_sensors;
+        //     if (active_sensors > 0) {
+        //         // Beregn hvilken LED som skal være aktiv nå
+        //         uint32_t current_led = (elapsed_time / step_time) % active_sensors;
                 
-                // Slå på den riktige LED-en basert på indeks
-                int led_index = 0;
-                for (int i = 0; i < NUM_SENSORS; i++) {
-                    if (enabled[i]) {
-                        bool should_be_on = (led_index == current_led);
-                        led_set(i, should_be_on, 
-                              STATUS_COLORS[STATUS_WIFI_CONNECTING][0],
-                              STATUS_COLORS[STATUS_WIFI_CONNECTING][1],
-                              STATUS_COLORS[STATUS_WIFI_CONNECTING][2]);
-                        led_index++;
-                    } else {
-                        // Slå av deaktiverte sensorer
-                        led_set(i, 0, 0, 0, 0);
-                    }
-                }
-            }
-            break;
-        }
+        //         // Slå på den riktige LED-en basert på indeks
+        //         int led_index = 0;
+        //         for (int i = 0; i < NUM_SENSORS; i++) {
+        //             if (enabled[i]) {
+        //                 bool should_be_on = (led_index == current_led);
+        //                 led_set(i, should_be_on, 
+        //                       STATUS_COLORS[STATUS_WIFI_CONNECTING][0],
+        //                       STATUS_COLORS[STATUS_WIFI_CONNECTING][1],
+        //                       STATUS_COLORS[STATUS_WIFI_CONNECTING][2]);
+        //                 led_index++;
+        //             } else {
+        //                 // Slå av deaktiverte sensorer
+        //                 led_set(i, 0, 0, 0, 0);
+        //             }
+        //         }
+        //     }
+        //     break;
+        // }
         
-        case STATUS_SERVER_CONNECTING: {
-            // Alle LED-er blinker samtidig (gul)
-            uint32_t blink_cycle = 500; // 0.5 sekund på/av
-            bool on = ((elapsed_time / blink_cycle) % 2) == 0;
+        // case STATUS_SERVER_CONNECTING: {
+        //     // Alle LED-er blinker samtidig (gul)
+        //     uint32_t blink_cycle = 500; // 0.5 sekund på/av
+        //     bool on = ((elapsed_time / blink_cycle) % 2) == 0;
             
-            set_all_leds(on, 
-                       STATUS_COLORS[STATUS_SERVER_CONNECTING][0],
-                       STATUS_COLORS[STATUS_SERVER_CONNECTING][1],
-                       STATUS_COLORS[STATUS_SERVER_CONNECTING][2]);
-            break;
-        }
+        //     set_all_leds(on, 
+        //                STATUS_COLORS[STATUS_SERVER_CONNECTING][0],
+        //                STATUS_COLORS[STATUS_SERVER_CONNECTING][1],
+        //                STATUS_COLORS[STATUS_SERVER_CONNECTING][2]);
+        //     break;
+        // }
         
         case STATUS_READY: {
             // Standard grønn pulsering hver 30. sekund for kalibrert system
@@ -668,54 +650,54 @@ void handle_status_animation() {
             break;
         }
         
-        case STATUS_ERROR_WIFI: {
-            // Rytmisk blinking av annenhver LED (rødt mønster)
-            uint32_t blink_cycle = 800; // 0.8 sekund per full syklus
-            bool odd_leds = ((elapsed_time / (blink_cycle/2)) % 2) == 0;
+        // case STATUS_ERROR_WIFI: {
+        //     // Rytmisk blinking av annenhver LED (rødt mønster)
+        //     uint32_t blink_cycle = 800; // 0.8 sekund per full syklus
+        //     bool odd_leds = ((elapsed_time / (blink_cycle/2)) % 2) == 0;
             
-            for (int i = 0; i < NUM_SENSORS; i++) {
-                if (enabled[i]) {
-                    bool should_be_on = (i % 2 == 0) ? odd_leds : !odd_leds;
-                    led_set(i, should_be_on, 
-                           STATUS_COLORS[STATUS_ERROR_WIFI][0],
-                           STATUS_COLORS[STATUS_ERROR_WIFI][1],
-                           STATUS_COLORS[STATUS_ERROR_WIFI][2]);
-                }
-            }
+        //     for (int i = 0; i < NUM_SENSORS; i++) {
+        //         if (enabled[i]) {
+        //             bool should_be_on = (i % 2 == 0) ? odd_leds : !odd_leds;
+        //             led_set(i, should_be_on, 
+        //                    STATUS_COLORS[STATUS_ERROR_WIFI][0],
+        //                    STATUS_COLORS[STATUS_ERROR_WIFI][1],
+        //                    STATUS_COLORS[STATUS_ERROR_WIFI][2]);
+        //         }
+        //     }
             
-            // Logger periodisk for å bekrefte at vi fortsatt er i denne tilstanden
-            if (elapsed_time % 10000 < 100) {
-                ESP_LOGW(TAG, "WiFi-feil vedvarer etter %u ms", elapsed_time);
-            }
-            break;
-        }
+        //     // Logger periodisk for å bekrefte at vi fortsatt er i denne tilstanden
+        //     if (elapsed_time % 10000 < 100) {
+        //         ESP_LOGW(TAG, "WiFi-feil vedvarer etter %u ms", elapsed_time);
+        //     }
+        //     break;
+        // }
         
-        case STATUS_ERROR_SERVER: {
-            // Blinking av første og siste LED (rødt mønster)
-            uint32_t blink_cycle = 800; // 0.8 sekund per full syklus
-            bool on = ((elapsed_time / (blink_cycle/2)) % 2) == 0;
+        // case STATUS_ERROR_SERVER: {
+        //     // Blinking av første og siste LED (rødt mønster)
+        //     uint32_t blink_cycle = 800; // 0.8 sekund per full syklus
+        //     bool on = ((elapsed_time / (blink_cycle/2)) % 2) == 0;
             
-            // Finn først og siste aktive sensor
-            int first_active = -1;
-            int last_active = -1;
-            for (int i = 0; i < NUM_SENSORS; i++) {
-                if (enabled[i]) {
-                    if (first_active == -1) first_active = i;
-                    last_active = i;
-                }
-            }
+        //     // Finn først og siste aktive sensor
+        //     int first_active = -1;
+        //     int last_active = -1;
+        //     for (int i = 0; i < NUM_SENSORS; i++) {
+        //         if (enabled[i]) {
+        //             if (first_active == -1) first_active = i;
+        //             last_active = i;
+        //         }
+        //     }
             
-            for (int i = 0; i < NUM_SENSORS; i++) {
-                if (enabled[i]) {
-                    bool should_be_on = (i == first_active || i == last_active) ? on : false;
-                    led_set(i, should_be_on, 
-                           STATUS_COLORS[STATUS_ERROR_SERVER][0],
-                           STATUS_COLORS[STATUS_ERROR_SERVER][1],
-                           STATUS_COLORS[STATUS_ERROR_SERVER][2]);
-                }
-            }
-            break;
-        }
+        //     for (int i = 0; i < NUM_SENSORS; i++) {
+        //         if (enabled[i]) {
+        //             bool should_be_on = (i == first_active || i == last_active) ? on : false;
+        //             led_set(i, should_be_on, 
+        //                    STATUS_COLORS[STATUS_ERROR_SERVER][0],
+        //                    STATUS_COLORS[STATUS_ERROR_SERVER][1],
+        //                    STATUS_COLORS[STATUS_ERROR_SERVER][2]);
+        //         }
+        //     }
+        //     break;
+        // }
         
         case STATUS_CALIBRATING: {
             // Pulserende lilla for kalibrering
@@ -1014,9 +996,9 @@ static void wifi_reconnect_task(void *pvParameters) {
             
             if (err != ESP_OK) {
                 ESP_LOGE(TAG, "WiFi tilkoblingsforsøk feilet med feilkode %d", err);
-                set_system_status(STATUS_ERROR_WIFI);
+                set_system_status(STATUS_READY);
             } else {
-                set_system_status(STATUS_WIFI_CONNECTING);
+                set_system_status(STATUS_INITIALIZING);
             }
             
             wifi_reconnect_attempts++;
@@ -1059,7 +1041,7 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t e
             vTaskDelay(200 / portTICK_PERIOD_MS);
             set_all_leds(1, 0, 0, 255); // Blått lys for WiFi-tilkobling
             
-            set_system_status(STATUS_WIFI_CONNECTING);
+            set_system_status(STATUS_INITIALIZING);
         } 
 
         else if (event_id == WIFI_EVENT_STA_DISCONNECTED) {
@@ -1075,7 +1057,7 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t e
             vTaskDelay(100 / portTICK_PERIOD_MS);
             
             // Sett systemstatus til ERROR_WIFI
-            set_system_status(STATUS_ERROR_WIFI);
+            set_system_status(STATUS_READY);
             
             // Start reconnect task hvis ikke allerede startet
             if (wifi_reconnect_task_handle == NULL) {
@@ -1108,7 +1090,7 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t e
             }
             
             // Med ren ESP-NOW går vi direkte til READY etter WiFi-tilkobling
-            if (current_status == STATUS_ERROR_WIFI || current_status == STATUS_WIFI_CONNECTING) {
+            if (current_status == STATUS_INITIALIZING || current_status == STATUS_READY) {
                 // Kort pause for å vise vellykket WiFi-tilkobling
                 vTaskDelay(500 / portTICK_PERIOD_MS);
                 set_system_status(STATUS_READY);
@@ -1243,7 +1225,17 @@ static void publish_settings()
             break_limit[6]);
     sprintf(event, "{\"K\":2,\"M\":\"%s\",\"E\":%s,\"O\":%s,\"B\":%s,\"P\":true}\n", mac_addr, enabled_s, offset_s, break_s);
     ESP_LOGI(TAG, "%s", event);
-    xQueueSendToBack(xQueueBreak, &event, portMAX_DELAY);
+    //xQueueSendToBack(xQueueBreak, &event, portMAX_DELAY);
+    // Send direkte uten kø (kun hvis TCP er tilkoblet)
+    if (connected && sock >= 0) {
+        int written = send(sock, event, strlen(event), 0);
+        if (written > 0) {
+            ESP_LOGI(TAG, "Sendt settings direkte: %s", event);
+        } else {
+            ESP_LOGW(TAG, "Kunne ikke sende settings");
+        }
+    }
+    free(event);  // Viktig: frigjør minnet
 }
 
 static void store_mac()
@@ -2001,58 +1993,29 @@ static void check_socket()
 }
 
 
-
-static void tcp_client_task(void *pvParameters)
-{
-    char *break_cmd;
-    while (1)
-    {
-        vTaskDelay(10 / portTICK_PERIOD_MS);
-
-        if (!connected)
-        {
-            ESP_LOGI(TAG, "Not connected, trying to connect");
-            tcp_close();
-            vTaskDelay(100 / portTICK_PERIOD_MS);
-            tcp_setup();
-            
-            // Sjekk WiFi-status før TCP-tilkobling
-            wifi_ap_record_t ap_info;
-            esp_err_t wifi_status = esp_wifi_sta_get_ap_info(&ap_info);
-            
-            if (wifi_status == ESP_OK && wifi_connected) {
-                // Med ESP-NOW trenger vi ikke TCP-server, gå direkte til READY
-                if (current_status != STATUS_READY) {
-                    set_system_status(STATUS_READY);
-                }
-                tcp_connect(); // Setup-kanal for MAC-registrering og kalibrering
-            } else {
-                // WiFi er ikke tilkoblet, sett WiFi error
-                set_system_status(STATUS_ERROR_WIFI);
-            }
-        }
-        else
-        {
-
-            if (xQueueReceive(xQueueBreak, &break_cmd, 0) == pdPASS)
-            {
-                // ESP_LOGI(TAG, "Sending from xQueueBreak: %s", break_cmd);
-                int written = send(sock, break_cmd, strlen(break_cmd), 0);
-                if (written < 0)
-                {
-                    ESP_LOGE(TAG, "Error occurred during sending: errno %d", errno);
-                    connected = false;
-                }
-                if (break_cmd != NULL)
-                {
-                    free(break_cmd);
-                    break_cmd = NULL;
-                }
-            }
-            check_socket();
-        }
+// Minimal TCP setup - kun for initial registrering
+static void tcp_initial_setup(void) {
+    ESP_LOGI(TAG, "Starter minimal TCP setup for initial registrering");
+    
+    tcp_connect();
+    if (connected) {  // Sjekk connected-variabelen i stedet
+        store_mac();          // Send MAC til AP for ESP-NOW registrering
+        publish_settings();   // Send initial settings
+        ESP_LOGI(TAG, "Initial TCP setup fullført - MAC og settings sendt");
+        
+        // Sett connected = true for kompatibilitet (midlertidig)
+        connected = true;
+        
+        // Lukk forbindelse etter setup
+        close(sock);
+        ESP_LOGI(TAG, "TCP-forbindelse lukket etter initial setup");
+    } else {
+        ESP_LOGW(TAG, "TCP initial setup feilet - ESP-NOW fungerer likevel");
     }
 }
+
+
+
 
 
 static void wifi_init()
@@ -2060,24 +2023,19 @@ static void wifi_init()
     ESP_ERROR_CHECK(nvs_flash_init());
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
-
-    // Sett status til WiFi connecting
-    set_system_status(STATUS_WIFI_CONNECTING);
-
-    // Bruk example_connect uten vår egen event handler (unngår konflikt)
+    
     esp_err_t ret = example_connect();
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "WiFi tilkobling feilet med kode %d", ret);
-        set_system_status(STATUS_ERROR_WIFI);
-        return;
+    if (ret == ESP_OK) {
+        ESP_LOGI(TAG, "WiFi tilkoblet - ESP-NOW klar");
+        wifi_connected = true;  // Behold denne foreløpig
+    } else {
+        ESP_LOGW(TAG, "WiFi feilet - ESP-NOW fungerer likevel");
+        wifi_connected = false;
     }
-    
-    ESP_LOGI(TAG, "WiFi tilkoblet vellykket via example_connect");
-    wifi_connected = true;
-    
-    // Gå direkte til READY etter vellykket WiFi-tilkobling
-    set_system_status(STATUS_READY);
+    // INGEN status-endring eller reconnect-oppstart
 }
+
+
 
 static void pwm_setup()
 {
@@ -2155,7 +2113,7 @@ void app_main(void)
     adc_init();
     wifi_init();
     tcp_setup();
-    tcp_connect();
+    tcp_initial_setup();  // Ny minimal TCP-setup i stedet for kontinuerlig task
     store_mac();
     nvs_update_restart();
 
@@ -2170,8 +2128,8 @@ void app_main(void)
     }
 
     //xQueue = xQueueCreate(1, sizeof(char *));
-    xQueueBreak = xQueueCreate(30, sizeof(char *));
-    xTaskCreatePinnedToCore(tcp_client_task, "tcp_client", 4096, (void *)AF_INET, 5, NULL, 1);
+    // xQueueBreak = xQueueCreate(30, sizeof(char *));  // Fjernet i Fase 3 - ikke nødvendig med ESP-NOW
+    //xTaskCreatePinnedToCore(tcp_client_task, "tcp_client", 4096, (void *)AF_INET, 5, NULL, 1);
 
        
     publish_settings();
@@ -2226,7 +2184,7 @@ void app_main(void)
                 
         // Sett riktig tilstand basert på WiFi-status
         if (!wifi_connected) {
-            set_system_status(STATUS_ERROR_WIFI);
+            set_system_status(STATUS_READY);
         }
     }
 
@@ -2433,9 +2391,9 @@ void app_main(void)
             
             // Sett riktig feilstatus
             if (!wifi_connected) {
-                set_system_status(STATUS_ERROR_WIFI);
+                set_system_status(STATUS_READY);
             } else {
-                set_system_status(STATUS_ERROR_SERVER);
+                set_system_status(STATUS_READY);
             }
         }
 
