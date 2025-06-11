@@ -1142,17 +1142,17 @@ void tcp_setup(void)
     ESP_LOGI(TAG, "Socket created");
 }
 
-static void tcp_close()
-{
-    ESP_LOGI(TAG, "Socket closing");
-    int err = close(sock);
-    if (err != 0)
-    {
-        ESP_LOGE(TAG, "Socket unable to close: errno %d", errno);
-        return;
-    }
-    ESP_LOGI(TAG, "Successfully closed");
-}
+// static void tcp_close()
+// {
+//     ESP_LOGI(TAG, "Socket closing");
+//     int err = close(sock);
+//     if (err != 0)
+//     {
+//         ESP_LOGE(TAG, "Socket unable to close: errno %d", errno);
+//         return;
+//     }
+//     ESP_LOGI(TAG, "Successfully closed");
+// }
 
 static void tcp_connect()
 {
@@ -1979,19 +1979,19 @@ static void handle_power_off_command(const uint8_t *data, size_t data_len) {
 
 
 
-static void check_socket()
-{
-    char rx_buffer[128];
+// static void check_socket()
+// {
+//     char rx_buffer[128];
     
-    int len = recv(sock, rx_buffer, sizeof(rx_buffer) - 1, MSG_DONTWAIT);
-    if (len < 0) {
-        // Ignorer recv errors silently
-        return;
-    } else if (len > 0) {
-        rx_buffer[len] = 0;
-        ESP_LOGD(TAG, "TCP mottok %d bytes (ignorert - bruk ESP-NOW)", len);
-    }
-}
+//     int len = recv(sock, rx_buffer, sizeof(rx_buffer) - 1, MSG_DONTWAIT);
+//     if (len < 0) {
+//         // Ignorer recv errors silently
+//         return;
+//     } else if (len > 0) {
+//         rx_buffer[len] = 0;
+//         ESP_LOGD(TAG, "TCP mottok %d bytes (ignorert - bruk ESP-NOW)", len);
+//     }
+// }
 
 
 // Minimal TCP setup - kun for initial registrering
@@ -2062,7 +2062,7 @@ static void pwm_setup()
 
 
 // Deklarasjon av WiFi-event handler
-static void wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data); 
+//static void wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data); 
 
 
 
