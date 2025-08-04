@@ -195,6 +195,8 @@ typedef struct {
 #define CMD_RESTART_SOFT   0x08
 #define CMD_RESTART_HARD   0x09
 #define CMD_RESTART_FACTORY 0x0A
+#define CMD_UNPAIR         0x0B
+
 
 
 
@@ -1420,6 +1422,22 @@ static void example_espnow_recv_cb(const esp_now_recv_info_t *recv_info, const u
     if (len >= sizeof(command_msg_t)) {
         command_msg_t *command = (command_msg_t*)data;
         if (command->msg_type == MSG_COMMAND) {
+        
+            // SPESIELL HÅNDTERING: CMD_UNPAIR må alltid prosesseres, uavhengig av system_id
+            if (command->command_type == CMD_UNPAIR) {
+                ESP_LOGI(TAG, "🔓 UNPAIR SPESIAL: Aksepterer unpair-kommando uavhengig av system ID");
+                ESP_LOGI(TAG, "📨 Mottok kommando via ESP-NOW: type=%d", command->command_type);
+                handle_esp_now_command(command, len);
+                return;  // Behandle umiddelbart og return
+            }
+            
+            // For alle andre kommandoer: sjekk system_id som normalt
+            if (!is_assigned_to_system() || command->system_id != my_assigned_system_id) {
+                ESP_LOGD(TAG, "❌ Kommando ignorert - feil system ID (vår: %08X, mottatt: %08X)", 
+                        my_assigned_system_id, command->system_id);
+                return;
+            }
+
             ESP_LOGI(TAG, "📨 Mottok kommando via ESP-NOW: type=%d", command->command_type);
             handle_esp_now_command(command, len);
             return;
@@ -1801,6 +1819,19 @@ static void handle_esp_now_command(const command_msg_t *cmd, int len) {
                 uint8_t factory_restart_type = 3;
                 handle_restart_command(&factory_restart_type, sizeof(uint8_t));
             }
+            break;
+        case CMD_UNPAIR:
+            ESP_LOGI(TAG, "🔓 Mottok unpair-kommando fra AP");
+            my_assigned_system_id = 0x00000000;
+            announcement_active = true;
+            save_system_assignment_to_nvs();
+            ESP_LOGI(TAG, "📢 Frigjort fra system - starter discovery-modus");
+            // Utvidet status-logging for debugging
+            ESP_LOGI(TAG, "💾 Unpair status oppdatert:");
+            ESP_LOGI(TAG, "   - System ID: %08X (0=ledig)", my_assigned_system_id);
+            ESP_LOGI(TAG, "   - Announcement aktiv: %s", announcement_active ? "JA" : "NEI");
+            ESP_LOGI(TAG, "   - NVS lagret: JA");
+            ESP_LOGI(TAG, "✨ Målestolpe er nå tilgjengelig for ny pairing");
             break;
         default:
             ESP_LOGW(TAG, "Ukjent kommando-type: %d", cmd->command_type);
@@ -2410,9 +2441,11 @@ void app_main(void)
                 }
             }
         }
+        
 
         // Send K=0 ADC-data via ESP-NOW (kontinuerlig, 1 gang per sekund)
-        if (!blink_mode && current_status != STATUS_ERROR_SENSORS_BLOCKED && esp_now_peer_added) {
+        //if (!blink_mode && current_status != STATUS_ERROR_SENSORS_BLOCKED && esp_now_peer_added) {
+        if (!blink_mode && current_status != STATUS_ERROR_SENSORS_BLOCKED && esp_now_peer_added && is_assigned_to_system()) {
             static uint32_t last_espnow_k0_send = 0;
             uint32_t now_k0 = esp_timer_get_time() / 1000;
             if (now_k0 - last_espnow_k0_send >= 1000) {  // 1 sekund mellom hver K=0 sending

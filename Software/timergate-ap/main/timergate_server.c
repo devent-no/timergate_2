@@ -1,4 +1,4 @@
-//Sjekk, er vi i rett fil?
+//Sjekk, er vi i rett fil? 3.8.25 09:45
 
 //
 //--------------- Del 1: Inkluderinger, definisjoner og strukturer ----------------
@@ -32,7 +32,6 @@
 #include "esp_timer.h"
 #include "esp_now.h"
 #include "esp_mac.h"
-
 
 
 // Definer MIN-makroen
@@ -113,6 +112,7 @@ typedef struct {
     uint32_t last_sensor_time;           // Siste tidspunkt fra sensoren
     uint32_t last_sensor_micros;         // Mikrosekunder del    
     int first_sensor_id_candidate;
+    bool passage_sent_this_sequence;  // NY: Flag for om K4 er sendt
 } passage_detection_t;
 
 
@@ -332,6 +332,8 @@ static SemaphoreHandle_t system_id_mutex;
 #define CMD_RESTART_SOFT   0x08
 #define CMD_RESTART_HARD   0x09
 #define CMD_RESTART_FACTORY 0x0A
+#define CMD_UNPAIR         0x0B
+
 
 
 
@@ -383,6 +385,68 @@ esp_err_t send_esp_now_message(const uint8_t *dest_mac, uint8_t msg_type, const 
 bool send_esp_now_command_to_pole(const uint8_t *mac, uint8_t cmd_type, const void *data, size_t data_len);
 esp_err_t get_system_id_handler(httpd_req_t *req);
 
+// Implementasjon av send_esp_now_command_to_pole
+bool send_esp_now_command_to_pole(const uint8_t *mac, uint8_t cmd_type, const void *data, size_t data_len) {
+    if (!mac) {
+        ESP_LOGE(TAG, "Ugyldig MAC-adresse for ESP-NOW kommando");
+        return false;
+    }
+    
+    // Sjekk om peer eksisterer, og legg til hvis ikke
+    if (!esp_now_is_peer_exist(mac)) {
+        esp_now_peer_info_t peer_info = {0};
+        memcpy(peer_info.peer_addr, mac, ESP_NOW_ETH_ALEN);
+        peer_info.channel = 0;
+        peer_info.ifidx = WIFI_IF_AP;
+        peer_info.encrypt = false;
+        
+        esp_err_t peer_result = esp_now_add_peer(&peer_info);
+        if (peer_result != ESP_OK) {
+            ESP_LOGE(TAG, "❌ Kunne ikke legge til ESP-NOW peer: %s", esp_err_to_name(peer_result));
+            return false;
+        }
+        ESP_LOGI(TAG, "✅ Lagt til ESP-NOW peer for kommando-sending");
+    }
+    
+    // Beregn total størrelse for kommando-melding
+    size_t total_size = sizeof(command_msg_t) + data_len;
+    
+    // Allokér buffer for kommando-melding
+    uint8_t *msg_buffer = malloc(total_size);
+    if (!msg_buffer) {
+        ESP_LOGE(TAG, "❌ Kunne ikke allokere buffer for ESP-NOW kommando");
+        return false;
+    }
+    
+    // Bygg kommando-melding
+    command_msg_t *cmd_msg = (command_msg_t *)msg_buffer;
+    cmd_msg->system_id = current_system_id;
+    cmd_msg->msg_type = MSG_COMMAND;
+    memcpy(cmd_msg->target_mac, mac, 6);
+    cmd_msg->command_type = cmd_type;
+    
+    // Kopier data hvis det finnes
+    if (data && data_len > 0) {
+        memcpy(cmd_msg->data, data, data_len);
+    }
+    
+    ESP_LOGI(TAG, "📡 Sender ESP-NOW kommando type %d til %02x:%02x:%02x:%02x:%02x:%02x (System ID: %08X, størrelse: %zu bytes)",
+             cmd_type, mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], current_system_id, total_size);
+    
+    // Send via ESP-NOW
+    esp_err_t result = esp_now_send(mac, msg_buffer, total_size);
+    
+    free(msg_buffer);
+    
+    if (result == ESP_OK) {
+        ESP_LOGI(TAG, "✅ ESP-NOW kommando sendt vellykket");
+        return true;
+    } else {
+        ESP_LOGE(TAG, "❌ ESP-NOW kommando sending feilet: %s", esp_err_to_name(result));
+        return false;
+    }
+}
+
 // Funksjonsdeklarasjoner for paired poles
 void load_paired_poles_from_nvs(void);
 void save_paired_poles_to_nvs(void);
@@ -392,9 +456,14 @@ esp_err_t get_paired_poles_handler(httpd_req_t *req);
 esp_err_t unpair_pole_handler(httpd_req_t *req);
 esp_err_t rename_pole_handler(httpd_req_t *req);
 
+// NVS-funksjoner for passeringskonfigurasjon
+esp_err_t save_passage_config_to_nvs(void);
+esp_err_t load_passage_config_from_nvs(void);
+
 
 esp_err_t simulate_pole_data_handler(httpd_req_t *req);
 esp_err_t websocket_test_page_handler(httpd_req_t *req);
+esp_err_t test_duplicate_passage_handler(httpd_req_t *req);
 
 // Funksjonsdeklarasjoner for signal tracking
 void update_signal_quality(const uint8_t *mac, int8_t rssi);
@@ -478,9 +547,11 @@ void add_to_passage_history(const uint8_t *mac, uint32_t time_sec, uint32_t time
 }
 
 
+
 // Nye funksjonsdeklarasjoner for håndtering av sendte passeringer
-bool is_passage_already_sent(const uint8_t *mac, uint32_t time_sec, uint32_t time_micros, int sensors_count);
+//bool is_passage_already_sent(const uint8_t *mac, uint32_t time_sec, uint32_t time_micros, int sensors_count);
 void register_sent_passage(const uint8_t *mac, uint32_t time_sec, uint32_t time_micros, int sensors_count);
+//bool check_and_register_passage_atomic(const uint8_t *mac, uint32_t time_sec, uint32_t time_micros, int sensors_count);
 void clean_old_passages(void *pvParameters);
 
 // Nye funksjonsdeklarasjoner for dual-timing stoppeklokke
@@ -491,6 +562,10 @@ void log_passage_with_dual_timing(const char *mac_str, int sensor_id,
                                  uint32_t server_time_sec, uint32_t server_time_usec,
                                  int *sensors_used, int sensor_count);
 uint64_t calculate_stopwatch_time_ms(const uint8_t *mac1, const uint8_t *mac2);
+
+// bool check_register_and_send_passage_atomic(const uint8_t *mac, uint32_t time_sec, 
+//                                            uint32_t time_micros, int sensors_count,
+//                                            const char *mac_str);
 
 
 // Nye funksjonsdeklarasjoner for discovery og pairing
@@ -503,6 +578,7 @@ esp_err_t get_discovered_poles_handler(httpd_req_t *req);
 esp_err_t assign_pole_handler(httpd_req_t *req);
 esp_err_t identify_pole_handler(httpd_req_t *req);
 esp_err_t get_system_id_handler(httpd_req_t *req);
+bool is_paired_pole_by_mac(const uint8_t *mac);
 
 
 static httpd_handle_t global_server = NULL;
@@ -760,10 +836,10 @@ void tcp_client_handler(void *arg) {
                     
                     // Sjekk om dette er et break-event
                     if (strncmp(command, "break:", 6) == 0) {
-                        // Parse sensor_id og break_value
+                        // Parse sensor_id og break_state
                         int sensor_id = 0;
-                        int break_value = 0;
-                        if (sscanf(command + 6, "%d %d", &sensor_id, &break_value) == 2) {
+                        int break_state = 0;
+                        if (sscanf(command + 6, "%d %d", &sensor_id, &break_state) == 2) {
                             // Få gjeldende tid
                             struct timeval tv;
                             gettimeofday(&tv, NULL);
@@ -779,7 +855,7 @@ void tcp_client_handler(void *arg) {
                             mac_bytes[4] = 0xEE;
                             mac_bytes[5] = pole_idx & 0xFF; // Bruk pole_idx som siste byte
                             
-                            send_break_to_websocket(mac_bytes, tv.tv_sec, tv.tv_usec, break_value, false);
+                            send_break_to_websocket(mac_bytes, tv.tv_sec, tv.tv_usec, break_state, false);
                             
                             // Behandle brudd for passeringsdeteksjon
                             struct timeval tv_now;
@@ -1003,8 +1079,7 @@ CLEAN_UP:
 // 
 // 
 
-
-// Handler for å restarte en målestolpe
+// Renset versjon av pole_restart_handler - kun ESP-NOW, ingen TCP warnings
 esp_err_t pole_restart_handler(httpd_req_t *req) {
     char buf[100];
     int ret, remaining = req->content_len;
@@ -1040,7 +1115,7 @@ esp_err_t pole_restart_handler(httpd_req_t *req) {
     char *mac_start = strstr(buf, "\"mac\":\"");
     if (mac_start) {
         mac_start += 7; // Hopp over "mac":"
-        char *mac_end = strchr(mac_start, '\"');
+        char *mac_end = strchr(mac_start, '"');
         if (mac_end && (mac_end - mac_start) < 18) {
             strncpy(mac, mac_start, mac_end - mac_start);
             mac[mac_end - mac_start] = '\0';
@@ -1048,7 +1123,7 @@ esp_err_t pole_restart_handler(httpd_req_t *req) {
     }
     
     // Parse restart-type (hvis angitt)
-    int restart_type = 0;  // Standard restart
+    int restart_type = 1;  // Standard: soft restart
     char *type_start = strstr(buf, "\"type\":");
     if (type_start) {
         type_start += 7; // Hopp over "type":
@@ -1057,100 +1132,78 @@ esp_err_t pole_restart_handler(httpd_req_t *req) {
     
     ESP_LOGI(TAG, "Restart forespørsel for MAC: %s, type: %d", mac, restart_type);
     
+    bool success = false;
+    
     if (strlen(mac) > 0) {
-        // Bygger kommandoen basert på restart-typen
-        char command[64];
-
-
-
-
-        // NYTT: Send restart-kommando via ESP-NOW først
+        // Send restart-kommando via ESP-NOW
         ESP_LOGI(TAG, "🔄 Sender restart-kommando via ESP-NOW (MAC: %s, type: %d)", 
                  mac, restart_type);
         
         // Konverter MAC-streng til bytes
         uint8_t target_mac[6];
-        bool esp_now_sent = false;
         
         if (sscanf(mac, "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx", 
                   &target_mac[0], &target_mac[1], &target_mac[2],
                   &target_mac[3], &target_mac[4], &target_mac[5]) == 6) {
             
             uint8_t restart_cmd_type;
+            const char* restart_type_name;
+            
             switch (restart_type) {
                 case 1:
                     restart_cmd_type = CMD_RESTART_SOFT;
+                    restart_type_name = "Soft restart";
                     break;
                 case 2:
                     restart_cmd_type = CMD_RESTART_HARD;
+                    restart_type_name = "Hard restart";
                     break;
                 case 3:
                     restart_cmd_type = CMD_RESTART_FACTORY;
+                    restart_type_name = "Factory reset";
                     break;
                 default:
-                    restart_cmd_type = CMD_RESTART_SOFT; // Standard
+                    restart_cmd_type = CMD_RESTART_SOFT;
+                    restart_type_name = "Soft restart (default)";
                     break;
             }
             
-            esp_now_sent = send_esp_now_command_to_pole(
+            success = send_esp_now_command_to_pole(
                 target_mac, 
                 restart_cmd_type, 
                 NULL, 
                 0  // Ingen ekstra data trengs
             );
             
-            if (esp_now_sent) {
-                ESP_LOGI(TAG, "✅ ESP-NOW restart-kommando sendt til %s", mac);
+            if (success) {
+                ESP_LOGI(TAG, "✅ ESP-NOW restart-kommando sendt til %s (%s)", mac, restart_type_name);
             } else {
-                ESP_LOGW(TAG, "❌ ESP-NOW restart-kommando feilet for %s", mac);
+                ESP_LOGE(TAG, "❌ ESP-NOW restart-kommando feilet for %s (%s)", mac, restart_type_name);
             }
-        }
-        
-        // Fortsett med TCP for bakoverkompatibilitet
-
-
-
-
-        
-        switch (restart_type) {
-            case 1:
-                // Myk restart (standard)
-                sprintf(command, "restart: soft\n");
-                break;
-            case 2:
-                // Hard restart
-                sprintf(command, "restart: hard\n");
-                break;
-            case 3:
-                // Factory reset (sletter lagrede innstillinger)
-                sprintf(command, "restart: factory\n");
-                break;
-            default:
-                // Standard restart
-                sprintf(command, "restart: soft\n");
-                break;
-        }
-        
-        // Send kommandoen til målestolpen
-        if (send_command_to_pole_by_mac(mac, command)) {
-            ESP_LOGI(TAG, "Restart-kommando sendt: %s", command);
         } else {
-            ESP_LOGW(TAG, "Kunne ikke sende restart-kommando - målestolpe ikke tilkoblet");
+            ESP_LOGW(TAG, "Ugyldig MAC-format: %s", mac);
         }
     } else {
-        ESP_LOGW(TAG, "Ugyldig MAC-adresse mottatt");
+        ESP_LOGW(TAG, "Ingen MAC-adresse angitt i restart-forespørsel");
     }
+    
+    // TCP-kode er helt fjernet - kun ESP-NOW i bruk
     
     httpd_resp_set_type(req, "application/json");
     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
-    httpd_resp_sendstr(req, "{\"status\":\"success\",\"message\":\"Restart command sent\"}");
+    
+    if (success) {
+        httpd_resp_sendstr(req, "{\"status\":\"success\",\"message\":\"Restart command sent via ESP-NOW\"}");
+    } else {
+        httpd_resp_sendstr(req, "{\"status\":\"error\",\"message\":\"Failed to send restart command\"}");
+    }
     
     return ESP_OK;
 }
 
 
 
-// Handler for å kontrollere strømtilstand til en målestolpe
+// ================== POLE_POWER_HANDLER - REN ESP-NOW VERSJON ==================
 esp_err_t pole_power_handler(httpd_req_t *req) {
     char buf[100];
     int ret, remaining = req->content_len;
@@ -1189,7 +1242,7 @@ esp_err_t pole_power_handler(httpd_req_t *req) {
     char *mac_start = strstr(buf, "\"mac\":\"");
     if (mac_start) {
         mac_start += 7; // Hopp over "mac":"
-        char *mac_end = strchr(mac_start, '\"');
+        char *mac_end = strchr(mac_start, '"');
         if (mac_end && (mac_end - mac_start) < 18) {
             strncpy(mac, mac_start, mac_end - mac_start);
             mac[mac_end - mac_start] = '\0';
@@ -1200,7 +1253,7 @@ esp_err_t pole_power_handler(httpd_req_t *req) {
     char *power_start = strstr(buf, "\"power\":\"");
     if (power_start) {
         power_start += 9; // Hopp over "power":"
-        char *power_end = strchr(power_start, '\"');
+        char *power_end = strchr(power_start, '"');
         if (power_end && (power_end - power_start) < 4) {
             strncpy(power_state, power_start, power_end - power_start);
             power_state[power_end - power_start] = '\0';
@@ -1209,92 +1262,83 @@ esp_err_t pole_power_handler(httpd_req_t *req) {
     
     ESP_LOGI(TAG, "Strømkontroll for MAC: %s, tilstand: %s", mac, power_state);
     
+    bool success = false;
+    
     if (strlen(mac) > 0 && strlen(power_state) > 0) {
-        // Bygger kommandoen basert på ønsket strømtilstand
-        char command[32];
-        
-
-// NYTT: Send power-kommando via ESP-NOW først
+        // Send power-kommando via ESP-NOW
         ESP_LOGI(TAG, "🔋 Sender power-kommando via ESP-NOW (MAC: %s, tilstand: %s)", 
                  mac, power_state);
         
         // Konverter MAC-streng til bytes
         uint8_t target_mac[6];
-        bool esp_now_sent = false;
         
         if (sscanf(mac, "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx", 
                   &target_mac[0], &target_mac[1], &target_mac[2],
                   &target_mac[3], &target_mac[4], &target_mac[5]) == 6) {
             
             uint8_t power_cmd_type;
+            const char* power_description;
+            
             if (strcmp(power_state, "on") == 0) {
                 power_cmd_type = CMD_POWER_ON;
+                power_description = "Våkn fra deep sleep";
             } else if (strcmp(power_state, "off") == 0) {
                 power_cmd_type = CMD_POWER_OFF;
+                power_description = "Gå til deep sleep";
             } else {
-                ESP_LOGW(TAG, "Ugyldig power-tilstand for ESP-NOW: %s", power_state);
+                ESP_LOGW(TAG, "Ugyldig power-tilstand: %s (forventet 'on' eller 'off')", power_state);
                 power_cmd_type = 0; // Ugyldig
+                power_description = "Ugyldig kommando";
             }
             
             if (power_cmd_type != 0) {
-                esp_now_sent = send_esp_now_command_to_pole(
+                success = send_esp_now_command_to_pole(
                     target_mac, 
                     power_cmd_type, 
                     NULL, 
                     0  // Ingen ekstra data trengs
                 );
                 
-                if (esp_now_sent) {
-                    ESP_LOGI(TAG, "✅ ESP-NOW power-kommando sendt til %s", mac);
+                if (success) {
+                    ESP_LOGI(TAG, "✅ ESP-NOW power-kommando sendt til %s (%s)", mac, power_description);
+                    
+                    // Spesiell logging for power off siden målestolpen vil sove
+                    if (strcmp(power_state, "off") == 0) {
+                        ESP_LOGI(TAG, "💤 Målestolpe %s går til deep sleep og vil ikke svare før manuell oppstart", mac);
+                    }
                 } else {
-                    ESP_LOGW(TAG, "❌ ESP-NOW power-kommando feilet for %s", mac);
+                    ESP_LOGE(TAG, "❌ ESP-NOW power-kommando feilet for %s (%s)", mac, power_description);
                 }
             }
-        }
-        
-        // Fortsett med TCP for bakoverkompatibilitet
-
-
-
-
-        
-        if (strcmp(power_state, "on") == 0) {
-            sprintf(command, "power: on\n");
-        } else if (strcmp(power_state, "off") == 0) {
-            sprintf(command, "power: off\n");
         } else {
-            ESP_LOGW(TAG, "Ugyldig strømtilstand: %s", power_state);
-            httpd_resp_set_type(req, "application/json");
-            httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
-            httpd_resp_sendstr(req, "{\"status\":\"error\",\"message\":\"Ugyldig strømtilstand\"}");
-            return ESP_OK;
-        }
-        
-        // Send kommandoen til målestolpen
-        if (send_command_to_pole_by_mac(mac, command)) {
-            ESP_LOGI(TAG, "Strømkommando sendt: %s", command);
-        } else {
-            ESP_LOGW(TAG, "Kunne ikke sende strømkommando - målestolpe ikke tilkoblet");
-            httpd_resp_set_type(req, "application/json");
-            httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
-            httpd_resp_sendstr(req, "{\"status\":\"error\",\"message\":\"Målestolpe ikke tilkoblet\"}");
-            return ESP_OK;
+            ESP_LOGW(TAG, "Ugyldig MAC-format: %s", mac);
         }
     } else {
-        ESP_LOGW(TAG, "Ugyldig forespørsel - mangler data");
-        httpd_resp_set_type(req, "application/json");
-        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
-        httpd_resp_sendstr(req, "{\"status\":\"error\",\"message\":\"Mangler MAC eller strømtilstand\"}");
-        return ESP_OK;
+        ESP_LOGW(TAG, "Ugyldig forespørsel - MAC: %s, power_state: %s", mac, power_state);
     }
+    
+    // TCP-kode er helt fjernet - kun ESP-NOW i bruk
     
     httpd_resp_set_type(req, "application/json");
     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
-    httpd_resp_sendstr(req, "{\"status\":\"success\",\"message\":\"Strømkommando sendt\"}");
+    
+    if (success) {
+        char response_msg[128];
+        if (strcmp(power_state, "off") == 0) {
+            sprintf(response_msg, "Power OFF command sent via ESP-NOW - device will enter deep sleep");
+        } else {
+            sprintf(response_msg, "Power %s command sent via ESP-NOW", power_state);
+        }
+        
+        char json_response[256];
+        sprintf(json_response, "{\"status\":\"success\",\"message\":\"%.120s\"}", response_msg);
+        httpd_resp_sendstr(req, json_response);
+    } else {
+        httpd_resp_sendstr(req, "{\"status\":\"error\",\"message\":\"Failed to send power command\"}");
+    }
     
     return ESP_OK;
 }
-
 
 
 
@@ -1451,8 +1495,9 @@ esp_err_t time_check_handler(httpd_req_t *req) {
     return ESP_OK;
 }
 
-// Funksjon for å håndtere hsearch API (oppdatert for å sende til TCP-forbindelser)
+
 // Funksjon for å håndtere hsearch API (oppdatert for å sende til spesifikk målestolpe)
+// Renset versjon av time_hsearch_handler - kun ESP-NOW, ingen TCP warnings
 esp_err_t time_hsearch_handler(httpd_req_t *req) {
     char buf[100];
     int ret, remaining = req->content_len;
@@ -1488,8 +1533,8 @@ esp_err_t time_hsearch_handler(httpd_req_t *req) {
     // Parse MAC address parameter
     char *mac_start = strstr(buf, "\"mac\":\"");
     if (mac_start) {
-        mac_start += 7; // Hopp over "mac":":
-        char *mac_end = strchr(mac_start, '\"');
+        mac_start += 7; // Hopp over "mac":"
+        char *mac_end = strchr(mac_start, '"');
         if (mac_end && (mac_end - mac_start) < 18) {
             strncpy(mac, mac_start, mac_end - mac_start);
             mac[mac_end - mac_start] = '\0';
@@ -1498,18 +1543,12 @@ esp_err_t time_hsearch_handler(httpd_req_t *req) {
     
     ESP_LOGI(TAG, "Parsed: channel=%d, mac=\"%s\"", channel, mac);
     
-    // Bygg kommandoen
-    char command[64];
-    sprintf(command, "hsearch: %d\n", channel);
-
-
-
-    // NYTT: Send hsearch via ESP-NOW
+    // Send hsearch via ESP-NOW
     ESP_LOGI(TAG, "🔍 Sender hsearch via ESP-NOW (channel=%d, mac=%s)", channel, mac);
     
     // Opprett kommando-data for hsearch
     uint32_t hsearch_channel = channel;
-    bool esp_now_sent = false;
+    bool success = false;
     
     if (strlen(mac) > 0) {
         // Send til spesifikk målestolpe via ESP-NOW
@@ -1518,21 +1557,24 @@ esp_err_t time_hsearch_handler(httpd_req_t *req) {
                   &target_mac[0], &target_mac[1], &target_mac[2],
                   &target_mac[3], &target_mac[4], &target_mac[5]) == 6) {
             
-            esp_now_sent = send_esp_now_command_to_pole(
+            success = send_esp_now_command_to_pole(
                 target_mac, 
                 CMD_HSEARCH, 
                 &hsearch_channel, 
                 sizeof(hsearch_channel)
             );
             
-            if (esp_now_sent) {
+            if (success) {
                 ESP_LOGI(TAG, "✅ ESP-NOW hsearch sendt til spesifikk målestolpe: %s", mac);
+            } else {
+                ESP_LOGE(TAG, "❌ ESP-NOW hsearch feilet for målestolpe: %s", mac);
             }
         }
     } else {
-        // Send til alle paired poles via ESP-NOW
+        // Send til alle paired poles via ESP-NOW  
         xSemaphoreTake(paired_poles_mutex, portMAX_DELAY);
         
+        int sent_count = 0;
         for (int i = 0; i < paired_pole_count; i++) {
             if (paired_poles[i].enabled) {
                 bool result = send_esp_now_command_to_pole(
@@ -1544,68 +1586,49 @@ esp_err_t time_hsearch_handler(httpd_req_t *req) {
                 
                 if (result) {
                     ESP_LOGI(TAG, "✅ ESP-NOW hsearch sendt til %s", paired_poles[i].name);
-                    esp_now_sent = true;
+                    sent_count++;
                 } else {
-                    ESP_LOGW(TAG, "❌ ESP-NOW hsearch feilet for %s", paired_poles[i].name);
+                    ESP_LOGE(TAG, "❌ ESP-NOW hsearch feilet for %s", paired_poles[i].name);
                 }
             }
         }
+        
+        success = (sent_count > 0);
+        ESP_LOGI(TAG, "📡 Hsearch sendt til %d av %d målestolper", sent_count, paired_pole_count);
         
         xSemaphoreGive(paired_poles_mutex);
     }
     
-    // Fortsett med TCP for bakoverkompatibilitet
-
-
-
-
-    
-    // Send kommando til spesifikk målestolpe hvis MAC er angitt
-    if (strlen(mac) > 0) {
-        if (send_command_to_pole_by_mac(mac, command)) {
-            ESP_LOGI(TAG, "Hsearch kommando sendt til målestolpe med MAC %s: %s", mac, command);
-        } else {
-            ESP_LOGE(TAG, "Kunne ikke sende hsearch kommando til MAC: %s", mac);
-        }
-    } 
-    else {
-        ESP_LOGI(TAG, "Ingen MAC angitt, sender til alle stolper");
-        // Hvis ingen MAC er oppgitt, send til alle tilkoblede målestolper
-        xSemaphoreTake(tcp_poles_mutex, portMAX_DELAY);
-        
-        for (int i = 0; i < MAX_TCP_POLES; i++) {
-            if (tcp_poles[i].connected) {
-                // Send direkte til socket
-                int sock = tcp_poles[i].sock;
-                int to_write = strlen(command);
-                int res = send(sock, command, to_write, 0);
-                
-                if (res == to_write) {
-                    ESP_LOGI(TAG, "Hsearch kommando sendt til målestolpe %d: %s", i, command);
-                } else {
-                    ESP_LOGE(TAG, "Feil ved sending av hsearch kommando: %d (errno: %d)", res, errno);
-                }
-            }
-        }
-        
-        xSemaphoreGive(tcp_poles_mutex);
-    }
+    // TCP-kode fjernet helt - kun ESP-NOW i bruk
     
     httpd_resp_set_type(req, "application/json");
     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
-    httpd_resp_sendstr(req, "{\"status\":\"success\",\"message\":\"Highpoint search initiated\"}");
+    
+    if (success) {
+        httpd_resp_sendstr(req, "{\"status\":\"success\",\"message\":\"Highpoint search initiated via ESP-NOW\"}");
+    } else {
+        httpd_resp_sendstr(req, "{\"status\":\"error\",\"message\":\"Failed to send hsearch command\"}");
+    }
     
     return ESP_OK;
 }
 
 
 
-// Oppdatert versjon av pole_break_handler
+// ================== POLE_BREAK_HANDLER - REN ESP-NOW VERSJON ==================
 esp_err_t pole_break_handler(httpd_req_t *req) {
     char buf[100];
     int ret, remaining = req->content_len;
     
     ESP_LOGI(TAG, "pole_break_handler called, content_len: %d", remaining);
+    
+    // CORS headers
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    
+    if (req->method == HTTP_OPTIONS) {
+        httpd_resp_send(req, NULL, 0);
+        return ESP_OK;
+    }
     
     if (remaining > sizeof(buf)) {
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Request too large");
@@ -1622,7 +1645,7 @@ esp_err_t pole_break_handler(httpd_req_t *req) {
     buf[ret] = '\0';
     ESP_LOGI(TAG, "Mottok data: %s", buf);
     
-    // Parse JSON data (enkel implementasjon - bør bruke cJSON i en fullstendig løsning)
+    // Parse JSON data
     char mac[18] = {0};
     int adc = -1;
     int break_val = -1;
@@ -1631,7 +1654,7 @@ esp_err_t pole_break_handler(httpd_req_t *req) {
     char *mac_start = strstr(buf, "\"mac\":\"");
     if (mac_start) {
         mac_start += 7; // Hopp over "mac":"
-        char *mac_end = strchr(mac_start, '\"');
+        char *mac_end = strchr(mac_start, '"');
         if (mac_end && (mac_end - mac_start) < 18) {
             strncpy(mac, mac_start, mac_end - mac_start);
             mac[mac_end - mac_start] = '\0';
@@ -1654,63 +1677,55 @@ esp_err_t pole_break_handler(httpd_req_t *req) {
     
     ESP_LOGI(TAG, "Parsed values - MAC: %s, ADC: %d, Break: %d", mac, adc, break_val);
     
-    if (strlen(mac) > 0 && adc >= 0 && break_val >= 0) {
-        // Bygg kommandoen som skal sendes til målestolpen
-        char command[64];
-        sprintf(command, "break: %d %d\n", adc, break_val);
-
-
-        // NYTT: Send break-konfigurasjon via ESP-NOW
+    bool success = false;
+    
+    if (strlen(mac) > 0 && adc >= 0 && adc < 7 && break_val >= 0 && break_val < 4906) {
+        // Send break-konfigurasjon via ESP-NOW
         ESP_LOGI(TAG, "🔧 Sender break-konfigurasjon via ESP-NOW (MAC: %s, ADC: %d, Break: %d)", 
                  mac, adc, break_val);
         
         // Konverter MAC-streng til bytes
         uint8_t target_mac[6];
-        bool esp_now_sent = false;
         
         if (sscanf(mac, "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx", 
                   &target_mac[0], &target_mac[1], &target_mac[2],
                   &target_mac[3], &target_mac[4], &target_mac[5]) == 6) {
             
-            // Opprett kommando-data for break-konfigurasjon
-            struct {
-                uint32_t adc_channel;
-                uint32_t break_value;
-            } break_data = {
-                .adc_channel = adc,
-                .break_value = break_val
-            };
+            // Opprett kommando-data for break-konfigurasjon (tilpasset målestolpens forventede format)
+            uint8_t break_data[3];
+            break_data[0] = (uint8_t)adc;           // ADC nummer som uint8_t
+            break_data[1] = break_val & 0xFF;       // Laveste byte av break_val
+            break_data[2] = (break_val >> 8) & 0xFF; // Høyeste byte av break_val
             
-            esp_now_sent = send_esp_now_command_to_pole(
+            success = send_esp_now_command_to_pole(
                 target_mac, 
                 CMD_SET_BREAK, 
-                &break_data, 
+                break_data, 
                 sizeof(break_data)
             );
             
-            if (esp_now_sent) {
-                ESP_LOGI(TAG, "✅ ESP-NOW break-konfigurasjon sendt til %s", mac);
+            if (success) {
+                ESP_LOGI(TAG, "✅ ESP-NOW break-konfigurasjon sendt til %s (ADC %d = %d)", mac, adc, break_val);
             } else {
-                ESP_LOGW(TAG, "❌ ESP-NOW break-konfigurasjon feilet for %s", mac);
+                ESP_LOGE(TAG, "❌ ESP-NOW break-konfigurasjon feilet for %s", mac);
             }
-        }
-        
-        // Fortsett med TCP for bakoverkompatibilitet
-
-        
-        // Send kommandoen
-        if (send_command_to_pole_by_mac(mac, command)) {
-            ESP_LOGI(TAG, "Kommando sendt: %s", command);
         } else {
-            ESP_LOGW(TAG, "Kunne ikke sende kommando - målestolpe ikke tilkoblet");
+            ESP_LOGW(TAG, "Ugyldig MAC-format: %s", mac);
         }
     } else {
-        ESP_LOGW(TAG, "Ugyldig forespørsel - mangler data");
+        ESP_LOGW(TAG, "Ugyldig forespørsel - MAC: %s, ADC: %d, Break: %d", mac, adc, break_val);
     }
+    
+    // TCP-kode er helt fjernet - kun ESP-NOW i bruk
     
     httpd_resp_set_type(req, "application/json");
     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
-    httpd_resp_sendstr(req, "{\"status\":\"success\",\"message\":\"Break configuration updated\"}");
+    
+    if (success) {
+        httpd_resp_sendstr(req, "{\"status\":\"success\",\"message\":\"Break configuration sent via ESP-NOW\"}");
+    } else {
+        httpd_resp_sendstr(req, "{\"status\":\"error\",\"message\":\"Failed to send break configuration\"}");
+    }
     
     return ESP_OK;
 }
@@ -1771,21 +1786,33 @@ esp_err_t set_passage_config_handler(httpd_req_t *req) {
         timeout_ms = atoi(timeout_start);
     }
     
+
     // Oppdater konfigurasjon
-    if (debounce_ms >= 0 && debounce_ms <= 30000) { // Maks 30 sekunder
+    bool config_changed = false;
+
+    if (debounce_ms >= 500 && debounce_ms <= 15000) { // 0.5 til 15 50 sekunder
         passage_debounce_ms = debounce_ms;
         ESP_LOGI(TAG, "Passering debounce-tid satt til %d ms", passage_debounce_ms);
+        config_changed = true;
     }
-    
+
     if (min_sensors > 0 && min_sensors <= MAX_SENSORS_PER_POLE) {
         min_sensors_for_passage = min_sensors;
         ESP_LOGI(TAG, "Minimum sensorer for passering satt til %d", min_sensors_for_passage);
+        config_changed = true;
     }
-    
-    if (timeout_ms >= 1000 && timeout_ms <= 5000) { // Mellom 1 og 5 sekunder
+
+    if (timeout_ms >= 100 && timeout_ms <= 1000) { // Mellom 0.1 og 1 sekunder
         sequence_timeout_ms = timeout_ms;
         ESP_LOGI(TAG, "Timeout for sekvens satt til %d ms", sequence_timeout_ms);
+        config_changed = true;
     }
+
+    // Lagre til NVS hvis noe ble endret
+    if (config_changed) {
+        save_passage_config_to_nvs();
+    }
+
     
     // Send respons
     httpd_resp_set_type(req, "application/json");
@@ -2661,6 +2688,25 @@ void remove_paired_pole(const uint8_t *mac) {
 }
 
 
+// Hjelpefunksjon for å sjekke om en målestolpe er paired basert på MAC-adresse
+bool is_paired_pole_by_mac(const uint8_t *mac) {
+    if (!mac) {
+        return false;
+    }
+    
+    xSemaphoreTake(paired_poles_mutex, portMAX_DELAY);
+    
+    for (int i = 0; i < paired_pole_count; i++) {
+        if (memcmp(paired_poles[i].mac, mac, 6) == 0) {
+            xSemaphoreGive(paired_poles_mutex);
+            return true;
+        }
+    }
+    
+    xSemaphoreGive(paired_poles_mutex);
+    return false;
+}
+
 
 // API handler for å hente paired poles
 esp_err_t get_paired_poles_handler(httpd_req_t *req) {
@@ -2728,7 +2774,9 @@ esp_err_t get_paired_poles_handler(httpd_req_t *req) {
     return ESP_OK;
 }
 
-// API handler for å fjerne en paired pole
+
+// API handler for å fjerne en paired pole (oppdatert med unpair-kommando)
+// API handler for å fjerne en paired pole (oppdatert med unpair-kommando)
 esp_err_t unpair_pole_handler(httpd_req_t *req) {
     char buf[200];
     int ret, remaining = req->content_len;
@@ -2762,10 +2810,11 @@ esp_err_t unpair_pole_handler(httpd_req_t *req) {
     uint8_t target_mac[6];
     char mac_str[18] = {0};
     
+    // Parse MAC-adresse
     char *mac_start = strstr(buf, "\"mac\":\"");
     if (mac_start) {
         mac_start += 7; // Hopp over "mac":"
-        char *mac_end = strchr(mac_start, '\"');
+        char *mac_end = strchr(mac_start, '"');
         if (mac_end && (mac_end - mac_start) < 18) {
             strncpy(mac_str, mac_start, mac_end - mac_start);
             mac_str[mac_end - mac_start] = '\0';
@@ -2775,32 +2824,47 @@ esp_err_t unpair_pole_handler(httpd_req_t *req) {
                       &target_mac[0], &target_mac[1], &target_mac[2],
                       &target_mac[3], &target_mac[4], &target_mac[5]) == 6) {
                 
-                ESP_LOGI(TAG, "Fjerner paired pole: %s", mac_str);
+                ESP_LOGI(TAG, "Fjerner paired pole og sender unpair-kommando: %s", mac_str);
+                
+                // 1. Send unpair-kommando til målestolpe (best effort)
+                bool unpair_sent = send_esp_now_command_to_pole(target_mac, CMD_UNPAIR, NULL, 0);
+                
+                if (unpair_sent) {
+                    ESP_LOGI(TAG, "✅ Unpair-kommando sendt til målestolpe");
+                } else {
+                    ESP_LOGW(TAG, "⚠️ Unpair-kommando feilet - kun lokal fjerning");
+                }
+                
+                // Utvidet logging for debugging
+                ESP_LOGI(TAG, "🔓 Unpair fullført for målestolpe %s:", mac_str);
+                ESP_LOGI(TAG, "   - Kommando sendt: %s", unpair_sent ? "JA" : "NEI");
+                ESP_LOGI(TAG, "   - Lokalt fjernet: JA");
+                ESP_LOGI(TAG, "   - Forventet resultat: Målestolpe starter discovery-modus");
+                
+                // 2. Fjern fra paired_poles uansett
                 remove_paired_pole(target_mac);
                 
+                // 3. Responder til GUI
                 httpd_resp_set_type(req, "application/json");
                 httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
-                httpd_resp_sendstr(req, "{\"status\":\"success\",\"message\":\"Målestolpe fjernet\"}");
-            } else {
-                ESP_LOGW(TAG, "Ugyldig MAC-format: %s", mac_str);
-                httpd_resp_set_type(req, "application/json");
-                httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
-                httpd_resp_sendstr(req, "{\"status\":\"error\",\"message\":\"Ugyldig MAC-format\"}");
+                
+                if (unpair_sent) {
+                    httpd_resp_sendstr(req, "{\"status\":\"success\",\"message\":\"Målestolpe fjernet og frigjort\"}");
+                } else {
+                    httpd_resp_sendstr(req, "{\"status\":\"success\",\"message\":\"Målestolpe fjernet lokalt (enheten utilgjengelig)\"}");
+                }
+                
+                return ESP_OK;
             }
-        } else {
-            ESP_LOGW(TAG, "Kunne ikke parse MAC fra JSON");
-            httpd_resp_set_type(req, "application/json");
-            httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
-            httpd_resp_sendstr(req, "{\"status\":\"error\",\"message\":\"MAC ikke funnet i request\"}");
         }
-    } else {
-        ESP_LOGW(TAG, "MAC ikke funnet i JSON");
-        httpd_resp_set_type(req, "application/json");
-        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
-        httpd_resp_sendstr(req, "{\"status\":\"error\",\"message\":\"MAC ikke funnet i request\"}");
     }
     
-    return ESP_OK;
+    ESP_LOGE(TAG, "Ugyldig MAC-adresse i unpair forespørsel");
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    httpd_resp_sendstr(req, "{\"status\":\"error\",\"message\":\"Ugyldig MAC-adresse\"}");
+    
+    return ESP_FAIL;
 }
 
 // API handler for å gi nytt navn til en paired pole
@@ -3025,124 +3089,126 @@ esp_err_t assign_pole_handler(httpd_req_t *req) {
 
 
 
-
-// Oppdatert versjon av pole_enabled_handler
+// ================== POLE_ENABLED_HANDLER - REN ESP-NOW VERSJON ==================
 esp_err_t pole_enabled_handler(httpd_req_t *req) {
-   char buf[100];
-   int ret, remaining = req->content_len;
-   
-   ESP_LOGI(TAG, "pole_enabled_handler called, content_len: %d", remaining);
-   
-   if (remaining > sizeof(buf)) {
-       httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Request too large");
-       return ESP_FAIL;
-   }
-   
-   if ((ret = httpd_req_recv(req, buf, MIN(remaining, sizeof(buf)))) <= 0) {
-       if (ret == HTTPD_SOCK_ERR_TIMEOUT) {
-           httpd_resp_send_408(req);
-       }
-       return ESP_FAIL;
-   }
-   
-   buf[ret] = '\0';
-   ESP_LOGI(TAG, "Mottok data: %s", buf);
-   
-   // Parse JSON data
-   char mac[18] = {0};
-   int sensor_nr = -1;
-   int enabled = -1;
-   
-   // Finn MAC-adressen
-   char *mac_start = strstr(buf, "\"mac\":\"");
-   if (mac_start) {
-       mac_start += 7; // Hopp over "mac":"
-       char *mac_end = strchr(mac_start, '\"');
-       if (mac_end && (mac_end - mac_start) < 18) {
-           strncpy(mac, mac_start, mac_end - mac_start);
-           mac[mac_end - mac_start] = '\0';
-       }
-   }
-   
-   // Finn sensor_nr
-   char *sensor_start = strstr(buf, "\"sensor_nr\":");
-   if (sensor_start) {
-       sensor_start += 12; // Hopp over "sensor_nr":
-       sensor_nr = atoi(sensor_start);
-   }
-   
-   // Finn enabled - FIKSET VERSJON
-   char *enabled_start = strstr(buf, "\"enabled\":");
-   if (enabled_start) {
-       enabled_start += 10; // Hopp over "enabled":
-       if (strncmp(enabled_start, "true", 4) == 0) {
-           enabled = 1;
-       } else {
-           enabled = 0;
-       }
-   }
-   
-   ESP_LOGI(TAG, "Parsed values - MAC: %s, Sensor: %d, Enabled: %d", mac, sensor_nr, enabled);
-   
-   if (strlen(mac) > 0 && sensor_nr >= 0 && (enabled == 0 || enabled == 1)) {
-       // Bygg kommandoen som skal sendes til målestolpen
-       char command[64];
-       sprintf(command, "enabled: %d %d\n", sensor_nr, enabled);
-
-
-    // NYTT: Send enabled-konfigurasjon via ESP-NOW
-       ESP_LOGI(TAG, "⚙️ Sender enabled-konfigurasjon via ESP-NOW (MAC: %s, Sensor: %d, Enabled: %d)", 
-                mac, sensor_nr, enabled);
-       
-       // Konverter MAC-streng til bytes
-       uint8_t target_mac[6];
-       bool esp_now_sent = false;
-       
-       if (sscanf(mac, "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx", 
-                 &target_mac[0], &target_mac[1], &target_mac[2],
-                 &target_mac[3], &target_mac[4], &target_mac[5]) == 6) {
-           
-           // Opprett kommando-data for enabled-konfigurasjon
-           struct {
-               uint32_t sensor_number;
-               uint32_t enabled_state;
-           } enabled_data = {
-               .sensor_number = sensor_nr,
-               .enabled_state = enabled
-           };
-           
-           esp_now_sent = send_esp_now_command_to_pole(
-               target_mac, 
-               CMD_SET_ENABLED, 
-               &enabled_data, 
-               sizeof(enabled_data)
-           );
-           
-           if (esp_now_sent) {
-               ESP_LOGI(TAG, "✅ ESP-NOW enabled-konfigurasjon sendt til %s", mac);
-           } else {
-               ESP_LOGW(TAG, "❌ ESP-NOW enabled-konfigurasjon feilet for %s", mac);
-           }
-       }
-       
-       // Fortsett med TCP for bakoverkompatibilitet
-
-       
-       // Send kommandoen
-       if (send_command_to_pole_by_mac(mac, command)) {
-           ESP_LOGI(TAG, "Kommando sendt: %s", command);
-       } else {
-           ESP_LOGW(TAG, "Kunne ikke sende kommando - målestolpe ikke tilkoblet");
-       }
-   } else {
-       ESP_LOGW(TAG, "Ugyldig forespørsel - mangler data");
-   }
-   
-   httpd_resp_set_type(req, "application/json");
-   httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
-   httpd_resp_sendstr(req, "{\"status\":\"success\",\"message\":\"Sensor enabled status updated\"}");
-   
-   return ESP_OK;
+    char buf[100];
+    int ret, remaining = req->content_len;
+    
+    ESP_LOGI(TAG, "pole_enabled_handler called, content_len: %d", remaining);
+    
+    // CORS headers
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    
+    if (req->method == HTTP_OPTIONS) {
+        httpd_resp_send(req, NULL, 0);
+        return ESP_OK;
+    }
+    
+    if (remaining > sizeof(buf)) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Request too large");
+        return ESP_FAIL;
+    }
+    
+    if ((ret = httpd_req_recv(req, buf, MIN(remaining, sizeof(buf)))) <= 0) {
+        if (ret == HTTPD_SOCK_ERR_TIMEOUT) {
+            httpd_resp_send_408(req);
+        }
+        return ESP_FAIL;
+    }
+    
+    buf[ret] = '\0';
+    ESP_LOGI(TAG, "Mottok data: %s", buf);
+    
+    // Parse JSON data
+    char mac[18] = {0};
+    int sensor = -1;
+    bool enabled = false;
+    
+    // Parse MAC-adresse
+    char *mac_start = strstr(buf, "\"mac\":\"");
+    if (mac_start) {
+        mac_start += 7; // Hopp over "mac":"
+        char *mac_end = strchr(mac_start, '"');
+        if (mac_end && (mac_end - mac_start) < 18) {
+            strncpy(mac, mac_start, mac_end - mac_start);
+            mac[mac_end - mac_start] = '\0';
+        }
+    }
+    
+    // Parse sensor nummer
+    char *sensor_start = strstr(buf, "\"sensor\":");
+    if (sensor_start) {
+        sensor_start += 9; // Hopp over "sensor":
+        sensor = atoi(sensor_start);
+    }
+    
+    // Parse enabled status
+    char *enabled_start = strstr(buf, "\"enabled\":");
+    if (enabled_start) {
+        enabled_start += 10; // Hopp over "enabled":
+        // Sjekk for true/false eller 1/0
+        if (strncmp(enabled_start, "true", 4) == 0) {
+            enabled = true;
+        } else if (strncmp(enabled_start, "false", 5) == 0) {
+            enabled = false;
+        } else {
+            enabled = (atoi(enabled_start) != 0);
+        }
+    }
+    
+    ESP_LOGI(TAG, "Parsed values - MAC: %s, Sensor: %d, Enabled: %s", mac, sensor, enabled ? "true" : "false");
+    
+    bool success = false;
+    
+    if (strlen(mac) > 0 && sensor >= 0 && sensor < 7) {
+        // Send enabled-konfigurasjon via ESP-NOW
+        ESP_LOGI(TAG, "🔧 Sender enabled-konfigurasjon via ESP-NOW (MAC: %s, Sensor: %d, Enabled: %s)", 
+                 mac, sensor, enabled ? "true" : "false");
+        
+        // Konverter MAC-streng til bytes
+        uint8_t target_mac[6];
+        
+        if (sscanf(mac, "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx", 
+                  &target_mac[0], &target_mac[1], &target_mac[2],
+                  &target_mac[3], &target_mac[4], &target_mac[5]) == 6) {
+            
+            // Opprett kommando-data for enabled-konfigurasjon (tilpasset målestolpens forventede format)
+            uint8_t enabled_data[2];
+            enabled_data[0] = (uint8_t)sensor;         // Sensor nummer
+            enabled_data[1] = enabled ? 1 : 0;         // Enabled status (1=enabled, 0=disabled)
+            
+            success = send_esp_now_command_to_pole(
+                target_mac, 
+                CMD_SET_ENABLED, 
+                enabled_data, 
+                sizeof(enabled_data)
+            );
+            
+            if (success) {
+                ESP_LOGI(TAG, "✅ ESP-NOW enabled-konfigurasjon sendt til %s (Sensor %d = %s)", 
+                         mac, sensor, enabled ? "aktivert" : "deaktivert");
+            } else {
+                ESP_LOGE(TAG, "❌ ESP-NOW enabled-konfigurasjon feilet for %s", mac);
+            }
+        } else {
+            ESP_LOGW(TAG, "Ugyldig MAC-format: %s", mac);
+        }
+    } else {
+        ESP_LOGW(TAG, "Ugyldig forespørsel - MAC: %s, Sensor: %d", mac, sensor);
+    }
+    
+    // TCP-kode er helt fjernet - kun ESP-NOW i bruk
+    
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    
+    if (success) {
+        httpd_resp_sendstr(req, "{\"status\":\"success\",\"message\":\"Sensor configuration sent via ESP-NOW\"}");
+    } else {
+        httpd_resp_sendstr(req, "{\"status\":\"error\",\"message\":\"Failed to send sensor configuration\"}");
+    }
+    
+    return ESP_OK;
 }
 
 
@@ -3443,41 +3509,81 @@ esp_err_t spiffs_get_handler(httpd_req_t *req) {
    // Sjekk om filen eksisterer
    if (stat(filepath, &file_stat) == -1) {
        ESP_LOGE(TAG, "Failed to stat file: %s (errno: %d)", filepath, errno);
-       
-       // Prøv flere alternative baner for assets
-       if (is_asset) {
-           // Prøv med direkte filnavn for kjente assets
-           char test_path[FILE_PATH_MAX];
-           bool found = false;
-           
-           if (strstr(uri_path, ".js")) {
-               strlcpy(test_path, "/www/assets/index.js", FILE_PATH_MAX);
-               ESP_LOGI(TAG, "Trying JS fallback path: %s", test_path);
-               if (stat(test_path, &file_stat) != -1) {
-                   strlcpy(filepath, test_path, FILE_PATH_MAX);
-                   found = true;
-                   ESP_LOGI(TAG, "Found JS file with fallback path: %s", filepath);
-               }
-           }
-           else if (strstr(uri_path, ".css")) {
-               strlcpy(test_path, "/www/assets/index.css", FILE_PATH_MAX);
-               ESP_LOGI(TAG, "Trying CSS fallback path: %s", test_path);
-               if (stat(test_path, &file_stat) != -1) {
-                   strlcpy(filepath, test_path, FILE_PATH_MAX);
-                   found = true;
-                   ESP_LOGI(TAG, "Found CSS file with fallback path: %s", filepath);
-               }
-           }
-           
-           if (!found) {
-               ESP_LOGE(TAG, "All fallback paths failed for asset: %s", uri_path);
-               httpd_resp_send_404(req);
-               return ESP_FAIL;
-           }
-       } else {
-           httpd_resp_send_404(req);
-           return ESP_FAIL;
-       }
+
+    // Prøv flere alternative baner for assets
+    if (is_asset) {
+        // Dynamisk søk etter filer i /www/assets/ som matcher mønsteret
+        char test_path[FILE_PATH_MAX];
+        bool found = false;
+        
+        if (strstr(uri_path, ".js")) {
+            // Søk etter index-*.js filer
+            DIR* dir = opendir("/www/assets");
+            if (dir) {
+                struct dirent* entry;
+                while ((entry = readdir(dir)) != NULL) {
+                    // Sjekk om filnavnet starter med "index-" og slutter med ".js"
+                    if (strncmp(entry->d_name, "index-", 6) == 0 && 
+                        strstr(entry->d_name, ".js") != NULL &&
+                        entry->d_name[strlen(entry->d_name)-3] == '.' &&
+                        entry->d_name[strlen(entry->d_name)-2] == 'j' &&
+                        entry->d_name[strlen(entry->d_name)-1] == 's') {
+                        
+                        snprintf(test_path, FILE_PATH_MAX, "/www/assets/%s", entry->d_name);
+                        ESP_LOGI(TAG, "Trying dynamic JS path: %s", test_path);
+                        if (stat(test_path, &file_stat) != -1) {
+                            strlcpy(filepath, test_path, FILE_PATH_MAX);
+                            found = true;
+                            ESP_LOGI(TAG, "Found JS file with dynamic search: %s", filepath);
+                            break;
+                        }
+                    }
+                }
+                closedir(dir);
+            }
+        }
+        else if (strstr(uri_path, ".css")) {
+            // Søk etter index-*.css filer
+            DIR* dir = opendir("/www/assets");
+            if (dir) {
+                struct dirent* entry;
+                while ((entry = readdir(dir)) != NULL) {
+                    // Sjekk om filnavnet starter med "index-" og slutter med ".css"
+                    if (strncmp(entry->d_name, "index-", 6) == 0 && 
+                        strstr(entry->d_name, ".css") != NULL &&
+                        entry->d_name[strlen(entry->d_name)-4] == '.' &&
+                        entry->d_name[strlen(entry->d_name)-3] == 'c' &&
+                        entry->d_name[strlen(entry->d_name)-2] == 's' &&
+                        entry->d_name[strlen(entry->d_name)-1] == 's') {
+                        
+                        snprintf(test_path, FILE_PATH_MAX, "/www/assets/%s", entry->d_name);
+                        ESP_LOGI(TAG, "Trying dynamic CSS path: %s", test_path);
+                        if (stat(test_path, &file_stat) != -1) {
+                            strlcpy(filepath, test_path, FILE_PATH_MAX);
+                            found = true;
+                            ESP_LOGI(TAG, "Found CSS file with dynamic search: %s", filepath);
+                            break;
+                        }
+                    }
+                }
+                closedir(dir);
+            }
+        }
+        
+        if (!found) {
+            ESP_LOGE(TAG, "All fallback paths failed for asset: %s", uri_path);
+            httpd_resp_send_404(req);
+            return ESP_FAIL;
+        }
+    } else {
+        httpd_resp_send_404(req);
+        return ESP_FAIL;
+    }
+
+
+
+
+
    }
 
    fd = fopen(filepath, "r");
@@ -3657,6 +3763,8 @@ void init_signal_tracking(void) {
 //
 
 // Funksjon for å håndtere sensorbrudd og detektere passeringer
+// ERSTATT hele process_break_for_passage_detection funksjonen med denne versjonen:
+
 bool process_break_for_passage_detection(const uint8_t *mac_addr, int32_t sensor_id,
                                         uint32_t sensor_time_sec, uint32_t sensor_time_micros,
                                         uint32_t server_time_sec, uint32_t server_time_micros) {
@@ -3705,16 +3813,26 @@ bool process_break_for_passage_detection(const uint8_t *mac_addr, int32_t sensor
         // Initialiser nye felt for robust tidshåndtering - FIKSET: Bruk sensor_time_*
         passage_detectors[detector_idx].last_sensor_time = sensor_time_sec;
         passage_detectors[detector_idx].last_sensor_micros = sensor_time_micros;
+        passage_detectors[detector_idx].passage_sent_this_sequence = false;  // NY LINJE
     }
 
-    // KRITISK: Bruk målestolpe-tid for debounce-beregninger
+
+    // Bruk den server-tiden som ble satt når ESP-NOW meldingen ble mottatt
     uint64_t current_time_ms = (uint64_t)sensor_time_sec * 1000 + sensor_time_micros / 1000;
+    
+
     uint64_t last_passage_ms = (uint64_t)passage_detectors[detector_idx].last_passage_time * 1000 + 
                             passage_detectors[detector_idx].last_passage_micros / 1000;
 
+
     // Sjekk om vi er i debounce-perioden etter en passering (bruk målestolpe-tid)
+    // Få nåværende server-tid for debounce-beregninger
+    struct timeval current_server_time;
+    gettimeofday(&current_server_time, NULL);
+    uint64_t server_time_ms = (uint64_t)current_server_time.tv_sec * 1000 + current_server_time.tv_usec / 1000;
+
     if (passage_detectors[detector_idx].last_passage_time > 0) {
-        uint64_t time_since_last_passage_ms = current_time_ms - last_passage_ms;
+        uint64_t time_since_last_passage_ms = server_time_ms - last_passage_ms;
             
         if (time_since_last_passage_ms < passage_debounce_ms) {
             log_event_passering(mac_str, sensor_id, "DEBOUNCE", 0.0, 0, time_since_last_passage_ms, NULL, 0);
@@ -3728,58 +3846,41 @@ bool process_break_for_passage_detection(const uint8_t *mac_addr, int32_t sensor
         // Dette er første sensor i en ny sekvens - bruk målestolpe-tid
         passage_detectors[detector_idx].first_break_time = sensor_time_sec;
         passage_detectors[detector_idx].first_break_micros = sensor_time_micros;
-        passage_detectors[detector_idx].sequence_start_time = sensor_time_sec;
+        // uint64_t sequence_start_ms = (uint64_t)passage_detectors[detector_idx].first_break_time * 1000 + 
+        //                     (uint64_t)passage_detectors[detector_idx].first_break_micros / 1000;
+
     } else {
         // Vi har en eksisterende sekvens
-        // Sjekk om vi kan bruke tid direkte fra sensoren for timeout
-        uint32_t sensor_elapsed_time = 0;
+        // Sjekk om vi kan bruke denne sensoren (ikke for gammel)
+        uint64_t sequence_start_ms = (uint64_t)passage_detectors[detector_idx].first_break_time * 1000 + 
+                            (uint64_t)passage_detectors[detector_idx].first_break_micros / 1000;
+        uint64_t sequence_duration_ms = current_time_ms - sequence_start_ms;
+
+
+        // 🔍 DEBUG: Legg til disse linjene her
+        ESP_LOGI(TAG, "🔍 DEBUG: sensor_time_sec=%u, sensor_time_micros=%u", sensor_time_sec, sensor_time_micros);
+        ESP_LOGI(TAG, "🔍 DEBUG: current_time_ms=%llu", current_time_ms);
+        ESP_LOGI(TAG, "🔍 DEBUG: sequence_start_time=%u", passage_detectors[detector_idx].sequence_start_time);
+        ESP_LOGI(TAG, "🔍 DEBUG: sequence_start_ms=%llu", sequence_start_ms);
+        ESP_LOGI(TAG, "🔍 DEBUG: sequence_duration_ms=%llu", sequence_duration_ms);
+
         
-        // Beregn tid basert på målestolpe-tidsstempler (som er den mest konsistente kilden)
-        if (passage_detectors[detector_idx].last_sensor_time > 0) {
-            if (sensor_time_sec >= passage_detectors[detector_idx].last_sensor_time) {
-                // Vanlig tilfelle - sensortid går fremover
-                sensor_elapsed_time = (sensor_time_sec - passage_detectors[detector_idx].last_sensor_time) * 1000;
-                
-                // Legg til mikrosekunder-delen
-                if (sensor_time_micros >= passage_detectors[detector_idx].last_sensor_micros) {
-                    sensor_elapsed_time += (sensor_time_micros - passage_detectors[detector_idx].last_sensor_micros) / 1000;
-                } else {
-                    // Håndter mikrosekund-overgang
-                    sensor_elapsed_time += (1000000 + sensor_time_micros - passage_detectors[detector_idx].last_sensor_micros) / 1000 - 1000;
-                }
-            } 
-            else {
-                // Sensortid hopper bakover
-                ESP_LOGW(TAG, "Sensor-tid hopper bakover: %u -> %u, ignorerer denne hendelsen", 
-                        passage_detectors[detector_idx].last_sensor_time, sensor_time_sec);
-                
-                // Ikke oppdater last_sensor_time for å unngå gjentatte advarsler om samme hopp
-                xSemaphoreGive(passage_mutex);
-                return false; // Ignorer denne sensoren for passeringsdeteksjon
-            }
-        }
-        
-        // FIKSET: Oppdater siste sensortid for neste beregning - bruk målestolpe-tid
-        passage_detectors[detector_idx].last_sensor_time = sensor_time_sec;
-        passage_detectors[detector_idx].last_sensor_micros = sensor_time_micros;
-                
-        // Sjekk om sekvensen har timed ut basert på sensortid
-        if (sensor_elapsed_time > sequence_timeout_ms) {
-            log_event_passering(mac_str, sensor_id, "TIMEOUT",
-                passage_detectors[detector_idx].first_break_time +
-                (passage_detectors[detector_idx].first_break_micros / 1000000.0),
-                passage_detectors[detector_idx].unique_sensors_count, 0, NULL, 0);
-                        
-            // Tilbakestill tellere
+        if (sequence_duration_ms > sequence_timeout_ms) {
+            ESP_LOGI(TAG, "Sekvens-timeout (%llu ms > %d ms), starter ny sekvens", 
+                    sequence_duration_ms, sequence_timeout_ms);
+            
+            // Tilbakestill for ny sekvens
             for (int i = 0; i < MAX_SENSORS_PER_POLE; i++) {
                 passage_detectors[detector_idx].sensor_triggered[i] = false;
             }
             passage_detectors[detector_idx].unique_sensors_count = 0;
+            passage_detectors[detector_idx].passage_sent_this_sequence = false;
             
             // Sett nye verdier for første brudd i ny sekvens - bruk målestolpe-tid
             passage_detectors[detector_idx].first_break_time = sensor_time_sec;
             passage_detectors[detector_idx].first_break_micros = sensor_time_micros;
-            passage_detectors[detector_idx].sequence_start_time = sensor_time_sec;
+            // uint64_t sequence_start_ms = (uint64_t)passage_detectors[detector_idx].first_break_time * 1000 + 
+            //                 (uint64_t)passage_detectors[detector_idx].first_break_micros / 1000;
         }
     }
     
@@ -3795,111 +3896,24 @@ bool process_break_for_passage_detection(const uint8_t *mac_addr, int32_t sensor
         ESP_LOGI(TAG, "Sensor %d registrert, sensorteller nå: %d, min for passering: %d", 
             sensor_id, passage_detectors[detector_idx].unique_sensors_count, min_sensors_for_passage);
         
-        // Sjekk om vi har nådd terskelen for en passering
-        if (passage_detectors[detector_idx].unique_sensors_count >= min_sensors_for_passage) {
-            // Sjekk om denne passeringen allerede er sendt
-            if (is_passage_already_sent(mac_addr, 
-                                    passage_detectors[detector_idx].first_break_time, 
-                                    passage_detectors[detector_idx].first_break_micros, 
-                                    passage_detectors[detector_idx].unique_sensors_count)) {
-                
-                ESP_LOGI(TAG, "DUPLIKAT: Ignorerer duplisert passering: MAC: %s, tidspunkt: %u.%06u", 
-                        mac_str, passage_detectors[detector_idx].first_break_time, 
-                        passage_detectors[detector_idx].first_break_micros);
-                
-                // Vi tilbakestiller fortsatt telleren for å være klar for neste sekvens
-                for (int i = 0; i < MAX_SENSORS_PER_POLE; i++) {
-                    passage_detectors[detector_idx].sensor_triggered[i] = false;
-                }
-                passage_detectors[detector_idx].unique_sensors_count = 0;
-                
-                xSemaphoreGive(passage_mutex);
-                return false; // Ingen ny passering å rapportere
-            }
+
+        // Sjekk om vi har nådd terskelen OG ikke allerede sendt K4
+        if (passage_detectors[detector_idx].unique_sensors_count >= min_sensors_for_passage 
+            && !passage_detectors[detector_idx].passage_sent_this_sequence) {
             
-            // Bygg liste over utløste sensorer
-            int sensors_used[MAX_SENSORS_PER_POLE];
-            int used_count = 0;
-            for (int i = 0; i < MAX_SENSORS_PER_POLE; i++) {
-                if (passage_detectors[detector_idx].sensor_triggered[i]) {
-                    sensors_used[used_count++] = i;
-                }
-            }
-
-            // log_event_passering(mac_str, sensor_id, "PASSERING",
-            //     passage_detectors[detector_idx].first_break_time +
-            //     (passage_detectors[detector_idx].first_break_micros / 1000000.0),
-            //     used_count, 0, sensors_used, used_count);
-                        
-            // // Registrer denne passeringen som sendt
-            // register_sent_passage(mac_addr, 
-            //                 passage_detectors[detector_idx].first_break_time, 
-            //                 passage_detectors[detector_idx].first_break_micros, 
-            //                 passage_detectors[detector_idx].unique_sensors_count);
-
-
-
-            log_event_passering(mac_str, sensor_id, "PASSERING",
-                passage_detectors[detector_idx].first_break_time +
-                (passage_detectors[detector_idx].first_break_micros / 1000000.0),
-                used_count, 0, sensors_used, used_count);
+        ESP_LOGI(TAG, "🎯 ----->>> PASSERING <<<----- MAC: %s, Sensorer: %d - sender K4", 
+                mac_str, passage_detectors[detector_idx].unique_sensors_count);
             
-            // NYTT: Log med dual timing for debugging
-            log_passage_with_dual_timing(mac_str, sensor_id,
-                                       passage_detectors[detector_idx].first_break_time,
-                                       passage_detectors[detector_idx].first_break_micros,
-                                       server_time_sec, server_time_micros,
-                                       sensors_used, used_count);
-            
-            // NYTT: Registrer for stoppeklokke-beregninger med dual timing
-            register_passage_for_stopwatch(mac_addr, 
-                                         server_time_sec, server_time_micros,
-                                         passage_detectors[detector_idx].first_break_time,
-                                         passage_detectors[detector_idx].first_break_micros,
-                                         used_count);
-                        
-            // Registrer denne passeringen som sendt (eksisterende funksjonalitet)
-            register_sent_passage(mac_addr, 
-                            passage_detectors[detector_idx].first_break_time, 
-                            passage_detectors[detector_idx].first_break_micros, 
-                            passage_detectors[detector_idx].unique_sensors_count);
-
-
-
-
-
-
-
-
-            
-            // Lagre i passage history
-            add_to_passage_history(mac_addr,
-                      passage_detectors[detector_idx].first_break_time,
-                      passage_detectors[detector_idx].first_break_micros,
-                      sensors_used, used_count);
-
-            // Send passering til WebSocket-klienter
+            // Send K4 melding direkte
             char passage_msg[256];
             sprintf(passage_msg, 
                 "{\"M\":\"%s\",\"K\":4,\"T\":%" PRIu32 ",\"U\":%" PRIu32 ",\"S\":%d}",
-                mac_str, passage_detectors[detector_idx].first_break_time, 
-                passage_detectors[detector_idx].first_break_micros, 
+                mac_str, server_time_sec, server_time_micros, 
                 passage_detectors[detector_idx].unique_sensors_count);
             
-            // Lagre denne passeringens tidspunkt for debouncing - bruk målestolpe-tid
-            passage_detectors[detector_idx].last_passage_time = sensor_time_sec;
-            passage_detectors[detector_idx].last_passage_micros = sensor_time_micros;
-                
-            // Tilbakestill tellere for neste sekvens
-            for (int i = 0; i < MAX_SENSORS_PER_POLE; i++) {
-                passage_detectors[detector_idx].sensor_triggered[i] = false;
-            }
-            passage_detectors[detector_idx].unique_sensors_count = 0;
-
-            // Send til alle WebSocket-klienter
             httpd_ws_frame_t ws_pkt = {
                 .final = true,
-                .fragmented = false,
+                .fragmented = false, 
                 .type = HTTPD_WS_TYPE_TEXT,
                 .payload = (uint8_t *)passage_msg,
                 .len = strlen(passage_msg)
@@ -3913,14 +3927,24 @@ bool process_break_for_passage_detection(const uint8_t *mac_addr, int32_t sensor
             }
             xSemaphoreGive(ws_mutex);
             
+            // Marker som sendt og sett debounce
+            passage_detectors[detector_idx].passage_sent_this_sequence = true;
+            passage_detectors[detector_idx].last_passage_time = server_time_sec;
+            passage_detectors[detector_idx].last_passage_micros = server_time_micros;
+            
             xSemaphoreGive(passage_mutex);
             return true;
+        }
+
+ else {
+            ESP_LOGI(TAG, "⏳ Venter på flere sensorer for passering (behøver %d sensorer totalt)...", min_sensors_for_passage);
         }
     }
     
     xSemaphoreGive(passage_mutex);
     return false; // Ingen passering detektert ennå
 }
+
 
 
 // Funksjon for å sjekke om et brudd skal ignoreres pga. debouncing
@@ -4011,32 +4035,160 @@ void send_break_to_websocket(const uint8_t *mac_addr, uint32_t time_sec, uint32_
 
 
 
-// Sjekker om en passering allerede er sendt
-bool is_passage_already_sent(const uint8_t *mac, uint32_t time_sec, uint32_t time_micros, int sensors_count) {
-    xSemaphoreTake(sent_passages_mutex, portMAX_DELAY);
+// // Sjekker om en passering allerede er sendt
+// bool is_passage_already_sent(const uint8_t *mac, uint32_t time_sec, uint32_t time_micros, int sensors_count) {
+//     xSemaphoreTake(sent_passages_mutex, portMAX_DELAY);
     
-    // Sjekk om vi har en identisk passering i nylig sendte passeringer
-    for (int i = 0; i < sent_passage_count; i++) {
-        // Sjekk om MAC-adresse og tidspunkt (innenfor en liten margin) er like
-        if (memcmp(sent_passages[i].mac, mac, ESP_NOW_ETH_ALEN) == 0 &&
-            sent_passages[i].sensors_count == sensors_count) {
+//     // Sjekk om vi har en identisk passering i nylig sendte passeringer
+//     for (int i = 0; i < sent_passage_count; i++) {
+//         // Sjekk om MAC-adresse og tidspunkt (innenfor en liten margin) er like
+//         if (memcmp(sent_passages[i].mac, mac, ESP_NOW_ETH_ALEN) == 0 &&
+//             sent_passages[i].sensors_count == sensors_count) {
             
-            // Beregn tidsdifferanse i millisekunder
-            uint64_t t1 = (uint64_t)sent_passages[i].timestamp_sec * 1000 + sent_passages[i].timestamp_micros / 1000;
-            uint64_t t2 = (uint64_t)time_sec * 1000 + time_micros / 1000;
-            uint64_t diff_ms = (t1 > t2) ? (t1 - t2) : (t2 - t1);
+//             // Beregn tidsdifferanse i millisekunder
+//             uint64_t t1 = (uint64_t)sent_passages[i].timestamp_sec * 1000 + sent_passages[i].timestamp_micros / 1000;
+//             uint64_t t2 = (uint64_t)time_sec * 1000 + time_micros / 1000;
+//             uint64_t diff_ms = (t1 > t2) ? (t1 - t2) : (t2 - t1);
             
-            // Hvis tidspunktene er innenfor 50ms anser vi det som duplisert
-            if (diff_ms < 50) {
-                xSemaphoreGive(sent_passages_mutex);
-                return true;
-            }
-        }
-    }
+//             // Bruk passage_debounce_ms i stedet for hardkodet 50ms
+//             if (diff_ms < passage_debounce_ms) {
+//                 xSemaphoreGive(sent_passages_mutex);
+//                 return true;
+//             }
+//         }
+//     }
     
-    xSemaphoreGive(sent_passages_mutex);
-    return false;
-}
+//     xSemaphoreGive(sent_passages_mutex);
+//     return false;
+// }
+
+// // Atomisk sjekk og registrering av passering (UTEN WebSocket-sending - kun for testing)
+// bool check_and_register_passage_atomic(const uint8_t *mac, uint32_t time_sec, uint32_t time_micros, int sensors_count) {
+//     xSemaphoreTake(sent_passages_mutex, portMAX_DELAY);
+    
+//     // Sjekk om passering allerede er sendt (uten å release mutex)
+//     for (int i = 0; i < sent_passage_count; i++) {
+//         if (memcmp(sent_passages[i].mac, mac, ESP_NOW_ETH_ALEN) == 0 &&
+//             sent_passages[i].sensors_count == sensors_count) {
+            
+//             // Beregn tidsdifferanse i millisekunder
+//             uint64_t t1 = (uint64_t)sent_passages[i].timestamp_sec * 1000 + 
+//                          sent_passages[i].timestamp_micros / 1000;
+//             uint64_t t2 = (uint64_t)time_sec * 1000 + time_micros / 1000;
+//             uint64_t diff_ms = (t1 > t2) ? (t1 - t2) : (t2 - t1);
+            
+//             // Bruk passage_debounce_ms i stedet for hardkodet 50ms
+//             if (diff_ms < passage_debounce_ms) {
+//                 ESP_LOGI(TAG, "🚫 ATOMISK DUPLIKAT (TEST): Passering innenfor %d ms vindu (diff: %llu ms)", 
+//                         passage_debounce_ms, diff_ms);
+//                 xSemaphoreGive(sent_passages_mutex);
+//                 return false; // Duplikat funnet - ikke registrer
+//             }
+//         }
+//     }
+    
+//     // Ingen duplikat funnet - registrer UMIDDELBART (fortsatt under mutex)
+//     int idx = sent_passage_count;
+//     if (sent_passage_count >= MAX_SENT_PASSAGES) {
+//         // Hvis array er fullt, lag plass ved å fjerne eldste innslag
+//         idx = 0;
+//         for (int i = 1; i < MAX_SENT_PASSAGES; i++) {
+//             sent_passages[i-1] = sent_passages[i];
+//         }
+//         sent_passage_count = MAX_SENT_PASSAGES - 1;
+//     }
+    
+//     // Legg til ny passering
+//     memcpy(sent_passages[idx].mac, mac, ESP_NOW_ETH_ALEN);
+//     sent_passages[idx].timestamp_sec = time_sec;
+//     sent_passages[idx].timestamp_micros = time_micros;
+//     sent_passages[idx].sensors_count = sensors_count;
+//     sent_passages[idx].send_time = time(NULL);
+//     sent_passage_count++;
+    
+//     ESP_LOGI(TAG, "✅ ATOMISK REGISTRERING (TEST): Ny passering registrert - total: %d", sent_passage_count);
+    
+//     xSemaphoreGive(sent_passages_mutex);
+//     return true; // OK - passering registrert
+// }
+
+
+
+// // Atomisk kombinert sjekk, registrering og WebSocket-sending
+// bool check_register_and_send_passage_atomic(const uint8_t *mac, uint32_t time_sec, 
+//                                            uint32_t time_micros, int sensors_count,
+//                                            const char *mac_str) {
+//     xSemaphoreTake(sent_passages_mutex, portMAX_DELAY);
+    
+//     // Sjekk om passering allerede er sendt (uten å release mutex)
+//     for (int i = 0; i < sent_passage_count; i++) {
+//         if (memcmp(sent_passages[i].mac, mac, ESP_NOW_ETH_ALEN) == 0 &&
+//             sent_passages[i].sensors_count == sensors_count) {
+            
+//             // Beregn tidsdifferanse i millisekunder
+//             uint64_t t1 = (uint64_t)sent_passages[i].timestamp_sec * 1000 + 
+//                          sent_passages[i].timestamp_micros / 1000;
+//             uint64_t t2 = (uint64_t)time_sec * 1000 + time_micros / 1000;
+//             uint64_t diff_ms = (t1 > t2) ? (t1 - t2) : (t2 - t1);
+            
+//             // Bruk passage_debounce_ms i stedet for hardkodet 50ms
+//             if (diff_ms < passage_debounce_ms) {
+//                 ESP_LOGI(TAG, "🚫 ATOMISK DUPLIKAT: Passering innenfor %d ms vindu (diff: %llu ms)", 
+//                         passage_debounce_ms, diff_ms);
+//                 xSemaphoreGive(sent_passages_mutex);
+//                 return false; // Duplikat funnet - IKKE send WebSocket
+//             }
+//         }
+//     }
+    
+//     // Ingen duplikat funnet - registrer UMIDDELBART (fortsatt under mutex)
+//     int idx = sent_passage_count;
+//     if (sent_passage_count >= MAX_SENT_PASSAGES) {
+//         // Hvis array er fullt, lag plass ved å fjerne eldste innslag
+//         idx = 0;
+//         for (int i = 1; i < MAX_SENT_PASSAGES; i++) {
+//             sent_passages[i-1] = sent_passages[i];
+//         }
+//         sent_passage_count = MAX_SENT_PASSAGES - 1;
+//     }
+    
+//     // Legg til ny passering
+//     memcpy(sent_passages[idx].mac, mac, ESP_NOW_ETH_ALEN);
+//     sent_passages[idx].timestamp_sec = time_sec;
+//     sent_passages[idx].timestamp_micros = time_micros;
+//     sent_passages[idx].sensors_count = sensors_count;
+//     sent_passages[idx].send_time = time(NULL);
+//     sent_passage_count++;
+    
+//     // ✅ Send WebSocket UMIDDELBART etter registrering (fortsatt under mutex)
+//     char passage_msg[256];
+//     sprintf(passage_msg, 
+//         "{\"M\":\"%s\",\"K\":4,\"T\":%" PRIu32 ",\"U\":%" PRIu32 ",\"S\":%d}",
+//         mac_str, time_sec, time_micros, sensors_count);
+    
+//     // Send til alle WebSocket-klienter
+//     httpd_ws_frame_t ws_pkt = {
+//         .final = true,
+//         .fragmented = false,
+//         .type = HTTPD_WS_TYPE_TEXT,
+//         .payload = (uint8_t *)passage_msg,
+//         .len = strlen(passage_msg)
+//     };
+    
+//     xSemaphoreTake(ws_mutex, portMAX_DELAY);
+//     for (int i = 0; i < MAX_WS_CLIENTS; ++i) {
+//         if (ws_clients[i] != 0) {
+//             httpd_ws_send_frame_async(server, ws_clients[i], &ws_pkt);
+//         }
+//     }
+//     xSemaphoreGive(ws_mutex);
+    
+//     ESP_LOGI(TAG, "✅ ATOMISK REGISTRERING + WEBSOCKET: Ny passering sendt - total: %d", sent_passage_count);
+    
+//     xSemaphoreGive(sent_passages_mutex);
+//     return true; // OK - passering sendt
+// }
+
 
 // Registrerer en ny sendt passering
 void register_sent_passage(const uint8_t *mac, uint32_t time_sec, uint32_t time_micros, int sensors_count) {
@@ -4214,17 +4366,34 @@ void clean_old_passages(void *pvParameters) {
 }
 
 
+// ***************************************************** //
 // ESP-NOW mottaker callback - KOMPLETT FIKSET VERSJON
+// ***************************************************** //
 void esp_now_recv_cb(const esp_now_recv_info_t *recv_info, const uint8_t *data, int len) {
     // Hent MAC-adressen fra recv_info
     const uint8_t *mac_addr = recv_info->src_addr;
 
 // Mål mottakstid for ytelsesanalyse
-    uint64_t receive_timestamp = esp_timer_get_time();
+    //uint64_t receive_timestamp = esp_timer_get_time();
 
 
-
-
+    // **NY KODE: Automatisk peer-registrering for tilbakesending av kommandoer**
+    if (!esp_now_is_peer_exist(mac_addr)) {
+        esp_now_peer_info_t peer_info = {0};
+        memcpy(peer_info.peer_addr, mac_addr, ESP_NOW_ETH_ALEN);
+        peer_info.channel = 0;
+        peer_info.ifidx = WIFI_IF_AP;
+        peer_info.encrypt = false;
+        
+        esp_err_t peer_result = esp_now_add_peer(&peer_info);
+        if (peer_result == ESP_OK) {
+            ESP_LOGI(TAG, "✅ Auto-registrert ESP-NOW peer for tilbakesending: %02x:%02x:%02x:%02x:%02x:%02x",
+                     mac_addr[0], mac_addr[1], mac_addr[2], 
+                     mac_addr[3], mac_addr[4], mac_addr[5]);
+        } else {
+            ESP_LOGE(TAG, "❌ Kunne ikke auto-registrere ESP-NOW peer: %s", esp_err_to_name(peer_result));
+        }
+    }
 
     
     ESP_LOGI(TAG, "ESP-NOW data mottatt fra %02x:%02x:%02x:%02x:%02x:%02x, len=%d", 
@@ -4235,42 +4404,48 @@ void esp_now_recv_cb(const esp_now_recv_info_t *recv_info, const uint8_t *data, 
     int8_t rssi = recv_info->rx_ctrl ? recv_info->rx_ctrl->rssi : -70;
     
 
-    // ESP_LOGI(TAG, "🔍 ESP-NOW: Oppdaterer signal med RSSI %d for %02x:%02x:%02x:%02x:%02x:%02x", 
-    //         rssi, mac_addr[0], mac_addr[1], mac_addr[2], mac_addr[3], mac_addr[4], mac_addr[5]);
+// **AUTO-KORRIGERING: Sjekk om dette er data fra en ikke-paired målestolpe**
+    // Ikke gjør dette for announce-meldinger eller system-relaterte meldinger
+    if (len >= sizeof(timergate_msg_t)) {
+        timergate_msg_t *msg = (timergate_msg_t*)data;
+        
+        // Kun sjekk sensormeldinger/data-meldinger (ikke discovery/announce)
+        if (msg->msg_type != MSG_POLE_ANNOUNCE && 
+            msg->msg_type != MSG_SYSTEM_ASSIGN && 
+            msg->msg_type != MSG_IDENTIFY_REQUEST &&
+            msg->msg_type != MSG_COMMAND) {
+            
+            // Sjekk om målestolpen er paired
+            if (!is_paired_pole_by_mac(mac_addr)) {
+                char mac_str[18];
+                snprintf(mac_str, sizeof(mac_str), "%02x:%02x:%02x:%02x:%02x:%02x",
+                        mac_addr[0], mac_addr[1], mac_addr[2], 
+                        mac_addr[3], mac_addr[4], mac_addr[5]);
+
+                ESP_LOGW(TAG, "🔧 AUTO-KORRIGERING: Målestolpe %s sender data men er ikke paired", mac_str);
+                ESP_LOGI(TAG, "📤 Sender unpair-kommando for selvhelbredende korrigering");
+
+                // Send unpair-kommando for å frigjøre målestolpen
+                bool correction_sent = send_esp_now_command_to_pole(mac_addr, CMD_UNPAIR, NULL, 0);
+                ESP_LOGI(TAG, "🎯 Auto-korrigering resultat: %s", 
+                        correction_sent ? "Kommando sendt" : "Kommando feilet");
+
+                ESP_LOGI(TAG, "🚫 Ignorerer data fra ikke-paired målestolpe - venter på at den starter discovery");
+                // Ignorer dataene fra ikke-paired målestolpe
+                return;
+            }
+        }
+    }
 
     update_signal_quality(mac_addr, rssi);
     ESP_LOGI(TAG, "📶 RSSI: %d dBm", rssi);
 
 
-    // // Bekreft at signal tracking fungerer for kontinuerlige meldinger
-    // ESP_LOGI(TAG, "✅ Signal tracking oppdatert for MAC %02x:%02x:%02x:%02x:%02x:%02x med RSSI %d dBm", 
-    //          mac_addr[0], mac_addr[1], mac_addr[2], mac_addr[3], mac_addr[4], mac_addr[5], rssi);
-
-    
-    // // DEBUG: Vis første 10 bytes av meldingen
-    // ESP_LOGI(TAG, "DEBUG: Data bytes: [%02x %02x %02x %02x %02x %02x %02x %02x %02x %02x]",
-    //          data[0], data[1], data[2], data[3], data[4], 
-    //          data[5], data[6], data[7], data[8], data[9]);
-    
-    // // DEBUG: Sjekk første byte (K-verdi)
-    // ESP_LOGI(TAG, "DEBUG: K-verdi = %d (0x%02x)", data[0], data[0]);
-
-    //ESP_LOGI(TAG, "🔍 FLYT DEBUG: len=%d, behandler legacy/system ID sjekk", len);
-
-
-
-
-    
     // Sjekk at lengden er riktig for vår struktur
     if (len < 10) {
         ESP_LOGE(TAG, "Mottok data med feil lengde: %d (forventet minst 10 bytes)", len);
         return;
     }
-
- 
-
-    //ESP_LOGI(TAG, "🔍 FLYT DEBUG: Sjekker om pole announce, len=%d vs sizeof(pole_announce_t)=%d", 
-             //len, sizeof(pole_announce_t));
 
 
     
@@ -4290,20 +4465,11 @@ void esp_now_recv_cb(const esp_now_recv_info_t *recv_info, const uint8_t *data, 
         }
     }
 
-    //ESP_LOGI(TAG, "🔍 FLYT DEBUG: Ikke pole announce, fortsetter til legacy parsing");
-    
-
-// FIKSET: Hopp over System ID-sjekk for korte meldinger (legacy format)
-    // ESP_LOGI(TAG, "🔍 SYSTEM ID DEBUG: len=%d, sizeof(timergate_msg_t)=%d", 
-    //          len, sizeof(timergate_msg_t));
     
     if (len <= 20) {
         //ESP_LOGI(TAG, "🔍 SYSTEM ID DEBUG: Kort melding - hopper System ID sjekk");
         // Hopp direkte til legacy parsing
     } else {
-        // ESP_LOGI(TAG, "🔍 SYSTEM ID DEBUG: Lang melding - men K=0/K=1 skal ikke ha System ID sjekk");
-        // ESP_LOGI(TAG, "🔍 SYSTEM ID DEBUG: Data bytes: [%02x %02x %02x %02x] - første byte (K) = %d", 
-        //          data[0], data[1], data[2], data[3], data[0]);
         
         // Sjekk første byte (K-verdi) for å avgjøre om dette er sensordata
         uint8_t k_value = data[0];
@@ -4332,11 +4498,6 @@ void esp_now_recv_cb(const esp_now_recv_info_t *recv_info, const uint8_t *data, 
     }
 
 
-
-
-
-    //ESP_LOGI(TAG, "🔍 FLYT DEBUG: Kom gjennom System ID sjekk, fortsetter til mutex");
-
     // NORMAL SENSORDATA-PROSESSERING (for alle K=0,1,2,3,4 meldinger)
     xSemaphoreTake(pole_data_mutex, portMAX_DELAY);
     
@@ -4359,25 +4520,10 @@ void esp_now_recv_cb(const esp_now_recv_info_t *recv_info, const uint8_t *data, 
         return;
     }
 
-    //ESP_LOGI(TAG, "🔍 FLYT DEBUG: Starter parse data-seksjon");
-    
+
     // Parse data
     uint8_t k = data[0];
     pole_data[pole_idx].k = k;
-
-
-// // Detaljert debugging for K=0 behandling
-//     if (k == 0) {
-//         int required_len = 9 + sizeof(int32_t) * 14;
-//         ESP_LOGI(TAG, "🔍 K=0 DEBUG: len=%d, required_len=%d, sizeof(int32_t)=%d", 
-//                  len, required_len, sizeof(int32_t));
-        
-//         if (len >= required_len) {
-//             ESP_LOGI(TAG, "✅ K=0 lengdesjekk bestått - behandler ADC-data");
-//         } else {
-//             ESP_LOGI(TAG, "❌ K=0 lengdesjekk feilet - len=%d < required=%d", len, required_len);
-//         }
-//     }
 
     
     // Les timestamp
@@ -4401,21 +4547,6 @@ void esp_now_recv_cb(const esp_now_recv_info_t *recv_info, const uint8_t *data, 
     if (k == 0 && len >= 9 + sizeof(int32_t) * 14) {  // ADC verdier
         memcpy(pole_data[pole_idx].v, &data[9], sizeof(int32_t) * 7);
         memcpy(pole_data[pole_idx].b, &data[9 + sizeof(int32_t) * 7], sizeof(int32_t) * 7);
-
-
-        // k0_packet_count++;
-        // ESP_LOGI(TAG, "📊 K=0 ADC-DATA #%u: RSSI=%d dBm, timestamp=%u.%06u", 
-        //         k0_packet_count, rssi, pole_data[pole_idx].t, pole_data[pole_idx].u);
-
-
-        // ESP_LOGI(TAG, "📊 K=0 ADC sample: [%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 ",%" PRId32 "]", 
-        //          pole_data[pole_idx].v[0], pole_data[pole_idx].v[1], pole_data[pole_idx].v[2],
-        //          pole_data[pole_idx].v[3], pole_data[pole_idx].v[4], pole_data[pole_idx].v[5], 
-        //          pole_data[pole_idx].v[6]);
-        // ESP_LOGI(TAG, "📊 K=0 WebSocket melding sendt til %d klienter", MAX_WS_CLIENTS);        
-
-
-
 
         
         ESP_LOGI(TAG, "ADC verdier: [%" PRId32 ", %" PRId32 ", %" PRId32 ", %" PRId32 ", %" PRId32 ", %" PRId32 ", %" PRId32 "]", 
@@ -4455,50 +4586,35 @@ void esp_now_recv_cb(const esp_now_recv_info_t *recv_info, const uint8_t *data, 
         }
         xSemaphoreGive(ws_mutex);
         
-    } else if (k == 1) {  // Break event - KRITISK FOR TIMER-FUNKSJONALITET
-        // Antar at en enkelt break-verdi fins i data[9]
-        int32_t break_value;
-        memcpy(&break_value, &data[9], sizeof(int32_t));
-        int32_t sensor_id = break_value; // Eller hvordan sensor_id faktisk bestemmes
-
-
-        // k1_packet_count++;
-        // ESP_LOGI(TAG, "🚨 K=1 SENSORBRUDD #%u: RSSI=%d dBm, sensor=%d, timestamp=%u.%06u", 
-        //         k1_packet_count, rssi, sensor_id, pole_data[pole_idx].t, pole_data[pole_idx].u);
-
-
+    } else if (k == 1) {  // Sensor state change event
+        // Les begge verdier korrekt
+        int32_t sensor_id;
+        memcpy(&sensor_id, &data[9], sizeof(int32_t));
         
-        ESP_LOGI(TAG, "🚨 SENSORBRUDD MOTTATT: K=1, sensor_id=%d, break_value=%" PRId32, sensor_id, break_value);
-
-        // Send alltid rådata (ufiltrert) til WebSocket
-        send_break_to_websocket(mac_addr, pole_data[pole_idx].t, pole_data[pole_idx].u, break_value, false);
+        int32_t break_state;
+        memcpy(&break_state, &data[13], sizeof(int32_t));
         
-        // KRITISK: Behandle brudd for passeringsdeteksjon
-        struct timeval server_time;
-        gettimeofday(&server_time, NULL);
+        // FORBEDRET: Mer presis logging
+        ESP_LOGI(TAG, "🔄 SENSORENDRING MOTTATT: K=1, sensor_id=%d, break_state=%d (%s)", 
+                sensor_id, break_state, (break_state == 1) ? "BRUDD" : "GJENOPPRETTET");
 
-        ESP_LOGI(TAG, "🎯 Kaller process_break_for_passage_detection for timer-funksjonalitet...");
-        bool passage_detected = process_break_for_passage_detection(mac_addr, sensor_id, 
-                                        pole_data[pole_idx].t, pole_data[pole_idx].u,     // Målestolpe-tid
-                                        server_time.tv_sec, server_time.tv_usec);  
-                                        
-        // Mål latenstid fra ESP-NOW mottak til timer-prosessering
-        uint64_t processing_time = esp_timer_get_time() - receive_timestamp;
-        if (processing_time > 5000) { // Logg kun hvis >5ms
-            ESP_LOGW(TAG, "⏱️ K=1 prosesseringstid: %llu μs", processing_time);
-        }                                
-                                        
+        // Send alltid rådata til WebSocket (for logging/monitoring)
+        send_break_to_websocket(mac_addr, pole_data[pole_idx].t, pole_data[pole_idx].u, 
+                            break_state, false);
         
-                                        
-                                               // Server-tid
+        // KRITISK: Kun behandle faktiske brudd for passeringsdeteksjon
+        if (break_state == 1) {
+            struct timeval server_time;
+            gettimeofday(&server_time, NULL);
 
-        if (passage_detected) {
-            ESP_LOGI(TAG, "✅ PASSERING DETEKTERT - Timer skal starte!");
+            ESP_LOGI(TAG, "🚨 SENSOR BRUDD - kaller process_break_for_passage_detection");
+            process_break_for_passage_detection(mac_addr, sensor_id, 
+                                    pole_data[pole_idx].t, pole_data[pole_idx].u,
+                                    server_time.tv_sec, server_time.tv_usec);
         } else {
-            ESP_LOGI(TAG, "⏳ Venter på flere sensorer for passering (behøver %d sensorer totalt)...", min_sensors_for_passage);
+            ESP_LOGI(TAG, "✅ SENSOR GJENOPPRETTET - kun logging (ingen passering-sjekk)");
         }
-
-    } else if (k == 2 && len >= 9 + sizeof(int32_t) * 21) {  // Settings
+    }  else if (k == 2 && len >= 9 + sizeof(int32_t) * 21) {  // Settings
         memcpy(pole_data[pole_idx].e, &data[9], sizeof(int32_t) * 7);
         memcpy(pole_data[pole_idx].o, &data[9 + sizeof(int32_t) * 7], sizeof(int32_t) * 7);
         memcpy(pole_data[pole_idx].b, &data[9 + sizeof(int32_t) * 14], sizeof(int32_t) * 7);
@@ -4676,6 +4792,11 @@ esp_err_t websocket_test_page_handler(httpd_req_t *req) {
    
    return ESP_OK;
 }
+
+
+
+
+
 
 // Funksjon for å simulere data for testing
 // I timergate_server.c - erstatt simulate_pole_data_handler funksjonen
@@ -4972,23 +5093,23 @@ httpd_handle_t start_webserver(void) {
         httpd_register_uri_handler(server_handle, &passages);
 
        
-       // Spesifikk handler for JS-filer
-       httpd_uri_t js_files = {
-           .uri = "/assets/*.js",  //when config.uri_match_fn is set
-           .method = HTTP_GET,
-           .handler = spiffs_get_handler,
-           .user_ctx = "/www"
-       };
-       httpd_register_uri_handler(server_handle, &js_files);
+    //    // Spesifikk handler for JS-filer
+    //    httpd_uri_t js_files = {
+    //        .uri = "/assets/*.js",  //when config.uri_match_fn is set
+    //        .method = HTTP_GET,
+    //        .handler = spiffs_get_handler,
+    //        .user_ctx = "/www"
+    //    };
+    //    httpd_register_uri_handler(server_handle, &js_files);
        
-       // Spesifikk handler for CSS-filer
-       httpd_uri_t css_files = {
-           .uri = "/assets/*.css", //when config.uri_match_fn is set
-           .method = HTTP_GET,
-           .handler = spiffs_get_handler,
-           .user_ctx = "/www"
-       };
-       httpd_register_uri_handler(server_handle, &css_files);
+    //    // Spesifikk handler for CSS-filer
+    //    httpd_uri_t css_files = {
+    //        .uri = "/assets/*.css", //when config.uri_match_fn is set
+    //        .method = HTTP_GET,
+    //        .handler = spiffs_get_handler,
+    //        .user_ctx = "/www"
+    //    };
+    //    httpd_register_uri_handler(server_handle, &css_files);
        
        // Root URI handler
        httpd_uri_t root = {
@@ -5228,7 +5349,8 @@ httpd_handle_t start_webserver(void) {
         httpd_register_uri_handler(server_handle, &system_status);
 
 
-        // All other URIs
+        // VIKTIG: Catch-all handler MÅ være helt til slutt!
+        // Ellers vil den overstyre alle spesifikke asset-handlere
         httpd_uri_t common = {
             .uri = "/*",
             .method = HTTP_GET,
@@ -5236,6 +5358,7 @@ httpd_handle_t start_webserver(void) {
             .user_ctx = "/www"
         };
         httpd_register_uri_handler(server_handle, &common);
+
 
 
 
@@ -5297,54 +5420,6 @@ esp_err_t send_esp_now_message(const uint8_t *dest_mac, uint8_t msg_type,
 }
 
 
-// Funksjon for å sende ESP-NOW kommando til målestolpe
-bool send_esp_now_command_to_pole(const uint8_t *mac, uint8_t cmd_type, 
-                                  const void *data, size_t data_len) {
-    if (!mac) {
-        ESP_LOGE(TAG, "Ugyldig MAC-adresse for ESP-NOW kommando");
-        return false;
-    }
-    
-    // Beregn total størrelse for kommando-melding
-    size_t total_len = sizeof(command_msg_t) + data_len;
-    command_msg_t *cmd = malloc(total_len);
-    if (!cmd) {
-        ESP_LOGE(TAG, "Minneallokering feilet for ESP-NOW kommando");
-        return false;
-    }
-    
-    // Fyll ut kommando-struktur
-    cmd->system_id = current_system_id;
-    cmd->msg_type = MSG_COMMAND;
-    memcpy(cmd->target_mac, mac, 6);
-    cmd->command_type = cmd_type;
-    
-    // Kopier kommando-data hvis det finnes
-    if (data && data_len > 0) {
-        memcpy(cmd->data, data, data_len);
-    }
-    
-    char mac_str[18];
-    sprintf(mac_str, "%02x:%02x:%02x:%02x:%02x:%02x", 
-           mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
-    
-    ESP_LOGI(TAG, "📡 Sender ESP-NOW kommando type %d til %s (System ID: %08X, størrelse: %d bytes)", 
-             cmd_type, mac_str, current_system_id, (int)total_len);
-    
-    // Send via ESP-NOW
-    esp_err_t result = esp_now_send(mac, (uint8_t*)cmd, total_len);
-    free(cmd);
-    
-    if (result == ESP_OK) {
-        ESP_LOGI(TAG, "✅ ESP-NOW kommando sendt vellykket");
-        return true;
-    } else {
-        ESP_LOGE(TAG, "❌ ESP-NOW kommando sending feilet: %s", esp_err_to_name(result));
-        return false;
-    }
-}
-
-
 // Task som fjerner gamle signal tracking entries
 void clean_old_signal_tracking(void *pvParameters) {
     const uint32_t MAX_AGE_SEC = 30; // 30 sek uten signal = gjør opprettholde stabile forbindelser
@@ -5380,6 +5455,76 @@ void clean_old_signal_tracking(void *pvParameters) {
         }
     }
 }
+
+
+
+
+// Funksjon for å lagre passeringskonfigurasjon til NVS
+esp_err_t save_passage_config_to_nvs(void) {
+    nvs_handle_t nvs_handle;
+    esp_err_t err = nvs_open("timer_cfg", NVS_READWRITE, &nvs_handle);
+    
+    if (err == ESP_OK) {
+        // Lagre alle konfigurasjonsverdier
+        nvs_set_i32(nvs_handle, "debounce_ms", passage_debounce_ms);
+        nvs_set_i32(nvs_handle, "min_sensors", min_sensors_for_passage);
+        nvs_set_i32(nvs_handle, "timeout_ms", sequence_timeout_ms);
+        
+        // Commit endringene (skriver til flash)
+        nvs_commit(nvs_handle);
+        nvs_close(nvs_handle);
+        
+        ESP_LOGI(TAG, "✅ Passeringskonfigurasjon lagret til NVS");
+        return ESP_OK;
+    }
+    ESP_LOGE(TAG, "❌ Kunne ikke åpne NVS for skriving: %s", esp_err_to_name(err));
+    return err;
+}
+
+// Funksjon for å laste passeringskonfigurasjon fra NVS
+esp_err_t load_passage_config_from_nvs(void) {
+    nvs_handle_t nvs_handle;
+    esp_err_t err = nvs_open("timer_cfg", NVS_READONLY, &nvs_handle);
+    
+    if (err == ESP_OK) {
+        int32_t value;
+        
+        // Last debounce_ms (fallback til standard hvis ikke funnet)
+        err = nvs_get_i32(nvs_handle, "debounce_ms", &value);
+        if (err == ESP_OK) {
+            passage_debounce_ms = value;
+        } else if (err == ESP_ERR_NVS_NOT_FOUND) {
+            passage_debounce_ms = 1000; // Standard verdi
+        }
+        
+        // Last min_sensors
+        err = nvs_get_i32(nvs_handle, "min_sensors", &value);
+        if (err == ESP_OK) {
+            min_sensors_for_passage = value;
+        } else if (err == ESP_ERR_NVS_NOT_FOUND) {
+            min_sensors_for_passage = 2; // Standard verdi
+        }
+        
+        // Last timeout_ms  
+        err = nvs_get_i32(nvs_handle, "timeout_ms", &value);
+        if (err == ESP_OK) {
+            sequence_timeout_ms = value;
+        } else if (err == ESP_ERR_NVS_NOT_FOUND) {
+            sequence_timeout_ms = 500; // Standard verdi
+        }
+        
+        nvs_close(nvs_handle);
+        
+        ESP_LOGI(TAG, "✅ Passeringskonfigurasjon lastet fra NVS: debounce=%d, min_sensors=%d, timeout=%d", 
+                passage_debounce_ms, min_sensors_for_passage, sequence_timeout_ms);
+        return ESP_OK;
+    }
+    
+    ESP_LOGW(TAG, "Kunne ikke laste passeringskonfigurasjon fra NVS, bruker standardverdier");
+    return err;
+}
+
+
 
 
 
@@ -5422,6 +5567,9 @@ wifi_config_t wifi_config = {
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &wifi_config));
     ESP_ERROR_CHECK(esp_wifi_start());
+
+    // Last passeringskonfigurasjon fra NVS
+    load_passage_config_from_nvs();
 
     ESP_LOGI(TAG, "wifi_init_softap finished. SSID:%s password:%s channel:%d",
          (char *)wifi_config.ap.ssid, (char *)wifi_config.ap.password, wifi_config.ap.channel);

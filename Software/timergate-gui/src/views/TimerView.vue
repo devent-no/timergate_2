@@ -212,13 +212,23 @@ export default {
     // FORBEDRET: Observatør for passages med bedre navigasjonshåndtering
     passages: {
       handler(newPassages, oldPassages) {
-        console.log("🕒 TIMER WATCH:", { 
+        console.log("🕒 TIMER WATCH FULL DEBUG:", { 
           nyLengde: newPassages?.length,
           gamleLengde: oldPassages?.length,
+          lastKnownLength: this.lastKnownPassagesLength,
+          actualNew: newPassages.length - this.lastKnownPassagesLength,
           componentActive: this.componentActive,
           status: this.status,
-          sisteKjenteLengde: this.lastKnownPassagesLength
+          currentTime: this.currentTime,
+          timerRunning: this.timerRunning,
+          timerStartTime: this.timerStartTime,
+          // Legg til sammenligning av array-innhold
+          newPassagesLastItem: newPassages?.length > 0 ? newPassages[newPassages.length - 1] : null,
+          oldPassagesLastItem: oldPassages?.length > 0 ? oldPassages[oldPassages.length - 1] : null,
+          // Informasjon om array-innhold endring
+          contentChanged: JSON.stringify(newPassages) !== JSON.stringify(oldPassages)
         });
+
         
         // FIKSET: Ignorer endringer hvis komponenten ikke er aktiv
         if (!this.componentActive) {
@@ -254,13 +264,40 @@ export default {
           
           // Oppdater sist kjente lengde
           this.lastKnownPassagesLength = newPassages.length;
-        } else if (actualNewPassages < 0) {
-          console.log("⚠️ TIMER: Passages-array ble kortere, trolig navigasjonsrelatert");
-          // Juster lastKnownPassagesLength til gjeldende lengde
-          this.lastKnownPassagesLength = newPassages.length;
-        } else {
-          console.log("ℹ️ TIMER: Ingen nye passeringer, sannsynligvis navigasjon eller gjenmontering");
+        // } else if (actualNewPassages < 0) {
+        //   console.log("⚠️ TIMER: Passages-array ble kortere, trolig navigasjonsrelatert");
+        //   // Juster lastKnownPassagesLength til gjeldende lengde
+        //   this.lastKnownPassagesLength = newPassages.length;
+        // } else {
+        //   console.log("ℹ️ TIMER: Ingen nye passeringer, sannsynligvis navigasjon eller gjenmontering");
+        // }
+
+
+      } else if (actualNewPassages < 0) {
+        console.log("⚠️ TIMER: Passages-array ble kortere - FULL DEBUG:", {
+          forrigeLength: this.lastKnownPassagesLength,
+          nyLength: newPassages.length,
+          forskjell: actualNewPassages,
+          timerStatus: this.status,
+          timerRunning: this.timerRunning,
+          currentTime: this.currentTime,
+          componentActive: this.componentActive,
+          // Sammenlign array-innhold
+          newPassages: newPassages.map(p => ({ mac: p.mac, time: p.time, sensors: p.sensors })),
+          oldPassages: oldPassages?.map(p => ({ mac: p.mac, time: p.time, sensors: p.sensors })) || []
+        });
+        
+        // Juster lastKnownPassagesLength til gjeldende lengde
+        this.lastKnownPassagesLength = newPassages.length;
+        
+        // NYTT: Sjekk om timer er i en inkonsistent tilstand og reset hvis nødvendig
+        if (this.status === 'running' && this.currentTime === 0) {
+          console.log("🔄 TIMER: Oppdaget inkonsistent tilstand - resetter timer");
+          this.resetTimer();
         }
+      }
+
+
       },
       deep: true,
       immediate: false  // FIKSET: Ikke kjør umiddelbart ved mounting
@@ -473,7 +510,16 @@ export default {
           this.faults = timerState.faults;
           this.refusals = timerState.refusals;
           this.isEliminated = timerState.isEliminated;
-          this.lastKnownPassagesLength = timerState.lastKnownPassagesLength;
+          //this.lastKnownPassagesLength = timerState.lastKnownPassagesLength;
+          
+          // FIKSET: Ikke gjenopprett lastKnownPassagesLength - behold faktisk array-lengde
+          // this.lastKnownPassagesLength = timerState.lastKnownPassagesLength;
+          console.log("📊 BEHOLDER FAKTISK PASSAGES-LENGTH:", {
+            savedLength: timerState.lastKnownPassagesLength,
+            actualLength: this.lastKnownPassagesLength,
+            keepingActual: true
+          });
+
           
           // Hvis timeren var i gang, beregn ny currentTime basert på hvor lenge vi var borte
           if (timerState.timerRunning && timerState.status === 'running') {

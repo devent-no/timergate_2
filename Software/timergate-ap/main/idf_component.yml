@@ -1,6 +1,7 @@
 ## IDF Component Manager Manifest File
 dependencies:
-  espressif/esp-now: "=*"
+  espressif/esp-now:
+    path: "../components/espressif__esp-now"
   espressif/mdns: "^1.0.3"
   ## Required IDF version
   idf:
