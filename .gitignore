@@ -60,3 +60,26 @@ npm-debug.log*
 *.pchtimergate-backup-*
 timergate-backup-*
 **/.cache/
+
+
+# ESP-IDF managed components (auto-generated)
+**/managed_components/
+**/dependencies.lock
+**/.component_hash
+
+# ESP-IDF configuration files
+sdkconfig
+**/sdkconfig
+
+# VS Code C++ properties (auto-generated)
+.vscode/c_cpp_properties.json
+.vscode/settings.json
+
+# Build status files
+**/build_status.md
+**/gui_fix_status.md
+**/rebuild_fix.sh
+
+# Backup copies
+**/*copy*
+**/*.bak
