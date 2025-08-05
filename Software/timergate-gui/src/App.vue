@@ -172,7 +172,9 @@ export default {
         const passage = {
           mac: received.M,
           time: received.T * 1000 + Math.round(received.U / 1000),
-          sensors: received.S
+          sensors: received.S,
+          T: received.T,    // ← LEGG TIL: Server timestamp sekunder
+          U: received.U     // ← LEGG TIL: Server timestamp mikrosekunder
         };
         
         // Beregn tidsdifferanse fra forrige passering hvis det finnes

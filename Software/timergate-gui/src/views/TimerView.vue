@@ -173,7 +173,11 @@ export default {
       // NYE VARIABLER for å håndtere navigasjon
       componentActive: false,  // Sporer om komponenten er aktiv
       passagesLengthAtMount: 0, // Lengde på passages når komponenten mountes
-      passagesSnapshot: []  // Snapshot av passages ved mounting
+      passagesSnapshot: [], // Snapshot av passages ved mounting
+
+      startPassageTimestamp: null,  // Lagrer første passering-timestamp
+      endPassageTimestamp: null,    // Lagrer andre passering-timestamp
+      useServerTiming: true,        // Bruk server-timing for presisjon
     };
   },
   computed: {
@@ -194,17 +198,29 @@ export default {
         'status-error': this.status === 'error'
       };
     },
+    //Hoveddisplay
     formattedTime() {
       if (this.currentTime === 0) {
-        return '00:00.00';
+        //return '00:00.000';
+        return '00.000';
       }
       
       const totalMs = this.currentTime;
       const minutes = Math.floor(totalMs / 60000);
+      const totalSeconds = Math.floor(totalMs / 1000);
       const seconds = Math.floor((totalMs % 60000) / 1000);
       const hundredths = Math.floor((totalMs % 1000) / 10);
+      const milliseconds = Math.floor(totalMs % 1000);  // ← 3 desimaler
       
-      return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}.${hundredths.toString().padStart(2, '0')}`;
+      // xx.yyyy
+      return `${totalSeconds}.${milliseconds.toString().padStart(3, '0')}`;
+
+      //2 desimaler
+      //return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}.${hundredths.toString().padStart(2, '0')}`;
+
+      //3 desimaler
+      //return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}.${milliseconds.toString().padStart(3, '0')}`;  // ← 3 desimaler
+
     }
   },
 
@@ -247,30 +263,56 @@ export default {
           
           if (this.status === 'running') {
             console.log("⏹️ STOPPER TIMER: Timer kjører, stopping ved målpassering");
-            this.currentTime = Date.now() - this.timerStartTime;
+            
+            // NYTT: Bruk server-tidsstempel for presis tid
+            this.endPassageTimestamp = {
+              T: latestPassage.T || Math.floor(Date.now() / 1000),
+              U: latestPassage.U || 0
+            };
+            
+            // Beregn presis tid basert på server-timestamps
+            if (this.startPassageTimestamp && this.endPassageTimestamp) {
+              const startMs = this.startPassageTimestamp.T * 1000 + this.startPassageTimestamp.U / 1000;
+              const endMs = this.endPassageTimestamp.T * 1000 + this.endPassageTimestamp.U / 1000;
+              this.currentTime = endMs - startMs;
+              
+              console.log("🎯 PRESIS TIMING:", {
+                startServer: `${this.startPassageTimestamp.T}.${this.startPassageTimestamp.U}`,
+                endServer: `${this.endPassageTimestamp.T}.${this.endPassageTimestamp.U}`,
+                preciseTiming: this.currentTime,
+                oldClientTiming: Date.now() - this.timerStartTime
+              });
+            } else {
+              // Fallback til klient-timing
+              this.currentTime = Date.now() - this.timerStartTime;
+            }
+            
             this.stopTimer();
             this.status = 'finished';
             this.addCompletedTime();
-            this.saveTimerState(); // Lagre tilstand
+            this.saveTimerState();
+
+            
           } else if (this.status === 'ready' || this.status === 'finished') {
-            console.log("▶️ STARTER TIMER: Timer starter ved startpassering");
-            this.resetPenalties();
-            this.timerStartTime = Date.now();
-            this.currentTime = 0;
-            this.startTimer();
-            this.status = 'running';
-            this.saveTimerState(); // Lagre tilstand
+              console.log("▶️ STARTER TIMER: Timer starter ved startpassering");
+              this.resetPenalties();
+              
+              // NYTT: Bruk server-tidsstempel fra K4-melding
+              this.startPassageTimestamp = {
+                T: latestPassage.T || Math.floor(Date.now() / 1000),
+                U: latestPassage.U || 0
+              };
+              
+              this.timerStartTime = Date.now(); // Backup for visuell timer
+              this.currentTime = 0;
+              this.startTimer();
+              this.status = 'running';
+              this.saveTimerState();
           }
           
           // Oppdater sist kjente lengde
           this.lastKnownPassagesLength = newPassages.length;
-        // } else if (actualNewPassages < 0) {
-        //   console.log("⚠️ TIMER: Passages-array ble kortere, trolig navigasjonsrelatert");
-        //   // Juster lastKnownPassagesLength til gjeldende lengde
-        //   this.lastKnownPassagesLength = newPassages.length;
-        // } else {
-        //   console.log("ℹ️ TIMER: Ingen nye passeringer, sannsynligvis navigasjon eller gjenmontering");
-        // }
+
 
 
       } else if (actualNewPassages < 0) {
@@ -360,6 +402,10 @@ export default {
       this.currentTime = 0;
       this.resetPenalties();
       this.status = 'ready';
+
+      // NYTT: Reset timestamps
+      this.startPassageTimestamp = null;
+      this.endPassageTimestamp = null;
       
       // NYTT: Lagre tilbakestilt tilstand
       this.saveTimerState();
@@ -511,7 +557,7 @@ export default {
           this.refusals = timerState.refusals;
           this.isEliminated = timerState.isEliminated;
           //this.lastKnownPassagesLength = timerState.lastKnownPassagesLength;
-          
+
           // FIKSET: Ikke gjenopprett lastKnownPassagesLength - behold faktisk array-lengde
           // this.lastKnownPassagesLength = timerState.lastKnownPassagesLength;
           console.log("📊 BEHOLDER FAKTISK PASSAGES-LENGTH:", {
@@ -552,12 +598,21 @@ export default {
       }
     },
     
+    //Resultatloggen
     formatTime(ms) {
       const minutes = Math.floor(ms / 60000);
       const seconds = Math.floor((ms % 60000) / 1000);
+      const totalSeconds = Math.floor(ms / 1000);
       const hundredths = Math.floor((ms % 1000) / 10);
-      
-      return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}.${hundredths.toString().padStart(2, '0')}`;
+      const milliseconds = Math.floor(ms % 1000);
+
+      //xx.yyy 
+      return `${totalSeconds}.${milliseconds.toString().padStart(3, '0')}`;
+
+      //3 desimaler
+      //return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}.${milliseconds.toString().padStart(3, '0')}`;
+      //2 desimaler
+      //return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}.${hundredths.toString().padStart(2, '0')}`;
     }
   },
 
