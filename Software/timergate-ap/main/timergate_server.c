@@ -3904,12 +3904,25 @@ bool process_break_for_passage_detection(const uint8_t *mac_addr, int32_t sensor
         ESP_LOGI(TAG, "🎯 ----->>> PASSERING <<<----- MAC: %s, Sensorer: %d - sender K4", 
                 mac_str, passage_detectors[detector_idx].unique_sensors_count);
             
+
+        // NYTT: Debug-logging før K4-melding
+        ESP_LOGI(TAG, "🔍 DEBUGGING K4: server_time_sec=%u, server_time_micros=%u", 
+                server_time_sec, server_time_micros);
+
+
+
             // Send K4 melding direkte
             char passage_msg[256];
             sprintf(passage_msg, 
                 "{\"M\":\"%s\",\"K\":4,\"T\":%" PRIu32 ",\"U\":%" PRIu32 ",\"S\":%d}",
                 mac_str, server_time_sec, server_time_micros, 
                 passage_detectors[detector_idx].unique_sensors_count);
+
+
+            // Debug: Vis hele JSON-meldingen
+            ESP_LOGI(TAG, "🔍 K4 JSON: %s", passage_msg);
+
+
             
             httpd_ws_frame_t ws_pkt = {
                 .final = true,
