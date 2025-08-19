@@ -51,11 +51,20 @@
           >
             {{ isCalibrating ? 'Kalibrerer...' : 'Kalibrer sensorer' }}
           </button>
-          <button @click="resetTimer" class="action-button reset">Nullstill timer</button>
+          <button 
+            @click="resetTimer" 
+            class="action-button reset"
+          >
+            Nullstill timer
+          </button>
         </div>
         
-        <!-- Statusmeldinger -->
-        <div v-if="statusMessage" class="status-message" :class="statusType">
+        <!-- Statusmelding -->
+        <div 
+          v-if="statusMessage" 
+          class="status-message"
+          :class="statusType"
+        >
           {{ statusMessage }}
         </div>
       </div>
@@ -78,12 +87,10 @@ export default {
       type: Object,
       default: () => ({})
     },
-    // Legg til serverAddress-prop
     serverAddress: {
       type: String,
       default: "timergate.local"
     },
-    // Legg til lastSyncTime-prop
     lastSyncTime: {
       type: String,
       default: null
@@ -94,78 +101,69 @@ export default {
       isSyncing: false,
       isCalibrating: false,
       statusMessage: "",
-      statusType: "success"
+      statusType: ""
     };
   },
   computed: {
     connectedPoles() {
       return this.poles.length;
     },
+    
     activeSensors() {
-      let count = 0;
+      let totalActive = 0;
       this.poles.forEach(pole => {
-        if (pole.values) {
-          count += pole.values.filter(v => v > 0).length;
+        if (pole.broken) {
+          // Regn antall aktive sensorer basert på broken array
+          totalActive += pole.broken.filter(broken => !broken).length;
         }
       });
-      return count;
+      return totalActive;
     },
+    
     lastBreakTime() {
-      let lastTime = null;
-      for (const mac in this.breaks) {
-        const macBreaks = this.breaks[mac];
-        if (macBreaks && macBreaks.length > 0) {
-          const time = macBreaks[0].time;
-          if (!lastTime || time > lastTime) {
-            lastTime = time;
+      // Finn siste break-tid fra breaks objektet
+      let latestTime = null;
+      Object.values(this.breaks).forEach(breakArray => {
+        if (breakArray.length > 0) {
+          const lastBreak = breakArray[breakArray.length - 1];
+          if (!latestTime || lastBreak.time > latestTime) {
+            latestTime = lastBreak.time;
           }
         }
+      });
+      
+      if (latestTime) {
+        return new Date(latestTime * 1000).toLocaleTimeString();
       }
-      if (lastTime) {
-        const date = new Date(lastTime);
-        return Intl.DateTimeFormat("NO", {
-          hour: "numeric",
-          minute: "numeric",
-          second: "numeric"
-        }).format(date);
-      }
-      return "Ingen";
+      return "Ingen registrert";
     }
   },
+  
   methods: {
-    // Forbedret synkroniseringsfunksjon
     async syncTime() {
-      if (this.isSyncing) return;
-      
       this.isSyncing = true;
-      this.statusMessage = "Synkroniserer tid...";
-      this.statusType = "pending";
+      this.statusMessage = "";
       
       try {
-        console.log(`Dashboard: Synkroniserer tid via ${this.serverAddress}...`);
         const timestamp = Math.floor(Date.now() / 1000);
         
         const response = await fetch(`http://${this.serverAddress}/api/v1/time/sync`, {
-          method: "POST",
+          method: 'POST',
           headers: {
-            "Accept": "application/json",
-            "Content-Type": "application/json",
-            "Access-Control-Allow-Origin": "*"
+            'Content-Type': 'application/json',
           },
-          body: JSON.stringify({
-            timestamp: timestamp
-          })
+          body: JSON.stringify({ timestamp })
         });
         
-        if (!response.ok) {
-          throw new Error(`Server svarte med ${response.status}: ${response.statusText}`);
-        }
-        
         const data = await response.json();
-        this.statusMessage = "Tid synkronisert!";
-        this.statusType = "success";
-        this.$emit('time-synced', new Date().toLocaleTimeString());
-        console.log("Tidsynkronisering vellykket:", data);
+        
+        if (data.status === 'success') {
+          this.statusMessage = "Tid synkronisert med alle målestolper";
+          this.statusType = "success";
+          this.$emit('time-synced', new Date().toLocaleTimeString());
+        } else {
+          throw new Error(data.message || 'Ukjent feil');
+        }
       } catch (error) {
         console.error("Feil ved synkronisering av tid:", error);
         this.statusMessage = `Kunne ikke synkronisere tid: ${error.message}`;
@@ -173,46 +171,37 @@ export default {
       } finally {
         this.isSyncing = false;
         
-        // Fjern statusmelding etter 3 sekunder
+        // Fjern statusmelding etter 5 sekunder
         setTimeout(() => {
           if (this.statusType === "success") {
             this.statusMessage = "";
           }
-        }, 3000);
+        }, 5000);
       }
     },
     
-    // Forbedret kalibreringsfunksjon
     async calibrateSensors() {
-      if (this.isCalibrating) return;
-      
       this.isCalibrating = true;
-      this.statusMessage = "Starter kalibrering...";
-      this.statusType = "pending";
+      this.statusMessage = "";
       
       try {
-        console.log(`Kalibrerer sensorer via ${this.serverAddress}...`);
-        
         const response = await fetch(`http://${this.serverAddress}/api/v1/time/hsearch`, {
-          method: "POST",
+          method: 'POST',
           headers: {
-            "Accept": "application/json",
-            "Content-Type": "application/json",
-            "Access-Control-Allow-Origin": "*"
+            'Content-Type': 'application/json',
           },
-          body: JSON.stringify({
-            channel: 0
-          })
+          body: JSON.stringify({ channel: 1 })
         });
         
-        if (!response.ok) {
-          throw new Error(`Server svarte med ${response.status}: ${response.statusText}`);
-        }
-        
         const data = await response.json();
-        this.statusMessage = "Kalibrering startet!";
-        this.statusType = "success";
-        console.log("Kalibrering startet:", data);
+        
+        if (data.status === 'success') {
+          this.statusMessage = "Sensorkalibrering startet på alle målestolper";
+          this.statusType = "success";
+          console.log("Kalibrering startet:", data);
+        } else {
+          throw new Error(data.message || 'Ukjent feil');
+        }
       } catch (error) {
         console.error("Feil ved kalibrering av sensorer:", error);
         this.statusMessage = `Kunne ikke starte kalibrering: ${error.message}`;
@@ -374,5 +363,22 @@ h1 {
   background-color: #fff3cd;
   color: #856404;
   border: 1px solid #ffeeba;
+}
+
+/* Responsiv layout for dashboard */
+@media (max-width: 1200px) {
+  .dashboard-grid {
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  }
+}
+
+@media (max-width: 768px) {
+  .dashboard-grid {
+    grid-template-columns: 1fr;
+  }
+  
+  .time-panel .current-time {
+    font-size: 36px;
+  }
 }
 </style>

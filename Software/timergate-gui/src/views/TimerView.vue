@@ -77,13 +77,17 @@
           </div>
         </div>
 
-        <!-- Kompakt reset-knapp -->
+        <!-- Kompakt Stopp-knapp -->
         <div class="control-panel-compact">
-          <button @click="resetTimer" class="reset-button-compact">
-            <span class="button-icon-small">↺</span>
-            <span class="button-text-small">RESET</span>
-          </button>
-        </div>
+          <button 
+          @click="resetTimer" 
+          class="reset-button-compact"
+          :title="status === 'running' ? 'Stopp tidtaking' : 'Nullstill klokke'"
+        >
+          <span class="button-icon-small">{{ status === 'running' ? '■' : '↺' }}</span>
+          <span class="button-text-small">{{ status === 'running' ? 'STOPP' : 'RESET' }}</span>
+        </button>
+      </div>
       </div>
 
       <!-- Logg-seksjon -->
@@ -201,8 +205,7 @@ export default {
     //Hoveddisplay
     formattedTime() {
       if (this.currentTime === 0) {
-        //return '00:00.000';
-        return '00.000';
+        return '00.00';
       }
       
       const totalMs = this.currentTime;
@@ -212,14 +215,12 @@ export default {
       const hundredths = Math.floor((totalMs % 1000) / 10);
       const milliseconds = Math.floor(totalMs % 1000);  // ← 3 desimaler
       
-      // xx.yyyy
-      return `${totalSeconds}.${milliseconds.toString().padStart(3, '0')}`;
+      //3 desimaler
+      //return `${totalSeconds}.${milliseconds.toString().padStart(3, '0')}`;
 
       //2 desimaler
-      //return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}.${hundredths.toString().padStart(2, '0')}`;
+      return `${totalSeconds}.${hundredths.toString().padStart(2, '0')}`;
 
-      //3 desimaler
-      //return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}.${milliseconds.toString().padStart(3, '0')}`;  // ← 3 desimaler
 
     }
   },
@@ -398,17 +399,52 @@ export default {
     },
     
     resetTimer() {
-      this.stopTimer();
-      this.currentTime = 0;
-      this.resetPenalties();
-      this.status = 'ready';
-
-      // NYTT: Reset timestamps
-      this.startPassageTimestamp = null;
-      this.endPassageTimestamp = null;
+      if (this.status === 'running') {
+        // STOPP-funksjonalitet: Logg resultatet og stopp
+        if (this.currentTime > 0) {
+          this.logManualStop();
+        }
+        this.stopTimer();
+        this.status = 'finished';
+      } else {
+        // RESET-funksjonalitet: Kun nullstill klokka (ikke påvirk loggen)
+        this.currentTime = 0;
+        this.resetPenalties();
+        this.status = 'ready';
+        
+        // Reset timestamps
+        this.startPassageTimestamp = null;
+        this.endPassageTimestamp = null;
+      }
       
-      // NYTT: Lagre tilbakestilt tilstand
+      // Lagre tilbakestilt tilstand
       this.saveTimerState();
+    },
+
+    logManualStop() {
+      const now = new Date();
+      const hours = now.getHours().toString().padStart(2, '0');
+      const minutes = now.getMinutes().toString().padStart(2, '0');
+      const seconds = now.getSeconds().toString().padStart(2, '0');
+      const timeOfDay = `${hours}:${minutes}:${seconds}`;
+      
+      const newResult = {
+        id: this.nextResultId++,
+        time: 0,  // Ingen gyldig tid
+        faults: 0,  // Ingen feil på ufullført løp
+        refusals: 0,  // Ingen vegringer på ufullført løp
+        eliminated: true,  // Automatisk DQ
+        timeOfDay: timeOfDay,
+        timestamp: Date.now()
+      };
+      
+      this.recentTimes.unshift(newResult);
+      
+      if (this.recentTimes.length > 15) {
+        this.recentTimes.pop();
+      }
+      
+      this.saveResultsToStorage();
     },
     
     resetPenalties() {
@@ -416,7 +452,7 @@ export default {
       this.refusals = 0;
       this.isEliminated = false;
     },
-    
+
     // NYTT: Separat funksjon for å lagre bare timer-tilstand
     saveTimerState() {
       try {
@@ -606,13 +642,12 @@ export default {
       const hundredths = Math.floor((ms % 1000) / 10);
       const milliseconds = Math.floor(ms % 1000);
 
-      //xx.yyy 
-      return `${totalSeconds}.${milliseconds.toString().padStart(3, '0')}`;
-
       //3 desimaler
-      //return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}.${milliseconds.toString().padStart(3, '0')}`;
+      //return `${totalSeconds}.${milliseconds.toString().padStart(3, '0')}`;
+
       //2 desimaler
-      //return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}.${hundredths.toString().padStart(2, '0')}`;
+      return `${totalSeconds}.${hundredths.toString().padStart(2, '0')}`;
+
     }
   },
 
@@ -1198,6 +1233,8 @@ export default {
   color: #333;
 }
 
+
+
 .simple-delete {
   font-size: 1rem;
   cursor: pointer;
@@ -1330,4 +1367,96 @@ export default {
     font-size: 2rem;
   }
 }
+
+
+
+
+
+/* FORBEDRET KNAPPEHÅNDTERING - Disabled state for STOPP-knapp */
+.reset-button-compact:disabled,
+.reset-button-compact.button-disabled {
+  background-color: #BDBDBD !important;
+  color: #757575 !important;
+  cursor: not-allowed !important;
+  opacity: 0.6;
+  box-shadow: none;
+  transform: none !important;
+}
+
+.reset-button-compact:disabled:hover,
+.reset-button-compact.button-disabled:hover {
+  background-color: #BDBDBD !important;
+  transform: none !important;
+  box-shadow: none !important;
+}
+
+/* Visuell tilbakemelding for aktiv knapp */
+.reset-button-compact:not(:disabled) {
+  position: relative;
+}
+
+.reset-button-compact:not(:disabled)::before {
+  content: '';
+  position: absolute;
+  top: -2px;
+  left: -2px;
+  right: -2px;
+  bottom: -2px;
+  background: linear-gradient(45deg, #F44336, #D32F2F);
+  border-radius: 10px;
+  z-index: -1;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.reset-button-compact:not(:disabled):hover::before {
+  opacity: 1;
+}
+
+/* Status-avhengige farger for knappen */
+.reset-button-compact.status-ready {
+  background-color: #757575;
+  color: white;
+}
+
+.reset-button-compact.status-running {
+  background-color: #F44336;
+  color: white;
+  animation: ready-pulse 2s infinite;
+}
+
+.reset-button-compact.status-finished {
+  background-color: #2196F3;
+  color: white;
+}
+
+@keyframes ready-pulse {
+  0% { box-shadow: 0 0 0 0 rgba(244, 67, 54, 0.7); }
+  70% { box-shadow: 0 0 0 8px rgba(244, 67, 54, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(244, 67, 54, 0); }
+}
+
+/* Accessibility forbedringer */
+
+/* Responsiv forbedring for små skjermer */
+@media (max-width: 768px) {
+  .reset-button-compact {
+    padding: 1rem 2.5rem;
+    font-size: 1.1rem;
+    min-height: 48px; /* Sikre tilgjengelig touch-størrelse */
+  }
+  
+  .button-icon-small {
+    font-size: 1.4rem;
+  }
+  
+  .button-text-small {
+    font-size: 1.1rem;
+  }
+}
+
+
+
+
+
 </style>

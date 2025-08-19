@@ -475,7 +475,9 @@ esp_err_t system_status_handler(httpd_req_t *req);
 
 // Nye funksjonsdeklarasjoner for debounce-håndtering
 bool should_ignore_break(const uint8_t *mac, int32_t sensor_id, uint32_t time_sec, uint32_t time_micros);
-void send_break_to_websocket(const uint8_t *mac_addr, uint32_t time_sec, uint32_t time_micros, int32_t sensor_id, bool filtered);
+//void send_break_to_websocket(const uint8_t *mac_addr, uint32_t time_sec, uint32_t time_micros, int32_t sensor_id, bool filtered);
+void send_break_to_websocket(const uint8_t *mac_addr, uint32_t time_sec, uint32_t time_micros, 
+                             int32_t sensor_id, int32_t break_state, bool filtered);
 //bool process_break_for_passage_detection(const uint8_t *mac_addr, int32_t sensor_id, uint32_t time_sec, uint32_t time_micros);
 bool process_break_for_passage_detection(const uint8_t *mac_addr, int32_t sensor_id, 
                                         uint32_t sensor_time_sec, uint32_t sensor_time_micros,
@@ -855,8 +857,9 @@ void tcp_client_handler(void *arg) {
                             mac_bytes[4] = 0xEE;
                             mac_bytes[5] = pole_idx & 0xFF; // Bruk pole_idx som siste byte
                             
-                            send_break_to_websocket(mac_bytes, tv.tv_sec, tv.tv_usec, break_state, false);
-                            
+                            //send_break_to_websocket(mac_bytes, tv.tv_sec, tv.tv_usec, break_state, false);
+                            send_break_to_websocket(mac_bytes, tv.tv_sec, tv.tv_usec, sensor_id, break_state, false);
+
                             // Behandle brudd for passeringsdeteksjon
                             struct timeval tv_now;
                             gettimeofday(&tv_now, NULL);
@@ -4004,7 +4007,7 @@ bool should_ignore_break(const uint8_t *mac, int32_t sensor_id, uint32_t time_se
 
 // Funksjon for å sende brudd til WebSocket-klienter
 void send_break_to_websocket(const uint8_t *mac_addr, uint32_t time_sec, uint32_t time_micros, 
-                             int32_t sensor_id, bool filtered) {
+                             int32_t sensor_id, int32_t break_state, bool filtered) {
     char mac_str[18];
     sprintf(mac_str, "%02x:%02x:%02x:%02x:%02x:%02x", 
            mac_addr[0], mac_addr[1], mac_addr[2],
@@ -4013,18 +4016,17 @@ void send_break_to_websocket(const uint8_t *mac_addr, uint32_t time_sec, uint32_
     char ws_msg[256];
     if (filtered) {
         sprintf(ws_msg, 
-            "{\"M\":\"%s\",\"K\":1,\"T\":%" PRIu32 ",\"U\":%" PRIu32 ",\"B\":%" PRId32 ",\"F\":true}",
-            mac_str, time_sec, time_micros, sensor_id);
+            "{\"M\":\"%s\",\"K\":1,\"T\":%" PRIu32 ",\"U\":%" PRIu32 ",\"B\":%" PRId32 ",\"S\":%" PRId32 ",\"F\":true}",
+            mac_str, time_sec, time_micros, sensor_id, break_state);
     } else {
         sprintf(ws_msg, 
-            "{\"M\":\"%s\",\"K\":1,\"T\":%" PRIu32 ",\"U\":%" PRIu32 ",\"B\":%" PRId32 "}",
-            mac_str, time_sec, time_micros, sensor_id);
+            "{\"M\":\"%s\",\"K\":1,\"T\":%" PRIu32 ",\"U\":%" PRIu32 ",\"B\":%" PRId32 ",\"S\":%" PRId32 "}",
+            mac_str, time_sec, time_micros, sensor_id, break_state);
     }
 
-
-
-    ESP_LOGI(TAG, "SENSORBRUDD: MAC=%s, Tid=%u.%06u, Sensor=%d, Filtrert=%s",
-        mac_str, time_sec, time_micros, sensor_id, filtered ? "Ja" : "Nei");
+    ESP_LOGI(TAG, "SENSORBRUDD: MAC=%s, Tid=%u.%06u, Sensor=%d, Break_state=%d (%s), Filtrert=%s",
+        mac_str, time_sec, time_micros, sensor_id, break_state, 
+        (break_state == 1) ? "BRUDD" : "GJENOPPRETTET", filtered ? "Ja" : "Nei");
 
     
     // Send til alle WebSocket-klienter
@@ -4044,7 +4046,6 @@ void send_break_to_websocket(const uint8_t *mac_addr, uint32_t time_sec, uint32_
     }
     xSemaphoreGive(ws_mutex);
 }
-
 
 
 
@@ -4612,8 +4613,11 @@ void esp_now_recv_cb(const esp_now_recv_info_t *recv_info, const uint8_t *data, 
                 sensor_id, break_state, (break_state == 1) ? "BRUDD" : "GJENOPPRETTET");
 
         // Send alltid rådata til WebSocket (for logging/monitoring)
+        // send_break_to_websocket(mac_addr, pole_data[pole_idx].t, pole_data[pole_idx].u, 
+        //                     break_state, false);
+
         send_break_to_websocket(mac_addr, pole_data[pole_idx].t, pole_data[pole_idx].u, 
-                            break_state, false);
+                        sensor_id, break_state, false);
         
         // KRITISK: Kun behandle faktiske brudd for passeringsdeteksjon
         if (break_state == 1) {
@@ -4911,7 +4915,8 @@ esp_err_t simulate_pole_data_handler(httpd_req_t *req) {
         }
         
         // Send K=1 melding for denne sensoren
-        send_break_to_websocket(pole_data[0].mac, sensor_time_sec, sensor_time_usec, sensor_sequence[i], false);
+        //send_break_to_websocket(pole_data[0].mac, sensor_time_sec, sensor_time_usec, sensor_sequence[i], false);
+        send_break_to_websocket(pole_data[0].mac, sensor_time_sec, sensor_time_usec, sensor_sequence[i], 1, false);
         
         // Kort pause mellom sensorer
         vTaskDelay(pdMS_TO_TICKS(50));
@@ -5435,7 +5440,8 @@ esp_err_t send_esp_now_message(const uint8_t *dest_mac, uint8_t msg_type,
 
 // Task som fjerner gamle signal tracking entries
 void clean_old_signal_tracking(void *pvParameters) {
-    const uint32_t MAX_AGE_SEC = 30; // 30 sek uten signal = gjør opprettholde stabile forbindelser
+    //const uint32_t MAX_AGE_SEC = 30; // 30 sek uten signal = gjør opprettholde stabile forbindelser
+    const uint32_t MAX_AGE_SEC = 5; // 5 sek uten signal = rask respons
     
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(10000)); // Kjør hver 10. sekund for å redusere CPU-bruk

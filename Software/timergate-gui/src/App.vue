@@ -1,3 +1,66 @@
+<template>
+  <div class="app-wrapper">
+    <!-- Bruk MainLayout som standard -->
+    <MainLayout 
+      v-if="!showDevView"
+      :time="time" 
+      :poles="poles" 
+      :breaks="breaks" 
+      :passages="passages" 
+      :serverAddress="serverAddress"
+      :lastSyncTime="lastSyncTime"
+      ref="mainLayout"
+      @hostname-changed="onHostnameChanged"
+      @toggle-dev="toggleDevView"
+      @time-synced="onTimeSynced"
+    />
+    
+    <!-- Utviklingsgrensesnitt (legacy) -->
+    <main v-else class="app-wrapper">
+      <button class="back-button" @click="toggleDevView">← Tilbake til hovedgrensesnitt</button>
+      
+      <h1>Poles</h1>
+      <div>
+        <span>Time: {{ time }}</span>
+        <button @click="clearTimes()">Clear times</button>
+        <button @click="syncTime()">Sync time</button>
+        <button @click="checkTime()">Check time</button>
+        <button @click="hSearch()">Highpoint search</button>
+      </div>
+      <div style="width: 100%; height: 250px">
+        <Pole
+          v-for="pole in poles"
+          :key="pole.id"
+          :name="pole.name"
+          :mac="pole.mac"
+          :values="pole.values"
+          :broken="pole.broken"
+          :offsets="pole.offsets"
+          :br_limit="pole.br_limit"
+          :show_advanced="show_advanced"
+          :serverAddress="serverAddress"
+        />
+      </div>
+      <div>
+        <h1>Breaks</h1>
+      </div>
+      <div
+        v-for="(brs, key) in breaks"
+        :key="key"
+        style="width: 500px; height: 500px; float: left"
+      >
+        <ul v-for="br in brs.slice().reverse()" :key="br.id">
+          <BreakItem
+            :id="br.mac"
+            :breakTime="br.time"
+            :value="br.value"
+          ></BreakItem>
+        </ul>
+      </div>
+    </main>
+  </div>
+</template>
+
 <script>
 import BreakItem from "./components/BreakItem.vue";
 import Pole from "./components/Pole.vue";
@@ -24,6 +87,7 @@ export default {
       interval: null,
       time: null,
       show_advanced: false,
+      lastSyncTime: null,
       
       // Fjernet veksling mellom grensesnitt - alltid bruk MainLayout som standard
       showDevView: false
@@ -84,6 +148,7 @@ export default {
         
         const data = await response.json();
         console.log("Tidsynkronisering vellykket:", data);
+        this.lastSyncTime = new Date().toLocaleTimeString();
       } catch (error) {
         console.error("Feil ved synkronisering av tid:", error);
       }
@@ -143,17 +208,39 @@ export default {
           x == 1 ? "#f87979" : "#087979"
         );
       } else if (received.K == 1) {
-        // Sensor breaks
+        // 🔍 DETALJERT LOGGING AV K=1 MELDINGER
+        console.log("🔍 K=1 RAW DATA:", {
+          fullMessage: received,
+          mac: received.M,
+          timestamp_sec: received.T,
+          timestamp_usec: received.U,
+          B_field: received.B,
+          S_field: received.S,  // ← NYTT: Legg til S-felt i logging
+          F_field: received.F,
+          otherFields: Object.keys(received).filter(key => !['M','K','T','U','B','S','F'].includes(key))
+        });
+        
+        // FORBEDRET: Bruk faktisk break_state fra S-feltet
         if (!(received.M in this.breaks)) {
           this.breaks[received.M] = [];
         }
+        
+        // FIKSET: Bruk korrekte felter
+        const sensorId = received.B;      // sensor_id (0-6)
+        const breakState = received.S !== undefined ? received.S : 1; // break_state (1=brudd, 0=gjenopprettet)
+        
         const br = {
           mac: received.M,
           time: received.T * 1000 + Math.round(received.U / 1000),
-          value: received.B,
+          value: sensorId,
           filtered: !!received.F  // Sjekk om dette er et filtrert brudd
         };
         this.breaks[received.M].push(br);
+        
+        // FORBEDRET: Send både brudd og gjenopprettelse til målestolpe-status komponent
+        console.log(`🔄 K=1 MOTTATT: MAC=${received.M}, sensor_id=${sensorId}, break_state=${breakState}`);
+        this.updatePoleStatusFromBreak(received.M, sensorId, breakState);
+        
       } else if (received.K == 2) {
         // Settings. These are sent once, when the pole connects.
         this.poles[id].enabled = received.E.map((x) => (x == 1 ? true : false));
@@ -165,7 +252,7 @@ export default {
         console.log("Mottatt kommando:", received.cmd);
       } else if (received.K == 4) {
         // Passage detection
-        console.log("📣 PASSERING MOTTATT FRA WEBSOCKET:", received);
+        console.log("🔣 PASSERING MOTTATT FRA WEBSOCKET:", received);
         if (!this.passages) {
           this.passages = [];
         }
@@ -189,6 +276,15 @@ export default {
         console.log("📊 PASSAGES ARRAY ETTER OPPDATERING:", JSON.stringify(this.passages));
       }
     },
+    
+    // FORBEDRET: Send K=1 sensor break-data til målestolpe-status komponent
+    updatePoleStatusFromBreak(mac, sensorId, breakState) {
+      // Send til MainLayout som videreformidler til PoleStatusIndicator
+      if (this.$refs.mainLayout) {
+        this.$refs.mainLayout.updatePoleStatusFromBreak(mac, sensorId, breakState);
+      }
+    },
+    
     onSocketError(evt) {
       this.socket_ready = false;
       console.error("WebSocket tilkoblingsfeil:", evt);
@@ -200,141 +296,60 @@ export default {
       }, 5000);
     },
     
-    // Håndter visning av utviklingsgrensesnittet
+    // Håndter hostname-endring fra ConfigView
+    onHostnameChanged(newHostname) {
+      console.log("App: Hostname endret til", newHostname);
+      // Her kan du implementere logikk for å håndtere hostname-endring
+    },
+    
+    // Håndter tidsynkronisering
+    onTimeSynced(syncTime) {
+      this.lastSyncTime = syncTime;
+    },
+    
+    // Veksle til/fra utviklingsvisning
     toggleDevView() {
       this.showDevView = !this.showDevView;
+      console.log("Vekslet til", this.showDevView ? "utviklingsvisning" : "hovedgrensesnitt");
     }
   },
   mounted() {
     this.init();
-  },
-  beforeDestroy() {
-    clearInterval(this.interval);
     
-    // Lukk WebSocket-tilkoblingen
+    // Sett opp intervall for å oppdatere tid
+    this.interval = setInterval(() => {
+      this.time = new Date().toLocaleTimeString();
+    }, 1000);
+  },
+  beforeUnmount() {
+    if (this.interval) {
+      clearInterval(this.interval);
+    }
     if (this.socket) {
       this.socket.close();
     }
-  },
-  created() {
-    this.interval = setInterval(() => {
-      this.time = Intl.DateTimeFormat("NO", {
-        hour: "numeric",
-        minute: "numeric",
-        second: "numeric",
-      }).format();
-    }, 1000);
-  },
+  }
 };
 </script>
 
-<template>
-  <div class="app-wrapper">
-    <!-- Nytt grensesnitt som standard -->
-    <main-layout 
-      v-if="!showDevView" 
-      :time="time" 
-      :poles="poles" 
-      :breaks="breaks"
-      :passages="passages"
-      :serverAddress="serverAddress"
-      :sync-time="syncTime"
-      :clear-times="clearTimes"
-      :h-search="hSearch"
-      :check-time="checkTime"
-      @toggle-dev="toggleDevView"
-    />
-    
-    <!-- Utviklingsgrensesnitt når trengt -->
-    <main v-else>
-      <h1>Timergate (Utviklingsvisning)</h1>
-      <button @click="toggleDevView" class="back-button">Tilbake til hovedgrensesnitt</button>
-      <h3>Current time: {{ time }}</h3>
-      <button @click="syncTime()">Sync Time</button>
-      <button @click="clearTimes()">Clear Breaks</button>
-      <button @click="show_advanced = !show_advanced">Advanced</button>
-      <div class="advanced" v-if="show_advanced">
-        <h3>Advanced settings</h3>
-        <button @click="checkTime()">Check Time Diff</button>
-        <button @click="hSearch()">Highpoint search</button>
-      </div>
-      <div style="width: 100%; height: 250px">
-        <Pole
-          v-for="pole in poles"
-          :key="pole.id"
-          :name="pole.name"
-          :mac="pole.mac"
-          :values="pole.values"
-          :broken="pole.broken"
-          :offsets="pole.offsets"
-          :br_limit="pole.br_limit"
-          :show_advanced="show_advanced"
-          :serverAddress="serverAddress"
-        />
-      </div>
-      <div>
-        <h1>Breaks</h1>
-      </div>
-      <div
-        v-for="(brs, key) in breaks"
-        :key="key"
-        style="width: 500px; height: 500px; float: left"
-      >
-        <ul v-for="br in brs.slice().reverse()" :key="br.id">
-          <BreakItem
-            :id="br.mac"
-            :breakTime="br.time"
-            :value="br.value"
-          ></BreakItem>
-        </ul>
-      </div>
-    </main>
-  </div>
-</template>
-
-<style>
+<style scoped>
 .app-wrapper {
-  font-family: Arial, sans-serif;
-  color: #333;
-  max-width: 100%;
-  margin: 0;
-  padding: 0;
-  position: relative;
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
 }
 
 .back-button {
-  margin-bottom: 15px;
-  background-color: #0078D7;
-  color: white;
-  border: none;
-  border-radius: 4px;
-  padding: 8px 12px;
-  cursor: pointer;
-}
-
-h1 {
-  color: #333;
-}
-
-button {
+  margin: 10px;
   padding: 8px 16px;
-  margin-right: 10px;
-  border: none;
-  background-color: #0078D7;
+  background-color: #007bff;
   color: white;
+  border: none;
   border-radius: 4px;
   cursor: pointer;
 }
 
-button:hover {
-  background-color: #0063b1;
-}
-
-.advanced {
-  margin-top: 15px;
-  padding: 15px;
-  border: 1px solid #ddd;
-  background-color: #f9f9f9;
-  border-radius: 4px;
+.back-button:hover {
+  background-color: #0056b3;
 }
 </style>
