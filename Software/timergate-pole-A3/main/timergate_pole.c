@@ -309,6 +309,9 @@ static void handle_set_enabled_command(const uint8_t *data, size_t data_len);
 static void handle_power_off_command(const uint8_t *data, size_t data_len);
 static void send_k0_adc_data_esp_now(void);
 
+static void log_all_adc_values(i2c_port_t i2c_num);
+static void analyze_battery_status(i2c_port_t i2c_num);
+
 
 typedef struct
 {
@@ -2354,7 +2357,9 @@ void bq25620_monitor_task(void *pvParameters) {
     ESP_LOGI(TAG, "BQ25620 monitoring task startet");
     
     uint32_t last_watchdog_reset = 0;
-    uint32_t last_power_status_publish = 0;
+    uint32_t last_status_check = 0;
+    uint32_t last_fault_check = 0;
+    uint32_t last_adc_reading = 0;
     
     while (1) {
         uint32_t current_time = esp_timer_get_time() / 1000; // millisekunder
@@ -2367,17 +2372,27 @@ void bq25620_monitor_task(void *pvParameters) {
             }
         }
         
-        // Publiser power status hver 500ms
-        if (current_time - last_power_status_publish >= 500) {
-            // Power status publishing vil bli implementert senere
-            last_power_status_publish = current_time;
+        // Sjekk status hver 5. sekund
+        if (current_time - last_status_check >= 5000) {
+            bq25620_check_status(I2C_MASTER_NUM);
+            last_status_check = current_time;
         }
         
-        // Sleep for 100ms to avoid busy-waiting
+        // Sjekk faults hver 10. sekund
+        if (current_time - last_fault_check >= 10000) {
+            bq25620_check_fault_status(I2C_MASTER_NUM);
+            last_fault_check = current_time;
+        }
+        
+        // Les ADC-verdier hvert 2. sekund
+        if (current_time - last_adc_reading >= 2000) {
+            log_all_adc_values(I2C_MASTER_NUM);
+            last_adc_reading = current_time;
+        }
+        
         vTaskDelay(100 / portTICK_PERIOD_MS);
     }
 }
-
 
 /**
  * @brief Publiser ADC readings til server/GUI
@@ -2406,6 +2421,96 @@ void publish_charging_state(i2c_port_t i2c_num, bool otg_enabled) {
         ESP_LOGD(TAG, "Charging status: 0x%02X, OTG: %s", status_reg, otg_enabled ? "ON" : "OFF");
     }
 }
+
+
+static void log_all_adc_values(i2c_port_t i2c_num) {
+    uint16_t vbat_mv, vbus_mv, vsys_mv, vpmid_mv, ts_raw, tdie_raw;
+    int16_t ibat_ma, ibus_ma;
+    
+    ESP_LOGI(TAG, "=== BQ25620 ADC Readings ===");
+    
+    // Batterispenning
+    if (bq25620_read_vbat_voltage(i2c_num, &vbat_mv) == ESP_OK) {
+        ESP_LOGI(TAG, "VBAT: %d mV", vbat_mv);
+    }
+    
+    // Batteristrøm
+    if (bq25620_read_ibat_current(i2c_num, &ibat_ma) == ESP_OK) {
+        ESP_LOGI(TAG, "IBAT: %d mA %s", abs(ibat_ma), 
+                 ibat_ma >= 0 ? "(charging)" : "(discharging)");
+    }
+    
+    // Inngangsspenning
+    if (bq25620_read_vbus_voltage(i2c_num, &vbus_mv) == ESP_OK) {
+        ESP_LOGI(TAG, "VBUS: %d mV", vbus_mv);
+    }
+    
+    // Inngangsstrøm
+    if (bq25620_read_ibus_current(i2c_num, &ibus_ma) == ESP_OK) {
+        ESP_LOGI(TAG, "IBUS: %d mA", ibus_ma);
+    }
+    
+    // Systemspenning
+    if (bq25620_read_vsys_voltage(i2c_num, &vsys_mv) == ESP_OK) {
+        ESP_LOGI(TAG, "VSYS: %d mV", vsys_mv);
+    }
+    
+    // PMID spenning
+    if (bq25620_read_vpmid_voltage(i2c_num, &vpmid_mv) == ESP_OK) {
+        ESP_LOGI(TAG, "VPMID: %d mV", vpmid_mv);
+    }
+    
+    // Temperatur (hvis implementert)
+    if (bq25620_read_ts_adc(i2c_num, &ts_raw) == ESP_OK) {
+        ESP_LOGI(TAG, "TS: %d (raw)", ts_raw);
+    }
+    
+    if (bq25620_read_tdie_adc(i2c_num, &tdie_raw) == ESP_OK) {
+        ESP_LOGI(TAG, "TDIE: %d (raw)", tdie_raw);
+    }
+    
+    ESP_LOGI(TAG, "========================");
+}
+
+
+
+static void analyze_battery_status(i2c_port_t i2c_num) {
+    uint16_t vbat_mv, vsys_mv;
+    int16_t ibat_ma;
+    
+    if (bq25620_read_vbat_voltage(i2c_num, &vbat_mv) == ESP_OK &&
+        bq25620_read_vsys_voltage(i2c_num, &vsys_mv) == ESP_OK &&
+        bq25620_read_ibat_current(i2c_num, &ibat_ma) == ESP_OK) {
+        
+        ESP_LOGI(TAG, "=== BATTERIANALYSE ===");
+        
+        // Batterikapasitet vurdering
+        if (vbat_mv < 3200) {
+            ESP_LOGW(TAG, "KRITISK LAV BATTERISPENNING: %d mV - kan forklare problemer", vbat_mv);
+        } else if (vbat_mv < 3600) {
+            ESP_LOGW(TAG, "LAV BATTERISPENNING: %d mV", vbat_mv);
+        } else {
+            ESP_LOGI(TAG, "Batterispenning OK: %d mV", vbat_mv);
+        }
+        
+        // Systemspenning vurdering
+        if (vsys_mv < 3000) {
+            ESP_LOGE(TAG, "KRITISK LAV SYSTEMSPENNING: %d mV - ESP32 kan ikke fungere", vsys_mv);
+        } else if (vsys_mv < 3300) {
+            ESP_LOGW(TAG, "LAV SYSTEMSPENNING: %d mV - kan forårsake ustabilitet", vsys_mv);
+        }
+        
+        // Strømforbruk analyse
+        if (ibat_ma < -500) {
+            ESP_LOGW(TAG, "HØYT STRØMFORBRUK: %d mA - kan tømme batteriet raskt", abs(ibat_ma));
+        }
+        
+        ESP_LOGI(TAG, "===================");
+    }
+}
+
+
+
 
 
 void app_main(void)
@@ -2447,6 +2552,7 @@ void app_main(void)
             force_pwm_mode();  // Sett GPIO 10
             
             ESP_LOGI(TAG, "BQ25620 initialisering fullført");
+
         } else {
             ESP_LOGE(TAG, "BQ25620 konfigurering feilet - fortsetter uten power management");
         }
@@ -2537,6 +2643,12 @@ void app_main(void)
         
         // Kort pause for å ikke låse CPU
         vTaskDelay(10 / portTICK_PERIOD_MS);
+
+
+
+
+
+
     }
 
     // Fortsett med kalibrering hvis systemet er klart
@@ -2592,14 +2704,21 @@ void app_main(void)
     {
         vTaskDelay(10 / portTICK_PERIOD_MS);
 
+        static uint32_t last_battery_analysis = 0;
+        uint32_t current_time = esp_timer_get_time() / 1000;
+
+        if (current_time - last_battery_analysis >= 30000) { // Hver 30. sekund
+            analyze_battery_status(I2C_MASTER_NUM);
+            last_battery_analysis = current_time;
+        }
 
         // Håndter announce-sending hvis ikke tilknyttet system
         if (announcement_active && !is_assigned_to_system()) {
-            uint32_t current_time = esp_timer_get_time() / 1000; // Millisekunder
+            uint32_t announce_time = esp_timer_get_time() / 1000; // Ulik variabelnavn
             
-            if (current_time - last_announce_time >= ANNOUNCE_INTERVAL_MS) {
+            if (announce_time - last_announce_time >= ANNOUNCE_INTERVAL_MS) {
                 send_pole_announce();
-                last_announce_time = current_time;
+                last_announce_time = announce_time;
             }
         }
 
