@@ -146,7 +146,7 @@ bool calibration_completed = false;  // Flagg for å holde styr på om kalibreri
 
 
 // **NY: Hybrid kalibreringskonfigurasjon**
-static bool use_ternary_search = false;        // Start med A2 lineær som standard
+static bool use_ternary_search = true;        // Start med A2 lineær som standard
 static bool enable_advanced_calibration = true; // Tillat aktivering av A3-metode
 
 
@@ -277,7 +277,7 @@ const uint8_t STATUS_COLORS[8][3] = {
 };
 
 led_strip_config_t strip_config = {
-    .max_leds = 7, // at least one LED on board
+    .max_leds = 8, // at least one LED on board
     .strip_gpio_num = LED_GPIO,
 };
 
@@ -367,7 +367,7 @@ void set_all_leds(uint8_t value, uint8_t r, uint8_t g, uint8_t b)
 {
     for (int i = 0; i < NUM_SENSORS; i++) {
         if (enabled[i]) {
-            led_strip_set_pixel(led_strip, i, value ? r : 0, value ? g : 0, value ? b : 0);
+            led_strip_set_pixel(led_strip, i + 1, value ? r : 0, value ? g : 0, value ? b : 0);
         }
     }
     led_strip_refresh(led_strip);
@@ -573,12 +573,12 @@ void handle_status_animation() {
     
     switch (current_status) {
         case STATUS_INITIALIZING: {
-            // Oppstartssekvens: LED-er tennes én etter én, så slukkes alle
+            // Oppstartssekvens: LED-er tennes Ã©n etter Ã©n, så slukkes alle
             uint32_t step_time = 200; // 200ms per LED
             uint32_t current_step = elapsed_time / step_time;
             
             if (current_step <= NUM_SENSORS) {
-                // Tenn LED-er én etter én
+                // Tenn LED-er Ã©n etter Ã©n
                 for (int i = 0; i < NUM_SENSORS; i++) {
                     if (enabled[i]) {
                         led_set(i, (i < current_step), 
@@ -588,7 +588,7 @@ void handle_status_animation() {
                     }
                 }
             } else if (current_step <= NUM_SENSORS * 2) {
-                // Slukk LED-er én etter én
+                // Slukk LED-er Ã©n etter Ã©n
                 for (int i = 0; i < NUM_SENSORS; i++) {
                     if (enabled[i]) {
                         led_set(i, (i >= (current_step - NUM_SENSORS)), 
@@ -834,7 +834,7 @@ void nvs_setup()
 //             if (err != ESP_OK || offsets[i] == 0) {
 //                 offsets[i] = 4000;  // fallback-verdi
 //                 ESP_LOGW(TAG, "Setter offset[%d] til fallback-verdi: %d", i, offsets[i]);
-//                 err = ESP_OK;  // Unngå at én feil blokkerer alle
+//                 err = ESP_OK;  // Unngå at Ã©n feil blokkerer alle
 //             }
             
 //             sprintf(var_s, "break_limit_%d", i);
@@ -1310,7 +1310,7 @@ static void send_sensor_break_esp_now(int sensor_id, int break_state) {
     sensor_data.t = tv.tv_sec;
     sensor_data.u = tv.tv_usec;
     
-    ESP_LOGI(TAG, "📡 ESP-NOW SEND: sensor_id=%d, break_state=%d, tid=%u.%06u", 
+    ESP_LOGI(TAG, "💡 ESP-NOW SEND: sensor_id=%d, break_state=%d, tid=%u.%06u", 
              sensor_id, break_state, sensor_data.t, sensor_data.u);
     
     // Send ESP-NOW melding
@@ -1428,7 +1428,7 @@ static void example_espnow_recv_cb(const esp_now_recv_info_t *recv_info, const u
     if (len >= sizeof(identify_request_t)) {
         identify_request_t *identify = (identify_request_t*)data;
         if (identify->msg_type == MSG_IDENTIFY_REQUEST) {
-            ESP_LOGI(TAG, "✨ Mottok identify-forespørsel via ESP-NOW");
+            ESP_LOGI(TAG, "âœ¨ Mottok identify-forespørsel via ESP-NOW");
             handle_identify_request(identify);
             return;
         }
@@ -1442,7 +1442,7 @@ static void example_espnow_recv_cb(const esp_now_recv_info_t *recv_info, const u
         
             // SPESIELL HÅNDTERING: CMD_UNPAIR må alltid prosesseres, uavhengig av system_id
             if (command->command_type == CMD_UNPAIR) {
-                ESP_LOGI(TAG, "🔓 UNPAIR SPESIAL: Aksepterer unpair-kommando uavhengig av system ID");
+                ESP_LOGI(TAG, "ðŸ”“ UNPAIR SPESIAL: Aksepterer unpair-kommando uavhengig av system ID");
                 ESP_LOGI(TAG, "📨 Mottok kommando via ESP-NOW: type=%d", command->command_type);
                 handle_esp_now_command(command, len);
                 return;  // Behandle umiddelbart og return
@@ -1506,7 +1506,7 @@ static esp_err_t example_espnow_init(void)
             ESP_LOGI(TAG, "✅ ESP-NOW peer (AP) registrert vellykket");
         } else if (ret == ESP_ERR_ESPNOW_EXIST) {
             esp_now_peer_added = true;
-            ESP_LOGI(TAG, "ℹ️ ESP-NOW peer (AP) allerede registrert");
+            ESP_LOGI(TAG, "ⓘ ESP-NOW peer (AP) allerede registrert");
         } else {
             ESP_LOGE(TAG, "❌ Feil ved registrering av ESP-NOW peer: %s", esp_err_to_name(ret));
         }
@@ -1523,7 +1523,7 @@ static esp_err_t example_espnow_init(void)
         if (broadcast_result == ESP_OK) {
             ESP_LOGI(TAG, "✅ ESP-NOW broadcast peer registrert for announce-meldinger");
         } else if (broadcast_result == ESP_ERR_ESPNOW_EXIST) {
-            ESP_LOGI(TAG, "ℹ️ ESP-NOW broadcast peer allerede registrert");
+            ESP_LOGI(TAG, "ⓘ ESP-NOW broadcast peer allerede registrert");
         } else {
             ESP_LOGE(TAG, "❌ Feil ved registrering av broadcast peer: %s", esp_err_to_name(broadcast_result));
         }
@@ -1615,7 +1615,7 @@ static void handle_system_assignment(const system_assign_t *assign) {
     // Lagre i NVS
     save_system_assignment_to_nvs();
     
-    ESP_LOGI(TAG, "🔗 Målestolpe tilknyttet system: %s (ID: %08X)", 
+    ESP_LOGI(TAG, "ðŸ”— Målestolpe tilknyttet system: %s (ID: %08X)", 
              assigned_system_name, my_assigned_system_id);
 }
 
@@ -1653,7 +1653,7 @@ static void load_system_assignment_from_nvs(void) {
     
     if (my_assigned_system_id != 0x00000000) {
         announcement_active = false; // Stopp announce hvis vi er tilknyttet
-        ESP_LOGI(TAG, "🔗 Lastet system assignment: %s (ID: %08X)", 
+        ESP_LOGI(TAG, "ðŸ”— Lastet system assignment: %s (ID: %08X)", 
                  assigned_system_name, my_assigned_system_id);
     } else {
         announcement_active = true;
@@ -1706,7 +1706,7 @@ static void handle_identify_request(const identify_request_t *msg) {
         return; // Ikke for oss
     }
     
-    ESP_LOGI(TAG, "✨ Mottok identify-forespørsel fra System ID: %08X", msg->system_id);
+    ESP_LOGI(TAG, "âœ¨ Mottok identify-forespørsel fra System ID: %08X", msg->system_id);
     ESP_LOGI(TAG, "   Varighet: %d sekunder", msg->duration_sec);
     
     // Start identifikasjonsblinking
@@ -1721,7 +1721,7 @@ static void start_identification_blink(uint8_t duration) {
     identification_active = true;
     identification_end_time = esp_timer_get_time() + ((uint64_t)duration * 1000000);
     
-    ESP_LOGI(TAG, "🔶 Starter identifikasjonsblinking i %d sekunder", duration);
+    ESP_LOGI(TAG, "🔖 Starter identifikasjonsblinking i %d sekunder", duration);
     
     // Sett alle LED-er til kraftig oransje for å starte
     normal_led_control = false;
@@ -1738,7 +1738,7 @@ static void handle_identification_animation(void) {
     
     // Sjekk om identifikasjonsperioden er over
     if (current_time >= identification_end_time) {
-        ESP_LOGI(TAG, "🔶 Identifikasjonsblinking fullført");
+        ESP_LOGI(TAG, "🔖 Identifikasjonsblinking fullført");
         identification_active = false;
         
         // Gå tilbake til normal LED-kontroll
@@ -1838,7 +1838,7 @@ static void handle_esp_now_command(const command_msg_t *cmd, int len) {
             }
             break;
         case CMD_UNPAIR:
-            ESP_LOGI(TAG, "🔓 Mottok unpair-kommando fra AP");
+            ESP_LOGI(TAG, "ðŸ”“ Mottok unpair-kommando fra AP");
             my_assigned_system_id = 0x00000000;
             announcement_active = true;
             save_system_assignment_to_nvs();
@@ -1848,7 +1848,7 @@ static void handle_esp_now_command(const command_msg_t *cmd, int len) {
             ESP_LOGI(TAG, "   - System ID: %08X (0=ledig)", my_assigned_system_id);
             ESP_LOGI(TAG, "   - Announcement aktiv: %s", announcement_active ? "JA" : "NEI");
             ESP_LOGI(TAG, "   - NVS lagret: JA");
-            ESP_LOGI(TAG, "✨ Målestolpe er nå tilgjengelig for ny pairing");
+            ESP_LOGI(TAG, "âœ¨ Målestolpe er nå tilgjengelig for ny pairing");
             break;
         default:
             ESP_LOGW(TAG, "Ukjent kommando-type: %d", cmd->command_type);
@@ -2035,7 +2035,7 @@ static void handle_set_break_command(const uint8_t *data, size_t data_len) {
     uint16_t break_val;
     memcpy(&break_val, &data[1], sizeof(uint16_t));
     
-    ESP_LOGI(TAG, "⚙️ ESP-NOW SET_BREAK: ADC %d = %d", adc_nr, break_val);
+    ESP_LOGI(TAG, "âš™ï¸ ESP-NOW SET_BREAK: ADC %d = %d", adc_nr, break_val);
     
     // Valider verdier (samme logikk som TCP-versjon)
     if (adc_nr < 7 && break_val < 4906) {
@@ -2095,7 +2095,7 @@ static void handle_set_enabled_command(const uint8_t *data, size_t data_len) {
 
 // Handler for power off kommando via ESP-NOW
 static void handle_power_off_command(const uint8_t *data, size_t data_len) {
-    ESP_LOGI(TAG, "⚡ ESP-NOW POWER_OFF: Setter ESP32 i deep sleep");
+    ESP_LOGI(TAG, "âš¡ ESP-NOW POWER_OFF: Setter ESP32 i deep sleep");
     
     // Vis visuell indikasjon på at enheten skal soves (samme som TCP-versjon)
     normal_led_control = false;
@@ -2512,12 +2512,12 @@ void app_main(void)
         log_esp_now_status();
     }
 
-    //xQueue = xQueueCreate(1, sizeof(char *));
-    // xQueueBreak = xQueueCreate(30, sizeof(char *));  // Fjernet i Fase 3 - ikke nødvendig med ESP-NOW
-    //xTaskCreatePinnedToCore(tcp_client_task, "tcp_client", 4096, (void *)AF_INET, 5, NULL, 1);
-
        
     publish_settings();
+
+    // **LEGG TIL DENNE LINJEN HER:**
+    ESP_LOGI(TAG, "🔧 Kalibrering: %s", 
+             use_ternary_search ? "A3 Ternary Search" : "A2 Linear Search");
 
 
     // Legg til kode for å starte kalibrering umiddelbart
@@ -2688,7 +2688,9 @@ void app_main(void)
             for (int i = 0; i < 7; i++) {
                 if (enabled[i]) {
                     //led_set_simple(i, sensor_break[i]);
-                    led_set(i, sensor_break[i], 16, 16, 16);
+                    //led_set(i, sensor_break[i], 16, 16, 16);
+                    led_set(i + 1, sensor_break[i], 16, 16, 16);
+
                 }
             }
         }
