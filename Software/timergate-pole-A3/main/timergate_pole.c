@@ -202,6 +202,22 @@ typedef struct {
     uint8_t data[];          // Kommando-spesifikk data
 } __attribute__((packed)) command_msg_t;
 
+
+// ESP-NOW power status struktur (K=5)
+typedef struct {
+    uint8_t k;                  // Meldingstype (5 for power status)
+    uint32_t t;                 // Timestamp sekunder
+    uint32_t u;                 // Timestamp mikrosekunder
+    uint16_t vbat_mv;          // Batterispenning i mV
+    int16_t ibat_ma;           // Batteristrøm i mA (+ = lading, - = utlading)
+    uint16_t vbus_mv;          // USB/ekstern spenning i mV
+    uint16_t vsys_mv;          // Systemspenning i mV
+    uint8_t charging_status;   // 0=ikke lader, 1=lader, 2=fulladet, 3=feil
+    uint8_t battery_percentage; // Estimert batteriprosent (0-100)
+    uint8_t fault_flags;       // BQ25620 fault-flagg (bitmaske)
+} __attribute__((packed)) esp_now_power_status_t;
+
+
 // Kommandotyper (samme som i AP)
 #define CMD_RESTART        0x02
 #define CMD_HSEARCH        0x03
@@ -311,6 +327,7 @@ static void send_k0_adc_data_esp_now(void);
 
 static void log_all_adc_values(i2c_port_t i2c_num);
 static void analyze_battery_status(i2c_port_t i2c_num);
+static void send_power_status_esp_now(void); 
 
 
 typedef struct
@@ -1345,6 +1362,94 @@ static void log_esp_now_status(void) {
         ESP_LOGI(TAG, "   Antall peers: %d", peer_num.total_num);
     }
 }
+
+
+
+static void send_power_status_esp_now(void) {
+    if (!esp_now_peer_added || !is_assigned_to_system()) {
+        ESP_LOGD(TAG, "Power status ikke sendt - ikke paret eller ESP-NOW ikke klar");
+        return;
+    }
+    
+    uint16_t vbat_mv, vbus_mv, vsys_mv;
+    int16_t ibat_ma;
+    uint8_t status_reg, fault_reg;
+    
+    // Les alle ADC-verdier fra BQ25620
+    esp_err_t vbat_result = bq25620_read_vbat_voltage(I2C_MASTER_NUM, &vbat_mv);
+    esp_err_t ibat_result = bq25620_read_ibat_current(I2C_MASTER_NUM, &ibat_ma);
+    esp_err_t vbus_result = bq25620_read_vbus_voltage(I2C_MASTER_NUM, &vbus_mv);
+    esp_err_t vsys_result = bq25620_read_vsys_voltage(I2C_MASTER_NUM, &vsys_mv);
+    
+    // Hvis ADC-lesing feiler, send fallback-verdier
+    if (vbat_result != ESP_OK) vbat_mv = 0;
+    if (ibat_result != ESP_OK) ibat_ma = 0;
+    if (vbus_result != ESP_OK) vbus_mv = 0;
+    if (vsys_result != ESP_OK) vsys_mv = 0;
+    
+    // Les status-registre
+    bq25620_read_charger_status1_reg(I2C_MASTER_NUM, &status_reg);
+    fault_reg = 0; // Fallback når fault status ikke er tilgjengelig
+    
+    // Analyser ladestatus fra CHG_STAT bits (3:4)
+    uint8_t chg_stat = (status_reg >> 3) & 0x03;
+    uint8_t charging_status = 0;
+    switch (chg_stat) {
+        case 0: charging_status = 0; break; // Ikke lader/terminert
+        case 1: charging_status = 1; break; // Aktiv lading
+        case 2: charging_status = 1; break; // Taper charge (CV mode)
+        case 3: charging_status = 2; break; // Top-off/fulladet
+    }
+    
+    // Sett feil-status hvis fault register indikerer problemer
+    // if (fault_reg != 0x00) {
+    //     charging_status = 3; // Feil
+    // }
+    
+    // Estimer batteriprosent basert på Li-ion spenningskurve
+    uint8_t battery_percentage = 0;
+    if (vbat_mv >= 4150) {
+        battery_percentage = 90 + ((vbat_mv - 4150) * 10) / 50; // 4.15-4.2V = 90-100%
+    } else if (vbat_mv >= 3900) {
+        battery_percentage = 50 + ((vbat_mv - 3900) * 40) / 250; // 3.9-4.15V = 50-90%
+    } else if (vbat_mv >= 3700) {
+        battery_percentage = 20 + ((vbat_mv - 3700) * 30) / 200; // 3.7-3.9V = 20-50%
+    } else if (vbat_mv >= 3400) {
+        battery_percentage = 5 + ((vbat_mv - 3400) * 15) / 300; // 3.4-3.7V = 5-20%
+    } else if (vbat_mv >= 3200) {
+        battery_percentage = ((vbat_mv - 3200) * 5) / 200; // 3.2-3.4V = 0-5%
+    }
+    // Under 3.2V = 0%
+    
+    // Opprett power status melding
+    esp_now_power_status_t power_data = {
+        .k = 5,
+        .vbat_mv = vbat_mv,
+        .ibat_ma = ibat_ma,
+        .vbus_mv = vbus_mv,
+        .vsys_mv = vsys_mv,
+        .charging_status = charging_status,
+        .battery_percentage = battery_percentage,
+        .fault_flags = fault_reg
+    };
+    
+    // Legg til tidsstempel
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    power_data.t = tv.tv_sec;
+    power_data.u = tv.tv_usec;
+    
+    // Send via ESP-NOW
+    esp_err_t result = esp_now_send(ap_mac_addr, (uint8_t*)&power_data, sizeof(power_data));
+    
+    if (result == ESP_OK) {
+        ESP_LOGI(TAG, "Power K=5: VBAT=%dmV, IBAT=%dmA, VBUS=%dmV, VSYS=%dmV, batteri=%d%%, status=%d", 
+                 vbat_mv, ibat_ma, vbus_mv, vsys_mv, battery_percentage, charging_status);
+    } else {
+        ESP_LOGE(TAG, "Power status ESP-NOW sending feilet: %s", esp_err_to_name(result));
+    }
+}
+
 
 
 
@@ -2711,6 +2816,16 @@ void app_main(void)
             analyze_battery_status(I2C_MASTER_NUM);
             last_battery_analysis = current_time;
         }
+
+
+        // Send power status hver 10. sekund via ESP-NOW
+        static uint32_t last_power_status_send = 0;
+        if (current_time - last_power_status_send >= 10000) {
+            send_power_status_esp_now();
+            last_power_status_send = current_time;
+        }
+
+
 
         // Håndter announce-sending hvis ikke tilknyttet system
         if (announcement_active && !is_assigned_to_system()) {
